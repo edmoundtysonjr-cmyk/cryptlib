@@ -607,7 +607,10 @@ int importCert( IN_BUFFER( certObjectLength ) const void *certObject,
 		}										
 	sMemDisconnect( &stream );
 	if( isDecodedObject )
+		{
 		clFree( "importCert", certObjectPtr );
+		certObjectPtr = NULL;
+		}
 	if( cryptStatusError( status ) )
 		{
 		/* Copy any additional error information that may be present in the 

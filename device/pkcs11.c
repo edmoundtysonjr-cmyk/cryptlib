@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							cryptlib PKCS #11 Routines						*
-*						Copyright Peter Gutmann 1998-2005					*
+*						Copyright Peter Gutmann 1998-2025					*
 *																			*
 ****************************************************************************/
 
@@ -237,12 +237,20 @@ static int checkDriverBugs( const PKCS11_INFO *pkcs11Info )
 
 	/* Try and create the sort of object that'd normally require a login.  
 	   This can fail for reasons other than driver bugs (for example DES 
-	   isn't supported for this token type) so we only check for the 
+	   isn't supported for this token type) so we report an error for the 
 	   specific error code returned by a login bug */
 	status = C_CreateObject( pkcs11Info->hSession, 
 							 ( CK_ATTRIBUTE_PTR ) keyTemplate, 7, &hObject );
-	if( status == CKR_USER_NOT_LOGGED_IN )
+	if( status != CKR_OK )
 		{
+		/* If the status is something other than not-logged-in then 
+		   something else went wrong, we can't continue checking for other 
+		   driver bugs */
+		if( status != CKR_USER_NOT_LOGGED_IN )
+			{
+			return( CRYPT_OK );
+			}
+
 		DEBUG_DIAG(( "PKCS #11 driver bug detected, attempt to log in to "
 					 "the device apparently succeeded but logged-on "
 					 "operation failed with CKR_USER_NOT_LOGGED_IN" ));
@@ -773,7 +781,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
 static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
 					INOUT_ARRAY( templateCount ) \
 						CK_ATTRIBUTE *keyTemplate, 
-					IN_RANGE( 4, 10 ) const int templateCount, 
+					IN_RANGE( 8, 10 ) const int templateCount, 
 					IN_BUFFER( keyLength ) const void *key, 
 					IN_LENGTH_SHORT const int keyLength )
 	{
@@ -872,9 +880,9 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		}
 	else
 		{
-		REQUIRES( isShortIntegerRangeNZ( keyLength ) ); 
-		zeroise( contextInfoPtr->ctxConv->userKey, keyLength );
-		contextInfoPtr->ctxConv->userKeyLength = 0;
+		REQUIRES( isShortIntegerRangeNZ( keySize ) ); 
+		zeroise( contextKeyPtr, keySize );
+		*contextKeyLenPtr = 0;
 		}
 	REQUIRES( !checkOverflowMul( sizeof( CK_ATTRIBUTE ), templateCount ) );
 	zeroise( keyTemplate, sizeof( CK_ATTRIBUTE ) * templateCount );
@@ -1444,7 +1452,10 @@ static int hmac( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		status = C_SignInit( pkcs11Info->hSession, &mechanism, 
 							 contextInfoPtr->deviceObject );
 		if( status != CKR_OK )
+			{
+			krnlReleaseObject( iCryptDevice );
 			return( pkcs11MapError( status, CRYPT_ERROR_FAILED ) );
+			}
 		SET_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_HASH_INITED );
 		pkcs11Info->hActiveSignObject = contextInfoPtr->deviceObject;
 		}
@@ -1453,17 +1464,20 @@ static int hmac( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		status = C_SignUpdate( pkcs11Info->hSession, buffer, length  );
 	else
 		{
-		CK_ULONG dummy;
+		CK_ULONG ulSigLen = CRYPT_MAX_HASHSIZE;
 
 		status = C_SignFinal( pkcs11Info->hSession, 
-							  contextInfoPtr->ctxMAC->mac, &dummy );
+							  contextInfoPtr->ctxMAC->mac, &ulSigLen );
 		pkcs11Info->hActiveSignObject = CK_OBJECT_NONE;
 		}
 	if( status != CKR_OK )
+		{
+		krnlReleaseObject( iCryptDevice );
 		return( pkcs11MapError( status, CRYPT_ERROR_FAILED ) );
+		}
 
 	krnlReleaseObject( iCryptDevice );
-	return( cryptStatus );
+	return( CRYPT_OK );
 	}
 
 /****************************************************************************

@@ -298,7 +298,7 @@ int strGetNumeric( IN_BUFFER( strLen ) const char *str,
 	}
 
 CHECK_RETVAL_LENGTH STDC_NONNULL_ARG( ( 1, 3 ) ) \
-int strParseNumeric( IN_BUFFER( strLen ) const char *str, 
+int strParseNumeric( IN_BUFFER( strMaxLen ) const char *str, 
 					 IN_LENGTH_SHORT const int strMaxLen, 
 					 OUT_INT_Z int *numericValue, 
 					 IN_RANGE( 0, 100 ) const int minValue, 
@@ -529,7 +529,7 @@ RETVAL_RANGE( -1, 0 ) \
 int mbstowcs_s( OUT_PTR size_t *retval, 
 				OUT_BUFFER_FIXED( dstmax ) wchar_t *dst, 
 				IN_LENGTH_SHORT size_t dstmax, 
-				IN_BUFFER( len ) const char *src, 
+				IN_BUFFER( count ) const char *src, 
 				IN_LENGTH_SHORT size_t count )
 	{
 	size_t bytesCopied;
@@ -575,7 +575,7 @@ RETVAL_RANGE( -1, 0 ) \
 int wcstombs_s( OUT_PTR size_t *retval, 
 				OUT_BUFFER_FIXED( dstmax ) char *dst, 
 				IN_LENGTH_SHORT size_t dstmax, 
-				IN_BUFFER( len) const wchar_t *src, 
+				IN_BUFFER( count ) const wchar_t *src, 
 				IN_LENGTH_SHORT size_t count )
 	{
 	size_t bytesCopied;

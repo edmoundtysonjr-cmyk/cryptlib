@@ -17,6 +17,14 @@
   #include "misc/pgp.h"
 #endif /* Compiler-specific includes */
 
+/* The minimum and maximum data sizes for HMAC, corresponding to the 
+   smallest and largest input block size for the hash function that it's 
+   built from, in this case SHA-1 and SHA-512 (and also SHA-384) at 64
+   and 128 bytes */
+
+#define HMAC_MIN_DATASIZE		64
+#define HMAC_MAX_DATASIZE		128
+
 /****************************************************************************
 *																			*
 *								PRF Building Blocks							*
@@ -25,23 +33,23 @@
 
 /* HMAC-based PRF used for PBKDF2 / PKCS #5v2, HKDF, TLS, and HOTP / TOTP */
 
-#define HMAC_DATASIZE		64
-
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 5, 7, 8 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 6, 8, 9 ) ) \
 static int prfInit( IN_PTR const HASH_FUNCTION hashFunction, 
 					IN_PTR const HASH_FUNCTION_ATOMIC hashFunctionAtomic,
 					OUT_PTR HASHINFO hashState, 
 					IN_LENGTH_HASH const int hashSize, 
+					IN_RANGE( HMAC_MIN_DATASIZE, HMAC_MAX_DATASIZE ) \
+						const int hashBlockSize,
 					OUT_BUFFER( processedKeyMaxLength, *processedKeyLength ) \
 						void *processedKey, 
-					IN_LENGTH_FIXED( HMAC_DATASIZE ) \
+					IN_RANGE( HMAC_MIN_DATASIZE, HMAC_MAX_DATASIZE ) \
 						const int processedKeyMaxLength,
-					OUT_RANGE( 0, HMAC_DATASIZE ) int *processedKeyLength, 
+					OUT_RANGE( 0, HMAC_MAX_DATASIZE ) int *processedKeyLength, 
 					IN_BUFFER( keyLength ) const void *key, 
 					IN_LENGTH_SHORT const int keyLength )
 	{
 	const BYTE *keyPtr = processedKey;
-	BYTE hashBuffer[ HMAC_DATASIZE + 8 ];
+	BYTE hashBuffer[ HMAC_MAX_DATASIZE + 8 ];
 	LOOP_INDEX i;
 
 	assert( isWritePtr( hashState, sizeof( HASHINFO ) ) );
@@ -51,18 +59,22 @@ static int prfInit( IN_PTR const HASH_FUNCTION hashFunction,
 
 	REQUIRES( hashFunction != NULL && hashFunctionAtomic != NULL );
 	REQUIRES( hashSize >= MIN_HASHSIZE && hashSize <= CRYPT_MAX_HASHSIZE );
-	REQUIRES( processedKeyMaxLength == HMAC_DATASIZE );
+	REQUIRES( hashBlockSize >= HMAC_MIN_DATASIZE && \
+			  hashBlockSize <= HMAC_MAX_DATASIZE );
+	REQUIRES( processedKeyMaxLength >= HMAC_MIN_DATASIZE && \
+			  processedKeyMaxLength <= HMAC_MAX_DATASIZE );
 	REQUIRES( isShortIntegerRangeNZ( keyLength ) );
 
 	/* Clear return values */
-	REQUIRES( processedKeyMaxLength == HMAC_DATASIZE );
+	REQUIRES( rangeCheck( processedKeyMaxLength, HMAC_MIN_DATASIZE, 
+						  HMAC_MAX_DATASIZE ) );
 	memset( processedKey, 0, min( 16, processedKeyMaxLength ) );
 	*processedKeyLength = 0;
 
-	/* If the key size is larger than the hash data size reduce it to the 
+	/* If the key size is larger than the HMAC data size reduce it to the 
 	   hash size before processing it (yuck.  You're required to do this
 	   though) */
-	if( keyLength > HMAC_DATASIZE )
+	if( keyLength > hashBlockSize )
 		{
 		/* Hash the user key down to the hash size and use the hashed form of
 		   the key */
@@ -85,26 +97,26 @@ static int prfInit( IN_PTR const HASH_FUNCTION hashFunction,
 	   with the ipad value.  This could be done slightly more efficiently, 
 	   but the following sequence of operations minimises timing channels 
 	   leaking the key length */
-	REQUIRES( rangeCheck( *processedKeyLength, 1, HMAC_DATASIZE ) );
+	REQUIRES( rangeCheck( *processedKeyLength, 1, HMAC_MAX_DATASIZE ) );
 	memcpy( hashBuffer, keyPtr, *processedKeyLength );
-	if( *processedKeyLength < HMAC_DATASIZE )
+	if( *processedKeyLength < hashBlockSize )
 		{
-		REQUIRES( rangeCheck( *processedKeyLength, 1, HMAC_DATASIZE - 1 ) );
-		REQUIRES( !checkOverflowSub( HMAC_DATASIZE, *processedKeyLength ) );
+		REQUIRES( rangeCheck( *processedKeyLength, 1, hashBlockSize - 1 ) );
+		REQUIRES( !checkOverflowSub( hashBlockSize, *processedKeyLength ) );
 		memset( hashBuffer + *processedKeyLength, 0, 
-				HMAC_DATASIZE - *processedKeyLength );
+				hashBlockSize - *processedKeyLength );
 		}
-	LOOP_EXT( i = 0, i < HMAC_DATASIZE, i++, HMAC_DATASIZE + 1 )
+	LOOP_EXT( i = 0, i < hashBlockSize, i++, hashBlockSize + 1 )
 		{
-		ENSURES( LOOP_INVARIANT_EXT( i, 0, HMAC_DATASIZE - 1,
-									 HMAC_DATASIZE + 1 ) );
+		ENSURES( LOOP_INVARIANT_EXT( i, 0, hashBlockSize - 1,
+									 hashBlockSize + 1 ) );
 
 		hashBuffer[ i ] ^= HMAC_IPAD;
 		}
 	ENSURES( LOOP_BOUND_OK );
-	hashFunction( hashState, NULL, 0, hashBuffer, HMAC_DATASIZE, 
+	hashFunction( hashState, NULL, 0, hashBuffer, hashBlockSize, 
 				  HASH_STATE_START );
-	zeroise( hashBuffer, HMAC_DATASIZE );
+	zeroise( hashBuffer, HMAC_MAX_DATASIZE );
 
 	return( CRYPT_OK );
 	}
@@ -113,12 +125,15 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4, 6 ) ) \
 static int prfEnd( IN_PTR const HASH_FUNCTION hashFunction, 
 				   INOUT_PTR HASHINFO hashState,
 				   IN_LENGTH_HASH const int hashSize, 
+				   IN_RANGE( HMAC_MIN_DATASIZE, HMAC_MAX_DATASIZE ) \
+						const int hashBlockSize,
 				   OUT_BUFFER_FIXED( hashMaxSize ) void *hash, 
 				   IN_LENGTH_HASH const int hashMaxSize, 
 				   IN_BUFFER( processedKeyLength ) const void *processedKey, 
-				   IN_RANGE( 1, HMAC_DATASIZE ) const int processedKeyLength )
+				   IN_RANGE( 1, HMAC_MAX_DATASIZE ) \
+						const int processedKeyLength )
 	{
-	BYTE hashBuffer[ HMAC_DATASIZE + 8 ];
+	BYTE hashBuffer[ HMAC_MAX_DATASIZE + 8 ];
 	BYTE digestBuffer[ CRYPT_MAX_HASHSIZE + 8 ];
 	LOOP_INDEX i;
 
@@ -128,10 +143,12 @@ static int prfEnd( IN_PTR const HASH_FUNCTION hashFunction,
 
 	REQUIRES( hashFunction != NULL );
 	REQUIRES( hashSize >= MIN_HASHSIZE && hashSize <= CRYPT_MAX_HASHSIZE );
+	REQUIRES( hashBlockSize >= HMAC_MIN_DATASIZE && \
+			  hashBlockSize <= HMAC_MAX_DATASIZE );
 	REQUIRES( hashMaxSize >= MIN_HASHSIZE && \
 			  hashMaxSize <= CRYPT_MAX_HASHSIZE );
 	REQUIRES( processedKeyLength >= 1 && \
-			  processedKeyLength <= HMAC_DATASIZE );
+			  processedKeyLength <= HMAC_MAX_DATASIZE );
 
 	/* Complete the inner hash and extract the digest */
 	hashFunction( hashState, digestBuffer, CRYPT_MAX_HASHSIZE, NULL, 0, 
@@ -142,26 +159,26 @@ static int prfEnd( IN_PTR const HASH_FUNCTION hashFunction,
 	   function this could be done slightly more efficiently, but the 
 	   following sequence of operations minimises timing channels leaking 
 	   the key length */
-	REQUIRES( rangeCheck( processedKeyLength, 1, HMAC_DATASIZE ) );
+	REQUIRES( rangeCheck( processedKeyLength, 1, HMAC_MAX_DATASIZE ) );
 	memcpy( hashBuffer, processedKey, processedKeyLength );
-	if( processedKeyLength < HMAC_DATASIZE )
+	if( processedKeyLength < hashBlockSize )
 		{
-		REQUIRES( rangeCheck( processedKeyLength, 1, HMAC_DATASIZE - 1 ) );
-		REQUIRES( !checkOverflowSub( HMAC_DATASIZE, processedKeyLength ) );
+		REQUIRES( rangeCheck( processedKeyLength, 1, hashBlockSize - 1 ) );
+		REQUIRES( !checkOverflowSub( hashBlockSize, processedKeyLength ) );
 		memset( hashBuffer + processedKeyLength, 0, 
-				HMAC_DATASIZE - processedKeyLength );
+				hashBlockSize - processedKeyLength );
 		}
-	LOOP_EXT( i = 0, i < HMAC_DATASIZE, i++, HMAC_DATASIZE + 1 )
+	LOOP_EXT( i = 0, i < hashBlockSize, i++, hashBlockSize + 1 )
 		{
-		ENSURES( LOOP_INVARIANT_EXT( i, 0, HMAC_DATASIZE - 1,
-									 HMAC_DATASIZE + 1 ) );
+		ENSURES( LOOP_INVARIANT_EXT( i, 0, hashBlockSize - 1,
+									 hashBlockSize + 1 ) );
 
 		hashBuffer[ i ] ^= HMAC_OPAD;
 		}
 	ENSURES( LOOP_BOUND_OK );
-	hashFunction( hashState, NULL, 0, hashBuffer, HMAC_DATASIZE, 
+	hashFunction( hashState, NULL, 0, hashBuffer, hashBlockSize, 
 				  HASH_STATE_START );
-	zeroise( hashBuffer, HMAC_DATASIZE );
+	zeroise( hashBuffer, HMAC_MAX_DATASIZE );
 	hashFunction( hashState, hash, hashMaxSize, digestBuffer, hashSize, 
 				  HASH_STATE_END );
 	zeroise( digestBuffer, CRYPT_MAX_HASHSIZE );
@@ -177,14 +194,16 @@ static int prfEnd( IN_PTR const HASH_FUNCTION hashFunction,
 
 /* Implement one round of the PKCS #5v2 PRF */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 4, 6, 8 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 4, 7, 9 ) ) \
 static int pbkdf2Hash( OUT_BUFFER_FIXED( outLength ) BYTE *out, 
 					   IN_RANGE( 1, CRYPT_MAX_HASHSIZE ) const int outLength, 
 					   IN_PTR const HASH_FUNCTION hashFunction, 
 					   INOUT_PTR HASHINFO initialHashState,
 					   IN_LENGTH_HASH const int hashSize, 
+					   IN_RANGE( HMAC_MIN_DATASIZE, HMAC_MAX_DATASIZE ) \
+							const int hashBlockSize,
 					   IN_BUFFER( keyLength ) const void *key, 
-					   IN_RANGE( 1, HMAC_DATASIZE ) const int keyLength,
+					   IN_RANGE( 1, HMAC_MAX_DATASIZE ) const int keyLength,
 					   IN_BUFFER( saltLength ) const void *salt, 
 					   IN_RANGE( 4, 512 ) const int saltLength,
 					   IN_INT const int iterations, 
@@ -204,7 +223,9 @@ static int pbkdf2Hash( OUT_BUFFER_FIXED( outLength ) BYTE *out,
 	REQUIRES( outLength > 0 && outLength <= hashSize && \
 			  outLength <= CRYPT_MAX_HASHSIZE );
 	REQUIRES( hashSize >= MIN_HASHSIZE && hashSize <= CRYPT_MAX_HASHSIZE );
-	REQUIRES( keyLength >= 1 && keyLength <= HMAC_DATASIZE );
+	REQUIRES( hashBlockSize >= HMAC_MIN_DATASIZE && \
+			  hashBlockSize <= HMAC_MAX_DATASIZE );
+	REQUIRES( keyLength >= 1 && keyLength <= HMAC_MAX_DATASIZE );
 	REQUIRES( saltLength >= 4 && saltLength <= 512 );
 	REQUIRES( isIntegerRangeNZ( iterations ) );
 	REQUIRES( blockCount > 0 && blockCount <= 255 );
@@ -223,7 +244,7 @@ static int pbkdf2Hash( OUT_BUFFER_FIXED( outLength ) BYTE *out,
 	memcpy( hashInfo, initialHashState, sizeof( HASHINFO ) );
 	hashFunction( hashInfo, NULL, 0, salt, saltLength, HASH_STATE_CONTINUE );
 	hashFunction( hashInfo, NULL, 0, countBuffer, 4, HASH_STATE_CONTINUE );
-	status = prfEnd( hashFunction, hashInfo, hashSize, block, 
+	status = prfEnd( hashFunction, hashInfo, hashSize, hashBlockSize, block, 
 					 CRYPT_MAX_HASHSIZE, key, keyLength );
 	if( cryptStatusError( status ) )
 		{
@@ -241,9 +262,10 @@ static int pbkdf2Hash( OUT_BUFFER_FIXED( outLength ) BYTE *out,
 
 		/* Generate the PRF output for the current iteration */
 		memcpy( hashInfo, initialHashState, sizeof( HASHINFO ) );
-		hashFunction( hashInfo, NULL, 0, block, hashSize, HASH_STATE_CONTINUE );
-		status = prfEnd( hashFunction, hashInfo, hashSize, block, 
-						 CRYPT_MAX_HASHSIZE, key, keyLength );
+		hashFunction( hashInfo, NULL, 0, block, hashSize, 
+					  HASH_STATE_CONTINUE );
+		status = prfEnd( hashFunction, hashInfo, hashSize, hashBlockSize, 
+						 block, CRYPT_MAX_HASHSIZE, key, keyLength );
 		if( cryptStatusError( status ) )
 			{
 			zeroise( hashInfo, sizeof( HASHINFO ) );
@@ -279,7 +301,7 @@ int derivePBKDF2( STDC_UNUSED void *dummy,
 	HASH_FUNCTION_ATOMIC hashFunctionAtomic;
 	HASH_FUNCTION hashFunction;
 	HASHINFO initialHashInfo;
-	BYTE processedKey[ HMAC_DATASIZE + 8 ];
+	BYTE processedKey[ HMAC_MAX_DATASIZE + 8 ];
 	BYTE *dataOutPtr = mechanismInfo->dataOut;
 	static const MAP_TABLE mapTbl[] = {
 		{ CRYPT_ALGO_HMAC_SHA1, CRYPT_ALGO_SHA1 },
@@ -287,7 +309,7 @@ int derivePBKDF2( STDC_UNUSED void *dummy,
 		{ CRYPT_ALGO_HMAC_SHAng, CRYPT_ALGO_SHAng },
 		{ CRYPT_ERROR, CRYPT_ERROR }, { CRYPT_ERROR, CRYPT_ERROR }
 		};
-	int hashSize, processedKeyLength, blockCount = 1;
+	int hashSize, hashBlockSize, processedKeyLength, blockCount = 1;
 	LOOP_INDEX keyIndex;
 	int value, status;
 
@@ -315,14 +337,15 @@ int derivePBKDF2( STDC_UNUSED void *dummy,
 	getHashAtomicParameters( hashAlgo, mechanismInfo->hashParam, 
 							 &hashFunctionAtomic, &hashSize );
 	getHashParameters( hashAlgo, mechanismInfo->hashParam, &hashFunction, 
-					   NULL );
+					   NULL, &hashBlockSize );
 	status = prfInit( hashFunction, hashFunctionAtomic, initialHashInfo, 
-					  hashSize, processedKey, HMAC_DATASIZE, 
-					  &processedKeyLength, mechanismInfo->dataIn, 
+					  hashSize, hashBlockSize, processedKey, 
+					  HMAC_MAX_DATASIZE, &processedKeyLength, 
+					  mechanismInfo->dataIn, 
 					  mechanismInfo->dataInLength );
 	if( cryptStatusError( status ) )
 		{
-		zeroise( processedKey, HMAC_DATASIZE );
+		zeroise( processedKey, HMAC_MAX_DATASIZE );
 		return( status );
 		}
 
@@ -345,7 +368,7 @@ int derivePBKDF2( STDC_UNUSED void *dummy,
 		REQUIRES( !checkOverflowInc( blockCount ) );
 		status = pbkdf2Hash( dataOutPtr, noKeyBytes, 
 							 hashFunction, initialHashInfo, hashSize,
-							 processedKey, processedKeyLength,
+							 hashBlockSize, processedKey, processedKeyLength,
 							 mechanismInfo->salt, mechanismInfo->saltLength,
 							 mechanismInfo->iterations, blockCount++ );
 		if( cryptStatusError( status ) )
@@ -353,7 +376,7 @@ int derivePBKDF2( STDC_UNUSED void *dummy,
 		}
 	ENSURES( LOOP_BOUND_OK );
 	zeroise( initialHashInfo, sizeof( HASHINFO ) );
-	zeroise( processedKey, HMAC_DATASIZE );
+	zeroise( processedKey, HMAC_MAX_DATASIZE );
 	if( cryptStatusError( status ) )
 		{
 		REQUIRES( isShortIntegerRangeNZ( mechanismInfo->dataOutLength ) ); 
@@ -391,11 +414,10 @@ int kdfPBKDF2( STDC_UNUSED void *dummy,
 		}
 	if( cryptStatusError( status ) )
 		return( status );
-	ENSURES( masterSecretSize > 0 && \
-			 masterSecretSize <= CRYPT_MAX_KEYSIZE );
 
 	/* Extract the master secret value from the generic-secret context and 
 	   derive the key from it using PBKDF2 as the KDF */
+	REQUIRES( rangeCheck( masterSecretSize, 1, CRYPT_MAX_KEYSIZE ) );
 	status = extractKeyData( mechanismInfo->masterKeyContext,
 							 masterSecretBuffer, CRYPT_MAX_KEYSIZE, 
 							 "keydata", 7 );
@@ -442,7 +464,7 @@ static int deriveHKDF( STDC_UNUSED void *dummy,
 	HASH_FUNCTION_ATOMIC hashFunctionAtomic;
 	HASH_FUNCTION hashFunction;
 	HASHINFO initialHashInfo, hashInfo;
-	BYTE processedKey[ HMAC_DATASIZE + 8 ];
+	BYTE processedKey[ HMAC_MAX_DATASIZE + 8 ];
 	BYTE hkdfKey[ CRYPT_MAX_HASHSIZE + 8 ];
 	BYTE block[ CRYPT_MAX_HASHSIZE + 8 ];
 	BYTE *dataOutPtr = mechanismInfo->dataOut, counter = 1;
@@ -452,7 +474,7 @@ static int deriveHKDF( STDC_UNUSED void *dummy,
 		{ CRYPT_ALGO_HMAC_SHAng, CRYPT_ALGO_SHAng },
 		{ CRYPT_ERROR, CRYPT_ERROR }, { CRYPT_ERROR, CRYPT_ERROR }
 		};
-	int hashSize, processedKeyLength, value, status;
+	int hashSize, hashBlockSize, processedKeyLength, value, status;
 	LOOP_INDEX keyIndex;
 
 	UNUSED_ARG_OPT( dummy );
@@ -491,33 +513,35 @@ static int deriveHKDF( STDC_UNUSED void *dummy,
 	getHashAtomicParameters( hashAlgo, mechanismInfo->hashParam, 
 							 &hashFunctionAtomic, &hashSize );
 	getHashParameters( hashAlgo, mechanismInfo->hashParam, &hashFunction, 
-					   NULL );
+					   NULL, &hashBlockSize );
 	status = prfInit( hashFunction, hashFunctionAtomic, initialHashInfo, 
-					  hashSize, processedKey, HMAC_DATASIZE, 
-					  &processedKeyLength, mechanismInfo->salt, 
-					  mechanismInfo->saltLength );
+					  hashSize, hashBlockSize, processedKey, 
+					  HMAC_MAX_DATASIZE, &processedKeyLength, 
+					  mechanismInfo->salt, mechanismInfo->saltLength );
 	if( cryptStatusOK( status ) )
 		{
 		hashFunction( initialHashInfo, NULL, 0, mechanismInfo->dataIn, 
 					  mechanismInfo->dataInLength, HASH_STATE_CONTINUE );
-		status = prfEnd( hashFunction, initialHashInfo, hashSize, hkdfKey, 
-						 CRYPT_MAX_HASHSIZE, processedKey, processedKeyLength );
+		status = prfEnd( hashFunction, initialHashInfo, hashSize, 
+						 hashBlockSize, hkdfKey, CRYPT_MAX_HASHSIZE, 
+						 processedKey, processedKeyLength );
 		}
 	if( cryptStatusError( status ) )
 		{
 		zeroise( initialHashInfo, sizeof( HASHINFO ) );
-		zeroise( processedKey, HMAC_DATASIZE );
+		zeroise( processedKey, HMAC_MAX_DATASIZE );
 		return( status );
 		}
 
 	/* Initialise the HMAC information with the HKDF key */
 	status = prfInit( hashFunction, hashFunctionAtomic, initialHashInfo, 
-					  hashSize, processedKey, HMAC_DATASIZE, 
-					  &processedKeyLength, hkdfKey, hashSize );
+					  hashSize, hashBlockSize, processedKey, 
+					  HMAC_MAX_DATASIZE, &processedKeyLength, hkdfKey, 
+					  hashSize );
 	if( cryptStatusError( status ) )
 		{
 		zeroise( initialHashInfo, sizeof( HASHINFO ) );
-		zeroise( processedKey, HMAC_DATASIZE );
+		zeroise( processedKey, HMAC_MAX_DATASIZE );
 		zeroise( hkdfKey, CRYPT_MAX_HASHSIZE );
 		return( status );
 		}
@@ -556,8 +580,8 @@ static int deriveHKDF( STDC_UNUSED void *dummy,
 			}
 		hashFunction( hashInfo, NULL, 0, &counter, 1, 
 					  HASH_STATE_CONTINUE );
-		status = prfEnd( hashFunction, hashInfo, hashSize, block, 
-						 CRYPT_MAX_HASHSIZE, processedKey, 
+		status = prfEnd( hashFunction, hashInfo, hashSize, hashBlockSize, 
+						 block, CRYPT_MAX_HASHSIZE, processedKey, 
 						 processedKeyLength );
 		if( cryptStatusError( status ) )
 			break;
@@ -567,7 +591,7 @@ static int deriveHKDF( STDC_UNUSED void *dummy,
 	ENSURES( LOOP_BOUND_OK );
 	zeroise( hashInfo, sizeof( HASHINFO ) );
 	zeroise( initialHashInfo, sizeof( HASHINFO ) );
-	zeroise( processedKey, HMAC_DATASIZE );
+	zeroise( processedKey, HMAC_MAX_DATASIZE );
 	zeroise( hkdfKey, CRYPT_MAX_HASHSIZE );
 	zeroise( block, CRYPT_MAX_HASHSIZE );
 	if( cryptStatusError( status ) )
@@ -612,8 +636,6 @@ int kdfHKDF( STDC_UNUSED void *dummy,
 		}
 	if( cryptStatusError( status ) )
 		return( status );
-	ENSURES( masterSecretSize > 0 && \
-			 masterSecretSize <= CRYPT_MAX_KEYSIZE );
 	status = extractKeyData( mechanismInfo->masterKeyContext,
 							 masterSecretBuffer, CRYPT_MAX_KEYSIZE, 
 							 "keydata", 7 );
@@ -952,15 +974,15 @@ typedef struct {
 	/* The hash functions and hash info */
 	HASH_FUNCTION_ATOMIC hashFunctionAtomic;
 	HASH_FUNCTION hashFunction;
-	int hashSize;
+	int hashSize, hashBlockSize;
 
 	/* The initial hash state from prfInit() and the current hash state */
 	HASHINFO initialHashInfo, hashInfo;
 
 	/* The HMAC processed key and intermediate data value */
-	BUFFER( HMAC_DATASIZE, processedKeyLength ) \
-	BYTE processedKey[ HMAC_DATASIZE + 8 ];
-	BUFFER( HMAC_DATASIZE, hashSize ) \
+	BUFFER( HMAC_MAX_DATASIZE, processedKeyLength ) \
+	BYTE processedKey[ HMAC_MAX_DATASIZE + 8 ];
+	BUFFER( CRYPT_MAX_HASHSIZE, hashSize ) \
 	BYTE hashA[ CRYPT_MAX_HASHSIZE + 8 ];
 	int processedKeyLength;
 	} TLS_PRF_INFO;
@@ -987,8 +1009,9 @@ static int tlsPrfInit( INOUT_PTR TLS_PRF_INFO *prfInfo,
 	   reused for any future hashing since it's constant */
 	status = prfInit( prfInfo->hashFunction, prfInfo->hashFunctionAtomic, 
 					  prfInfo->initialHashInfo, prfInfo->hashSize, 
-					  prfInfo->processedKey, HMAC_DATASIZE, 
-					  &prfInfo->processedKeyLength, key, keyLength );
+					  prfInfo->hashBlockSize, prfInfo->processedKey, 
+					  HMAC_MAX_DATASIZE, &prfInfo->processedKeyLength, 
+					  key, keyLength );
 	if( cryptStatusError( status ) )
 		return( status );
 
@@ -997,9 +1020,9 @@ static int tlsPrfInit( INOUT_PTR TLS_PRF_INFO *prfInfo,
 	prfInfo->hashFunction( prfInfo->hashInfo, NULL, 0, salt, saltLength, 
 						  HASH_STATE_CONTINUE );
 	return( prfEnd( prfInfo->hashFunction, prfInfo->hashInfo, 
-					prfInfo->hashSize, prfInfo->hashA,
-					CRYPT_MAX_HASHSIZE, prfInfo->processedKey, 
-					prfInfo->processedKeyLength ) );
+					prfInfo->hashSize, prfInfo->hashBlockSize, 
+					prfInfo->hashA, CRYPT_MAX_HASHSIZE, 
+					prfInfo->processedKey, prfInfo->processedKeyLength ) );
 	}
 
 /* Implement one round of the TLS PRF */
@@ -1035,8 +1058,8 @@ static int tlsPrfHash( INOUT_BUFFER_FIXED( outLength ) BYTE *out,
 	prfInfo->hashFunction( hashInfo, NULL, 0, salt, saltLength, 
 						   HASH_STATE_CONTINUE );
 	status = prfEnd( prfInfo->hashFunction, hashInfo, prfInfo->hashSize, 
-					 hash, CRYPT_MAX_HASHSIZE, prfInfo->processedKey, 
-					 prfInfo->processedKeyLength );
+					 prfInfo->hashBlockSize, hash, CRYPT_MAX_HASHSIZE, 
+					 prfInfo->processedKey, prfInfo->processedKeyLength );
 	if( cryptStatusError( status ) )
 		{
 		zeroise( AnHashInfo, sizeof( HASHINFO ) );
@@ -1048,8 +1071,9 @@ static int tlsPrfHash( INOUT_BUFFER_FIXED( outLength ) BYTE *out,
 	/* Calculate An+1 = HMAC( An ) */
 	memcpy( hashInfo, AnHashInfo, sizeof( HASHINFO ) );
 	status = prfEnd( prfInfo->hashFunction, hashInfo, prfInfo->hashSize, 
-					 prfInfo->hashA, prfInfo->hashSize, 
-					 prfInfo->processedKey, prfInfo->processedKeyLength );
+					 prfInfo->hashBlockSize, prfInfo->hashA, 
+					 prfInfo->hashSize, prfInfo->processedKey, 
+					 prfInfo->processedKeyLength );
 	if( cryptStatusError( status ) )
 		{
 		zeroise( AnHashInfo, sizeof( HASHINFO ) );
@@ -1100,11 +1124,13 @@ int deriveTLS( STDC_UNUSED void *dummy,
 	memset( &md5Info, 0, sizeof( TLS_PRF_INFO ) );
 	getHashAtomicParameters( CRYPT_ALGO_MD5, 0, &md5Info.hashFunctionAtomic, 
 							 &md5Info.hashSize );
-	getHashParameters( CRYPT_ALGO_MD5, 0, &md5Info.hashFunction, NULL );
+	getHashParameters( CRYPT_ALGO_MD5, 0, &md5Info.hashFunction, NULL, 
+					   &md5Info.hashBlockSize );
 	memset( &shaInfo, 0, sizeof( TLS_PRF_INFO ) );
 	getHashAtomicParameters( CRYPT_ALGO_SHA1, 0, &shaInfo.hashFunctionAtomic, 
 							 &shaInfo.hashSize );
-	getHashParameters( CRYPT_ALGO_SHA1, 0, &shaInfo.hashFunction, NULL );
+	getHashParameters( CRYPT_ALGO_SHA1, 0, &shaInfo.hashFunction, NULL, 
+					   &shaInfo.hashBlockSize );
 
 	/* Find the start of the two halves of the keying info used for the
 	   HMACing.  The size of each half is given by ceil( dataInLength / 2 ) 
@@ -1217,7 +1243,7 @@ int deriveTLS12( STDC_UNUSED void *dummy,
 							 &shaInfo.hashFunctionAtomic, 
 							 &shaInfo.hashSize );
 	getHashParameters( mechanismInfo->hashAlgo, mechanismInfo->hashParam,
-					   &shaInfo.hashFunction, NULL );
+					   &shaInfo.hashFunction, NULL, &shaInfo.hashBlockSize );
 
 	/* Initialise the TLS PRF and calculate A1 = HMAC( salt ) */
 	status = tlsPrfInit( &shaInfo, mechanismInfo->dataIn, 
@@ -1376,7 +1402,7 @@ int derivePGP( STDC_UNUSED void *dummy,
 
 	/* Set up the hash parameters */
 	getHashParameters( mechanismInfo->hashAlgo, mechanismInfo->hashParam, 
-					   &hashFunction, &hashSize );
+					   &hashFunction, &hashSize, NULL );
 	memset( hashInfo, 0, sizeof( HASHINFO ) );
 
 	REQUIRES( mechanismInfo->dataOutLength < 2 * hashSize );
@@ -1402,12 +1428,34 @@ int derivePGP( STDC_UNUSED void *dummy,
 
 	   This processing is complicated by the ridiculous number of iterations
 	   of processing specified by some versions of GPG (see the long comment
-	   in misc/consts.h), so that we can no longer employ the standard
-	   FAILSAFE_ITERATIONS_MAX as a failsafe value but have to use a 
-	   multiple of that.  There's no clean way to do this, the following
-	   hardcodes an upper bound that'll have to be varied based on what
-	   MAX_KEYSETUP_HASHSPECIFIER is set to */
+	   in misc/consts.h) so that we can no longer employ the standard
+	   FAILSAFE_ITERATIONS_MAX as a failsafe value but have to use an 
+	   estimate based on the largest possible hash specifier.  The 
+	   calculation is based on the fact that MAX_KEYSETUP_HASHSPECIFIER is 
+	   the maximum count divided by 64 (shifted 6 bits) to both get it away 
+	   from any possible overflow range and past the kernel ACLs, the 
+	   GPG_FAILSAFE_ITERATIONS_MAX assumes a minimum 8-character password 
+	   which, along with the 8-character salt consumes 16 bytes per 
+	   iteration */
 	#define GPG_FAILSAFE_ITERATIONS_MAX		( MAX_KEYSETUP_HASHSPECIFIER * ( 64 / 16 ) )
+	   
+	/* The worst-case situation is when we have a 2-character password which,
+	   with the 8-byte PGP_SALTSIZE consumes 10 bytes per iteration to reach
+	   the hash specifier count which worst-case is 65,011,712 (see again the 
+	   long comment in misc/consts.h).  This means that in theory a 
+	   combination of a silly-length password and silly-length hash count can 
+	   trigger the loop failsafe.  To deal with this in a slightly cleaner 
+	   manner we check for an overflow and report it as such, alongside an 
+	   alert in debug mode since this is another should-never-occur 
+	   situation */
+	REQUIRES( !checkOverflowDiv( byteCount, mechanismInfo->dataInLength + \
+											mechanismInfo->saltLength ) );
+	if( byteCount / ( mechanismInfo->dataInLength + \
+					  mechanismInfo->saltLength ) > GPG_FAILSAFE_ITERATIONS_MAX )
+		{
+		assert( DEBUG_WARN );
+		return( CRYPT_ERROR_OVERFLOW );
+		}
 	LOOP_EXT( i = 0, byteCount > 0 && cryptStatusOK( status ), i++, 
 			  GPG_FAILSAFE_ITERATIONS_MAX + 1 )
 		{
@@ -1489,7 +1537,9 @@ int deriveCMP( STDC_UNUSED void *dummy,
 							 mechanismInfo->hashParam, &hashFunctionAtomic, 
 							 &hashSize );
 	getHashParameters( mechanismInfo->hashAlgo, mechanismInfo->hashParam, 
-					   &hashFunction, NULL );
+					   &hashFunction, NULL, NULL );
+	REQUIRES( isShortIntegerRangeMin( mechanismInfo->dataOutLength, 
+									  hashSize ) );
 	hashFunction( hashInfo, NULL, 0, mechanismInfo->dataIn,
 				  mechanismInfo->dataInLength, HASH_STATE_START );
 	hashFunction( hashInfo, mechanismInfo->dataOut, 
@@ -1527,11 +1577,11 @@ int deriveHOTP( STDC_UNUSED void *dummy,
 	HASH_FUNCTION_ATOMIC hashFunctionAtomic;
 	HASH_FUNCTION hashFunction;
 	HASHINFO hashInfo;
-	BYTE processedKey[ HMAC_DATASIZE + 8 ];
+	BYTE processedKey[ HMAC_MAX_DATASIZE + 8 ];
 	BYTE hash[ CRYPT_MAX_HASHSIZE + 8 ];
 	char totpString[ 16 + 8 ];
-	int hashSize, processedKeyLength, index, totpValue, totpStringLen;
-	int status;
+	int hashSize, hashBlockSize, processedKeyLength, index;
+	int totpValue, totpStringLen, status;
 
 	UNUSED_ARG_OPT( dummy );
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_DERIVE_INFO ) ) );
@@ -1545,19 +1595,20 @@ int deriveHOTP( STDC_UNUSED void *dummy,
 	getHashAtomicParameters( mechanismInfo->hashAlgo, mechanismInfo->hashParam, 
 							 &hashFunctionAtomic, &hashSize );
 	getHashParameters( mechanismInfo->hashAlgo, mechanismInfo->hashParam, 
-					   &hashFunction, NULL );
+					   &hashFunction, NULL, &hashBlockSize );
 	status = prfInit( hashFunction, hashFunctionAtomic, hashInfo, hashSize, 
-					  processedKey, HMAC_DATASIZE, &processedKeyLength, 
-					  mechanismInfo->dataIn, mechanismInfo->dataInLength );
+					  hashBlockSize, processedKey, HMAC_MAX_DATASIZE, 
+					  &processedKeyLength, mechanismInfo->dataIn, 
+					  mechanismInfo->dataInLength );
 	if( cryptStatusOK( status ) )
 		{
 		hashFunction( hashInfo, NULL, 0, mechanismInfo->salt, 
 					  mechanismInfo->saltLength, HASH_STATE_CONTINUE );
-		status = prfEnd( hashFunction, hashInfo, hashSize, hash, 
-						 CRYPT_MAX_HASHSIZE, processedKey, 
+		status = prfEnd( hashFunction, hashInfo, hashSize, hashBlockSize, 
+						 hash, CRYPT_MAX_HASHSIZE, processedKey, 
 						 processedKeyLength );
 		}
-	zeroise( processedKey, HMAC_DATASIZE );
+	zeroise( processedKey, HMAC_MAX_DATASIZE );
 	zeroise( hashInfo, sizeof( HASHINFO ) );
 	if( cryptStatusError( status ) )
 		{
@@ -1583,6 +1634,7 @@ int deriveHOTP( STDC_UNUSED void *dummy,
 	totpValue %= 1000000L;
 	totpStringLen = sprintf_s( totpString, 16, "%06d", totpValue );
 	ENSURES( rangeCheck( totpStringLen, 6, 16 - 1 ) );
+	REQUIRES( isShortIntegerRangeMin( mechanismInfo->dataOutLength, 6 ) );
 	memcpy( mechanismInfo->dataOut, totpString, 6 ); 
 	zeroise( totpString, 16 );
 

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					cryptlib PKCS #15 Public-key Add Interface				*
-*						Copyright Peter Gutmann 1996-2007					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -54,7 +54,7 @@ static int calculatePubkeyStorage( const PKCS15_INFO *pkcs15infoPtr,
 	REQUIRES( isShortIntegerRangeNZ( pubKeyAttributeSize ) );
 	REQUIRES( isShortIntegerRange( extraDataSize ) );
 
-	/* Calculate the new private-key data size */
+	/* Calculate the new public-key data size */
 	*newPubKeyDataSize = sizeofShortObject( \
 							pubKeyAttributeSize + \
 							sizeofShortObject( \
@@ -320,11 +320,11 @@ int pkcs15AddCert( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
 									 pkcs15infoPtr->privKeyOffset ) );
 		privKeyInfoSize = pkcs15infoPtr->privKeyDataSize - \
 						  pkcs15infoPtr->privKeyOffset;
-		status = calculatePrivkeyStorage( &newPrivKeyData, &newPrivKeyDataSize, 
-										  pkcs15infoPtr->privKeyData,
-										  pkcs15infoPtr->privKeyDataSize,
-										  privKeyInfoSize,
-										  privKeyAttributeSize, 0 );
+		status = assignPrivkeyStorage( &newPrivKeyData, &newPrivKeyDataSize, 
+									   pkcs15infoPtr->privKeyData,
+									   pkcs15infoPtr->privKeyDataSize,
+									   privKeyInfoSize,
+									   privKeyAttributeSize, 0 );
 		if( cryptStatusError( status ) )
 			return( status );
 		}
@@ -475,7 +475,10 @@ int pkcs15AddCertChain( INOUT_PTR PKCS15_INFO *pkcs15info,
 		if( cryptStatusError( status ) || \
 			findEntry( pkcs15info, noPkcs15objects, CRYPT_IKEYID_ISSUERID, 
 					   iAndSID, iAndSIDlength, KEYMGMT_FLAG_NONE, FALSE ) != NULL )
+			{
+			status = CRYPT_OK;
 			continue;
+			}
 
 		/* We've found a certificate that isn't present yet, try and add 
 		   it */

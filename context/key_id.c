@@ -267,10 +267,10 @@ static int calculateKeyIDFromEncoded( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	/* If we're not using PGP algorithms and the key size has already been
 	   set by device-specific code then there's nothing further to do */
-#if !defined( USE_PGP ) && !defined( USE_PGPKEYS )
+#ifndef USE_PGPKEYS 
 	if( contextInfoPtr->ctxPKC->keySizeBits != 0 )
 		return( CRYPT_OK );
-#endif /* !USE_PGP && !USE_PGPKEYS */
+#endif /* !USE_PGPKEYS */
 
 	/* Process the pre-encoded key data to get the key size and PGP IDs.
 	   While it would be possible to do this with a lot of customised 
@@ -285,7 +285,7 @@ static int calculateKeyIDFromEncoded( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 								  publicKey->publicKeyInfoSize );
 	if( cryptStatusError( status ) )
 		return( status );
-#if defined( USE_PGP ) || defined( USE_PGPKEYS )
+#ifdef USE_PGPKEYS 
 	if( isPgpAlgo )
 		{
 		status = calculatePGPKeyID( &staticContextInfo, cryptAlgo );
@@ -295,7 +295,7 @@ static int calculateKeyIDFromEncoded( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			return( status );
 			}
 		}
-#endif /* USE_PGP || USE_PGPKEYS */
+#endif /* USE_PGPKEYS */
 
 	/* If it's a non-native context, explicitly set the key size.  For 
 	   native contexts this is done by the init-key function but for non-
@@ -307,7 +307,7 @@ static int calculateKeyIDFromEncoded( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		contextInfoPtr->ctxPKC->keySizeBits = staticContextData.keySizeBits;
 
 	/* If it's a PGP algorithm, copy across any relevant PGP keyIDs */
-#if defined( USE_PGP ) || defined( USE_PGPKEYS )
+#ifdef USE_PGPKEYS 
 	if( isPgpAlgo )
 		{
 		if( TEST_FLAG( staticContextData.flags, 
@@ -327,7 +327,7 @@ static int calculateKeyIDFromEncoded( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					  PKCINFO_FLAG_OPENPGPKEYID_SET );
 			}
 		}
-#endif /* USE_PGP  || USE_PGPKEYS */
+#endif /* USE_PGPKEYS */
 	staticDestroyContext( &staticContextInfo );
 
 	return( CRYPT_OK );
@@ -342,7 +342,7 @@ static int calculateKeyIDFromEncoded( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 /* Generate a PGP keyID */
 
-#if defined( USE_PGP ) || defined( USE_PGPKEYS )
+#ifdef USE_PGPKEYS 
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int calculateOpenPGPKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
@@ -396,7 +396,7 @@ static int calculateOpenPGPKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	packetHeader[ 2 ] = intToByte( length );
 
 	/* Hash the data needed to generate the OpenPGP keyID */
-	getHashParameters( CRYPT_ALGO_SHA1, 0, &hashFunction, &hashSize );
+	getHashParameters( CRYPT_ALGO_SHA1, 0, &hashFunction, &hashSize, NULL );
 	hashFunction( hashInfo, NULL, 0, packetHeader, 1 + 2, 
 				  HASH_STATE_START );
 	hashFunction( hashInfo, hash, CRYPT_MAX_HASHSIZE, buffer, length, 
@@ -460,7 +460,7 @@ static int calculatePGPKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	/* Finally, set the OpenPGP key ID */
 	return( calculateOpenPGPKeyID( contextInfoPtr, cryptAlgo ) );
 	}
-#endif /* USE_PGP || USE_PGPKEYS */
+#endif /* USE_PGPKEYS */
 
 /* Generate a keyID for a PKCS #3 key, which differs slightly from the 
    FIPS 186/X9.42 standard format in that there's no q value present, so we
@@ -588,11 +588,11 @@ static int calculateKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	if( keyID != NULL )
 		return( CRYPT_OK );
 
-#if defined( USE_PGP ) || defined( USE_PGPKEYS )
+#ifdef USE_PGPKEYS 
 	return( calculatePGPKeyID( contextInfoPtr, cryptAlgo ) );
 #else
 	return( CRYPT_OK );
-#endif /* USE_PGP || USE_PGPKEYS */
+#endif /* USE_PGPKEYS */
 	}
 
 /****************************************************************************

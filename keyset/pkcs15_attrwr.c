@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					cryptlib PKCS #15 Attribute Write Routines				*
-*						Copyright Peter Gutmann 1996-2007					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -292,6 +292,12 @@ static int getKeyUsageFlags( IN_HANDLE const CRYPT_HANDLE iCryptContext,
 		switch( pkcAlgo )
 			{
 			case CRYPT_ALGO_DH:
+#ifdef USE_ECDH
+			case CRYPT_ALGO_ECDH:
+#endif /* USE_ECDH */
+#ifdef USE_25519
+			case CRYPT_ALGO_25519:
+#endif /* USE_25519 */
 				return( PKCS15_USAGE_DERIVE );
 
 			case CRYPT_ALGO_RSA:
@@ -299,11 +305,18 @@ static int getKeyUsageFlags( IN_HANDLE const CRYPT_HANDLE iCryptContext,
 						PKCS15_USAGE_SIGN | PKCS15_USAGE_VERIFY );
 
 			case CRYPT_ALGO_DSA:
+#ifdef USE_ECDSA
 			case CRYPT_ALGO_ECDSA:
+#endif /* USE_ECDSA */
+#ifdef USE_ED25519
 			case CRYPT_ALGO_ED25519:
+#endif /* USE_ED25519 */
 				return( PKCS15_USAGE_SIGN | PKCS15_USAGE_VERIFY );
 
 			case CRYPT_ALGO_ELGAMAL:
+#ifdef USE_MLKEM
+			case CRYPT_ALGO_MLKEM:
+#endif /* USE_MLKEM */
 				return( PKCS15_USAGE_ENCRYPT | PKCS15_USAGE_DECRYPT );
 			}
 		retIntError();

@@ -1,3 +1,11 @@
+Changes in 3.4.9.3 release
+==========================
+
+cryptlib 3.4.9.2 is a third intermediate release to prepare for the cleanup
+changes in 3.5, completing the general code cleanup from 3.4.9.2.  In
+particular it corrects an overly-strict security setting introduced in 3.4.9.2
+that prevents some stored configuration options from being applied.
+
 Changes in 3.4.9.2 release
 ==========================
 

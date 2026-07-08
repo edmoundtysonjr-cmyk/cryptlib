@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						cryptlib IDEA Encryption Routines					*
-*						Copyright Peter Gutmann 1992-2005					*
+*						Copyright Peter Gutmann 1992-2025					*
 *																			*
 ****************************************************************************/
 
@@ -492,7 +492,7 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		}
 
 	/* Generate the expanded IDEA encryption and decryption keys */
-	idea_set_encrypt_key( key, &ideaKey->eKey );
+	idea_set_encrypt_key( convInfo->userKey, &ideaKey->eKey );
 	idea_set_decrypt_key( &ideaKey->eKey, &ideaKey->dKey );
 
 	return( CRYPT_OK );
@@ -519,5 +519,4 @@ const CAPABILITY_INFO *getIDEACapability( void )
 	{
 	return( &capabilityInfo );
 	}
-
 #endif /* USE_IDEA */

@@ -165,7 +165,7 @@ static const NS_CERT_TYPE_INFO nsCertTypeInfo[] = {
    no-op extension whose presence is the equivalent of adding "|| TRUE" to 
    an expression */
 
-CHECK_RETVAL_RANGE( CRYPT_KEYUSAGE_NONE, CRYPT_KEYUSAGE_FLAG_MAX ) STDC_NONNULL_ARG( ( 3 ) ) \
+CHECK_RETVAL_RANGE( CRYPT_KEYUSAGE_FLAG_NONE, CRYPT_KEYUSAGE_FLAG_MAX ) STDC_NONNULL_ARG( ( 3 ) ) \
 static int getExtendedKeyUsageFlags( IN_DATAPTR const DATAPTR_ATTRIBUTE attributes,
 									 IN_FLAGS( ALGO_TYPE ) const int algorithmType,
 									 OUT_ENUM_OPT( CRYPT_ATTRIBUTE ) \
@@ -247,7 +247,7 @@ static int getExtendedKeyUsageFlags( IN_DATAPTR const DATAPTR_ATTRIBUTE attribut
 /* Build up key usage flags consistent with the Netscape certificate-type 
    purpose */
 
-CHECK_RETVAL_RANGE( CRYPT_KEYUSAGE_NONE, CRYPT_KEYUSAGE_MAX ) STDC_NONNULL_ARG( ( 1, 3 ) ) \
+CHECK_RETVAL_RANGE( CRYPT_KEYUSAGE_FLAG_NONE, CRYPT_KEYUSAGE_FLAG_MAX ) STDC_NONNULL_ARG( ( 1, 3 ) ) \
 static int getNetscapeCertTypeFlags( IN_DATAPTR const DATAPTR_ATTRIBUTE attributes,
 									 IN_FLAGS( ALGO_TYPE ) const int algorithmType,
 									 OUT_ENUM_OPT( CRYPT_ATTRIBUTE ) \
@@ -256,11 +256,13 @@ static int getNetscapeCertTypeFlags( IN_DATAPTR const DATAPTR_ATTRIBUTE attribut
 	LOOP_INDEX i;
 	int nsCertType, keyUsage = 0, status;
 
-	assert( isReadPtr( attributes, sizeof( ATTRIBUTE_PTR_STORAGE ) ) );
 	assert( isWritePtr( errorLocus, sizeof( CRYPT_ATTRIBUTE_TYPE ) ) );
 
 	REQUIRES( DATAPTR_ISSET( attributes ) );
 	REQUIRES( isFlagRange( algorithmType, ALGO_TYPE ) );
+
+	/* Clear return value */
+	*errorLocus = CRYPT_ATTRIBUTE_NONE;
 
 	/* If there isn't a Netscape certificate-type extension present, exit */
 	status = getAttributeFieldValue( attributes, CRYPT_CERTINFO_NS_CERTTYPE, 

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						Get Certificate String Components					*
-*						Copyright Peter Gutmann 1997-2021					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -28,7 +28,7 @@
    identified-organisation arc { 1 3 xxx }, for which Slovakia, { 1 3 158 } 
    has chosen to use values around 3xxxxxxx, just over 2^29 */
 
-#define OID_ARC_MAX		0x4000000L	/* 2 ^ 30 */
+#define OID_ARC_MAX		0x40000000L	/* 2 ^ 30 */
 
 /* Convert a binary OID to its text form */
 

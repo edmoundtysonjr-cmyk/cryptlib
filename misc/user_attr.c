@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						cryptlib User Attribute Routines					*
-*						Copyright Peter Gutmann 1999-2007					*
+*						Copyright Peter Gutmann 1999-2025					*
 *																			*
 ****************************************************************************/
 
@@ -166,7 +166,10 @@ static int twoPhaseConfigUpdate( INOUT_PTR USER_INFO *userInfoPtr,
 									 iTrustedCertUserObject );
 	if( disposition == CONFIG_DISPOSITION_DATA_ONLY || \
 		disposition == CONFIG_DISPOSITION_BOTH )
-		clFree( "userMessageFunction", data );
+		{
+		clFree( "twoPhaseConfigUpdate", data );
+		data = NULL;
+		}
 	status = krnlResumeObject( userInfoPtr->objectHandle, refCount );
 	if( cryptStatusError( status ) )
 		{

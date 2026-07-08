@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							  PGP Support Routines							*
-*						Copyright Peter Gutmann 1992-2007					*
+*						Copyright Peter Gutmann 1992-2025					*
 *																			*
 ****************************************************************************/
 
@@ -129,7 +129,7 @@ int pgpToCryptlibAlgo( IN_RANGE( PGP_ALGO_NONE, 0xFF ) const int pgpAlgo,
 		}
 	ENSURES( LOOP_BOUND_OK );
 	ENSURES( i < FAILSAFE_ARRAYSIZE( pgpAlgoMap, PGP_ALGOMAP_INFO ) );
-	if( pgpAlgoMap[ i ].cryptlibAlgo == PGP_ALGO_NONE )
+	if( pgpAlgoMap[ i ].cryptlibAlgo == CRYPT_ALGO_NONE )
 		return( CRYPT_ERROR_NOTAVAIL );
 	*cryptAlgo = pgpAlgoMap[ i ].cryptlibAlgo;
 	if( cryptParam != NULL )
@@ -336,13 +336,13 @@ int pgpProcessIV( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 	MESSAGE_DATA msgData;
 	int status;
 
-	assert( isReadPtrDynamic( ivInfo, ivInfoSize ) );
+	assert( isWritePtrDynamic( ivInfo, ivInfoSize ) );
 
 	REQUIRES( isHandleRangeValid( iCryptContext ) );
 	REQUIRES( ivDataSize >= MIN_IVSIZE && ivDataSize <= CRYPT_MAX_IVSIZE );
 	REQUIRES( ivInfoSize == ivDataSize + 2 );
 	REQUIRES( iMdcContext == CRYPT_UNUSED || \
-			  isHandleRangeValid( iCryptContext ) );
+			  isHandleRangeValid( iMdcContext ) );
 	REQUIRES( isBooleanValue( isEncrypt ) );
 
 	/* PGP uses a bizarre way of handling IVs that resyncs the data on some 

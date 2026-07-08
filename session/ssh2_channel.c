@@ -92,7 +92,7 @@ CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 static BOOLEAN isChannelActive( const SESSION_INFO *sessionInfoPtr,
 								IN_INT_SHORT_Z const int excludedChannelID )
 	{
-	LOOP_INDEX_PTR ATTRIBUTE_LIST *attributeListPtr;
+	LOOP_INDEX_PTR SESSION_ATTRIBUTE_LIST *attributeListPtr;
 
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
@@ -132,7 +132,7 @@ static BOOLEAN isChannelActive( const SESSION_INFO *sessionInfoPtr,
    ATTR_PREV/ATTR_NEXT is still within the current subgroup */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
-static int accessFunction( INOUT_PTR ATTRIBUTE_LIST *attributeListPtr,
+static int accessFunction( INOUT_PTR SESSION_ATTRIBUTE_LIST *attributeListPtr,
 						   IN_ENUM_OPT( ATTR ) const ATTR_TYPE attrGetType,
 						   OUT_INT_Z int *value )
 	{
@@ -146,7 +146,8 @@ static int accessFunction( INOUT_PTR ATTRIBUTE_LIST *attributeListPtr,
 	BOOLEAN doContinue;
 	int LOOP_ITERATOR;
 
-	assert( isWritePtr( attributeListPtr, sizeof( ATTRIBUTE_LIST ) ) );
+	assert( isWritePtr( attributeListPtr, \
+						sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 	assert( isWritePtr( value, sizeof( int ) ) );
 
 	REQUIRES( isEnumRangeOpt( attrGetType, ATTR ) );
@@ -259,10 +260,11 @@ static int accessFunction( INOUT_PTR ATTRIBUTE_LIST *attributeListPtr,
 /* Find the attribute entry for a channel */
 
 CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1 ) ) \
-static ATTRIBUTE_LIST *findChannelAttr( const SESSION_INFO *sessionInfoPtr,
-										const long channelNo )
+static SESSION_ATTRIBUTE_LIST *findChannelAttr( IN_PTR \
+													const SESSION_INFO *sessionInfoPtr,
+												const long channelNo )
 	{
-	LOOP_INDEX_PTR ATTRIBUTE_LIST *attributeListPtr;
+	LOOP_INDEX_PTR SESSION_ATTRIBUTE_LIST *attributeListPtr;
 
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
@@ -306,10 +308,11 @@ static ATTRIBUTE_LIST *findChannelAttr( const SESSION_INFO *sessionInfoPtr,
    number, channel ID, and channel host + port information */
 
 CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1 ) ) \
-static SSH_CHANNEL_INFO *findChannelByChannelNo( const SESSION_INFO *sessionInfoPtr,
+static SSH_CHANNEL_INFO *findChannelByChannelNo( IN_PTR \
+													const SESSION_INFO *sessionInfoPtr,
 												 const long channelNo )
 	{
-	const ATTRIBUTE_LIST *attributeListPtr = \
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr = \
 							findChannelAttr( sessionInfoPtr, channelNo );
 
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -321,10 +324,11 @@ static SSH_CHANNEL_INFO *findChannelByChannelNo( const SESSION_INFO *sessionInfo
 	}
 
 CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1 ) ) \
-static SSH_CHANNEL_INFO *findChannelByID( const SESSION_INFO *sessionInfoPtr,
-											IN_INT_SHORT const int channelID )
+static SSH_CHANNEL_INFO *findChannelByID( IN_PTR \
+											const SESSION_INFO *sessionInfoPtr,
+										  IN_INT_SHORT const int channelID )
 	{
-	LOOP_INDEX_PTR ATTRIBUTE_LIST *attributeListPtr;
+	LOOP_INDEX_PTR SESSION_ATTRIBUTE_LIST *attributeListPtr;
 
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
@@ -355,13 +359,14 @@ static SSH_CHANNEL_INFO *findChannelByID( const SESSION_INFO *sessionInfoPtr,
 	}
 
 CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1, 2 ) ) \
-static SSH_CHANNEL_INFO *findChannelByAddr( const SESSION_INFO *sessionInfoPtr,
+static SSH_CHANNEL_INFO *findChannelByAddr( IN_PTR \
+												const SESSION_INFO *sessionInfoPtr,
 											IN_BUFFER( addrInfoLen ) \
 												const char *addrInfo,
 											IN_LENGTH_SHORT \
 												const int addrInfoLen )
 	{
-	LOOP_INDEX_PTR ATTRIBUTE_LIST *attributeListPtr;
+	LOOP_INDEX_PTR SESSION_ATTRIBUTE_LIST *attributeListPtr;
 
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isReadPtrDynamic( addrInfo, addrInfoLen ) );
@@ -809,7 +814,7 @@ int addChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				IN_LENGTH_SHORT_Z const int arg1Len )
 	{
 	SSH_INFO *sshInfo = sessionInfoPtr->sessionSSH;
-	LOOP_INDEX_PTR ATTRIBUTE_LIST *attributeListPtr;
+	LOOP_INDEX_PTR SESSION_ATTRIBUTE_LIST *attributeListPtr;
 	SSH_CHANNEL_INFO channelInfo;
 	int channelCount, status;
 
@@ -941,7 +946,7 @@ int deleteChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	{
 	SSH_INFO *sshInfo = sessionInfoPtr->sessionSSH;
 	SSH_CHANNEL_INFO *channelInfoPtr;
-	ATTRIBUTE_LIST *attributeListPtr;
+	SESSION_ATTRIBUTE_LIST *attributeListPtr;
 	int channelID;
 
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -1026,8 +1031,8 @@ int enqueueResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	REQUIRES( ( noParams == 0 && channelNo == CRYPT_UNUSED ) || \
 			  ( channelNo >= 0 && channelNo <= CHANNEL_MAX ) );
 
-	/* If there's already a response enqueued we can't enqueue another one
-	   until it's been sent */
+	/* If there's already a response enqueued then we can't enqueue another 
+	   one until it's been sent */
 	REQUIRES( respPtr->type == 0 );
 
 	respPtr->type = type;
@@ -1042,7 +1047,7 @@ int enqueueResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		status = writeUint32( &stream, param3 );
 	ENSURES( cryptStatusOK( status ) );
 	respPtr->dataLen = stell( &stream );
-	REQUIRES( isShortIntegerRangeNZ( respPtr->dataLen ) );
+	REQUIRES( isShortIntegerRange( respPtr->dataLen ) );
 	sMemDisconnect( &stream );
 
 	return( CRYPT_OK );

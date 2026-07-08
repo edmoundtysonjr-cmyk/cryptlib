@@ -518,7 +518,7 @@ static int writeCryptlibSignature( INOUT_PTR STREAM *stream,
 *																			*
 ****************************************************************************/
 
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 
 /* Read a PGP type-and-value packet and check whether it's one of ours */
 
@@ -653,7 +653,7 @@ static int readSignatureSubpackets( INOUT_PTR STREAM *stream,
 		   are a few holes in the range, but since the holes presumably exist
 		   because of deprecated subpacket types any new packets will be 
 		   added at the end so it's safe to use */
-		if( isCritical && type > PGP_SUBPACKET_LAST )
+		if( isCritical && type >= PGP_SUBPACKET_LAST )
 			return( CRYPT_ERROR_NOTAVAIL );
 
 		/* If this is a duplicate subpacket, reject the signature.  The 
@@ -1148,7 +1148,7 @@ static int writePgpSignature( INOUT_PTR STREAM *stream,
 							  STDC_UNUSED IN_LENGTH_HASH const int hashParam,
 							  IN_ALGO const CRYPT_ALGO_TYPE signAlgo,
 							  IN_BUFFER( signatureLength ) const BYTE *signature,
-							  IN_LENGTH_SHORT_MIN( MIN_SIGNATURE_SIZE + 1 ) \
+							  IN_LENGTH_SHORT_MIN( MIN_SIGNATURE_SIZE ) \
 								const int signatureLength )
 	{
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -1172,7 +1172,7 @@ static int writePgpSignature( INOUT_PTR STREAM *stream,
 	/* Write the signature as a PGP MPI */
 	return( writeInteger16Ubits( stream, signature, signatureLength ) );
 	}
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 
 /****************************************************************************
 *																			*
@@ -1462,7 +1462,7 @@ static int writeTlsSignature( INOUT_PTR STREAM *stream,
 							  STDC_UNUSED IN_LENGTH_HASH const int hashParam,
 							  STDC_UNUSED const CRYPT_ALGO_TYPE signAlgo,
 							  IN_BUFFER( signatureLength ) const BYTE *signature,
-							  IN_LENGTH_SHORT_MIN( MIN_SIGNATURE_SIZE + 1 ) \
+							  IN_LENGTH_SHORT_MIN( MIN_SIGNATURE_SIZE ) \
 								const int signatureLength )
 	{
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -1620,7 +1620,7 @@ static int writeTls1XSignature( INOUT_PTR STREAM *stream,
 								IN_LENGTH_HASH_Z const int hashParam,
 								IN_ALGO const CRYPT_ALGO_TYPE signAlgo,
 								IN_BUFFER( signatureLength ) const BYTE *signature,
-								IN_LENGTH_SHORT_MIN( MIN_SIGNATURE_SIZE + 1 ) \
+								IN_LENGTH_SHORT_MIN( MIN_SIGNATURE_SIZE ) \
 									const int signatureLength,
 								IN_BOOL const BOOLEAN useRSAPSS )
 	{
@@ -1680,7 +1680,7 @@ static int writeTls12Signature( INOUT_PTR STREAM *stream,
 								IN_LENGTH_HASH_Z const int hashParam,
 								IN_ALGO const CRYPT_ALGO_TYPE signAlgo,
 								IN_BUFFER( signatureLength ) const BYTE *signature,
-								IN_LENGTH_SHORT_MIN( MIN_SIGNATURE_SIZE + 1 ) \
+								IN_LENGTH_SHORT_MIN( MIN_SIGNATURE_SIZE ) \
 									const int signatureLength )
 	{
 	return( writeTls1XSignature( stream, hashAlgo, hashParam, signAlgo, 
@@ -1694,7 +1694,7 @@ static int writeTls13Signature( INOUT_PTR STREAM *stream,
 								IN_LENGTH_HASH_Z const int hashParam,
 								IN_ALGO const CRYPT_ALGO_TYPE signAlgo,
 								IN_BUFFER( signatureLength ) const BYTE *signature,
-								IN_LENGTH_SHORT_MIN( MIN_SIGNATURE_SIZE + 1 ) \
+								IN_LENGTH_SHORT_MIN( MIN_SIGNATURE_SIZE ) \
 									const int signatureLength )
 	{
 	/* TLS 1.3 is the same as TLS 1.2 but we have to use RSA-PSS for RSA
@@ -1728,9 +1728,9 @@ static const SIG_READ_INFO sigReadTable[] = {
   #endif /* USE_PSS */
 	{ SIGNATURE_CRYPTLIB, readCryptlibSignature },
 #endif /* USE_INT_CMS */
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 	{ SIGNATURE_PGP, readPgpSignature },
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 #ifdef USE_SSH
 	{ SIGNATURE_SSH, readSshSignature },
 #endif /* USE_SSH */
@@ -1758,9 +1758,9 @@ static const SIG_WRITE_INFO sigWriteTable[] = {
   #endif /* USE_PSS */
 	{ SIGNATURE_CRYPTLIB, writeCryptlibSignature },
 #endif /* USE_INT_CMS */
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 	{ SIGNATURE_PGP, writePgpSignature },
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 #ifdef USE_SSH
 	{ SIGNATURE_SSH, writeSshSignature },
 #endif /* USE_SSH */

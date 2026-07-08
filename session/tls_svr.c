@@ -385,7 +385,7 @@ STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static void checkSNI( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					  INOUT_PTR STREAM *stream )
 	{
-	const ATTRIBUTE_LIST *attributeListCursor;
+	const SESSION_ATTRIBUTE_LIST *attributeListCursor;
 	ERROR_INFO localErrorInfo;
 	BYTE nameBuffer[ MAX_DNS_SIZE + 8 ];
 	LOOP_INDEX noExtensions;
@@ -514,8 +514,8 @@ static void checkSNI( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 											 CRYPT_SESSINFO_PRIVATEKEY ) )
 		{
 		CRYPT_HANDLE iTempHandle;
-		ATTRIBUTE_LIST *privateKeyPtr = \
-						( ATTRIBUTE_LIST * ) attributeListCursor;
+		SESSION_ATTRIBUTE_LIST *privateKeyPtr = \
+						( SESSION_ATTRIBUTE_LIST * ) attributeListCursor;
 
 		ENSURES_V( LOOP_INVARIANT_MED_GENERIC() );
 
@@ -579,7 +579,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int processDHKeyex( INOUT_PTR SESSION_INFO *sessionInfoPtr, 
 						   INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 						   INOUT_PTR STREAM *stream, 
-						   IN_PTR_OPT const ATTRIBUTE_LIST *passwordInfoPtr )
+						   IN_PTR_OPT \
+							const SESSION_ATTRIBUTE_LIST *passwordInfoPtr )
 	{
 	BYTE keyexValue[ CRYPT_MAX_PKCSIZE + 8 ];
 	int keyexValueLen, status;
@@ -588,7 +589,8 @@ static int processDHKeyex( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( passwordInfoPtr == NULL || \
-			isReadPtr( passwordInfoPtr, sizeof( ATTRIBUTE_LIST ) ) );
+			isReadPtr( passwordInfoPtr, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	/* Complete the DH keyex */
 	status = completeTLSKeyex( handshakeInfo, stream, TRUE,
@@ -638,8 +640,8 @@ static int processPSKKeyex( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 							INOUT_PTR STREAM *stream )
 	{
-	const ATTRIBUTE_LIST *attributeListPtr;
-	LOOP_INDEX_PTR const ATTRIBUTE_LIST *attributeListCursor;
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr;
+	LOOP_INDEX_PTR const SESSION_ATTRIBUTE_LIST *attributeListCursor;
 	const BOOLEAN isKeyex = \
 				isKeyexAlgo( handshakeInfo->keyexAlgo ) ? TRUE : FALSE;
 	BYTE userID[ CRYPT_MAX_TEXTSIZE + 8 ];
@@ -703,11 +705,14 @@ static int processPSKKeyex( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   correspond to attributeListPtr, delete the pair, leaving only the 
 	   matching { username, password } pair at the end */
 	LOOP_LARGE_INITCHECK( attributeListCursor = \
-							findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_USERNAME ), 
+							findSessionInfo( sessionInfoPtr, \
+											 CRYPT_SESSINFO_USERNAME ), 
 						  attributeListCursor != NULL )
 		{
-		ATTRIBUTE_LIST *userNamePtr = ( ATTRIBUTE_LIST * ) attributeListCursor;
-		ATTRIBUTE_LIST *passwordPtr = DATAPTR_GET( userNamePtr->next );
+		SESSION_ATTRIBUTE_LIST *userNamePtr = \
+					( SESSION_ATTRIBUTE_LIST * ) attributeListCursor;
+		SESSION_ATTRIBUTE_LIST *passwordPtr = \
+					DATAPTR_GET( userNamePtr->next );
 
 		ENSURES( LOOP_INVARIANT_LARGE_GENERIC() );
 
@@ -1127,7 +1132,7 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   handshake parameters") don't mention the protocol version as 
 			   a parameter of interest.  If a client were to drop from TLS
 			   1.2 to 1.1 it would be downgrading itself, so we allow it */
-			if( resumedFlags < originalFlags )
+			if( ( resumedFlags & originalFlags ) != originalFlags )
 				{
 				retExt( CRYPT_ERROR_INVALID,
 						( CRYPT_ERROR_INVALID, SESSION_ERRINFO, 
@@ -1340,7 +1345,7 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   SHA2-256 at this point due to the LTS/TLS 1.3 cipher suite 
 		   negotiation so we hardcode that into the hashing */
 		getHashParameters( CRYPT_ALGO_SHA2, bitsToBytes( 256 ), &hashFunction, 
-						   &hashSize );
+						   &hashSize, NULL );
 		hashFunction( hashInfo, NULL, 0, sessionInfoPtr->receiveBuffer, 
 					  clientHelloLength, HASH_STATE_START );
 		hashFunction( hashInfo, handshakeInfo->helloHash, CRYPT_MAX_HASHSIZE, 
@@ -1473,9 +1478,7 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	  [	uint16	sigHashListLen		-- TLS 1.2 ]
 	  [		byte	hashAlgoID		-- TLS 1.2 ]
 	  [		byte	sigAlgoID		-- TLS 1.2 ]
-		uint16		caNameListLen = 4
-			uint16	caNameLen = 2
-			byte[]	caName = { 0x30, 0x00 }
+		uint16		caNameListLen = 0
 		... */
 	if( clientCertAuthRequired( sessionInfoPtr ) )
 		{

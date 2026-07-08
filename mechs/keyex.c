@@ -42,7 +42,7 @@ static CRYPT_FORMAT_TYPE getFormatType( IN_BUFFER( dataLength ) const void *data
 	STREAM stream;
 	long value;
 #ifdef USE_PGP
-	int packetLength;
+	int ctb, dummy;
 #endif /* USE_PGP */
 	int status;
 
@@ -109,11 +109,16 @@ static CRYPT_FORMAT_TYPE getFormatType( IN_BUFFER( dataLength ) const void *data
 				CRYPT_FORMAT_CRYPTLIB : CRYPT_FORMAT_NONE );
 		}
 
+	/* It's not ASN.1 data, check for PGP data.  Since this is just content-
+	   sniffing to check whether it looks like PGP data we just perform a 
+	   basic check that it looks about right for PGP keyex data */
 #ifdef USE_PGP
-	/* It's not ASN.1 data, check for PGP data */
-	status = pgpReadPacketHeader( &stream, NULL, &packetLength, 30, 8192 );
+	status = pgpReadPacketHeader( &stream, &ctb, &dummy, 30, 8192 );
 	if( cryptStatusOK( status ) && \
-		packetLength > 30 && packetLength < 8192 )
+		( pgpGetPacketType( ctb ) != PGP_PACKET_PKE && \
+		  pgpGetPacketType( ctb ) != PGP_PACKET_SKE ) )
+		status = CRYPT_ERROR_BADDATA;
+	if( cryptStatusOK( status ) )
 		{
 		sMemDisconnect( &stream );
 		return( CRYPT_FORMAT_PGP );
@@ -166,7 +171,7 @@ static int checkContextsEncodable( IN_HANDLE const CRYPT_HANDLE exportKey,
 	{
 	const BOOLEAN exportIsPKC = isPkcAlgo( exportAlgo ) ? TRUE : FALSE;
 	BOOLEAN sessionIsMAC = FALSE;
-	int sessionKeyAlgo, sessionKeyMode DUMMY_INIT, status;
+	int sessionKeyAlgo, sessionKeyMode = CRYPT_MODE_NONE, status;
 
 	REQUIRES( isHandleRangeValid( exportKey ) );
 	REQUIRES( isEnumRange( exportAlgo, CRYPT_ALGO ) );
@@ -407,7 +412,7 @@ C_RET cryptUnwrapKeyEx( C_IN void C_PTR encryptedKey,
 			/* If we get an argument error from the lower-level code, map the
 			   parameter number to the function argument number */
 			status = ( status == CRYPT_ARGERROR_NUM1 ) ? \
-					 CRYPT_ERROR_PARAM4 : CRYPT_ERROR_PARAM3;
+					 CRYPT_ERROR_PARAM3 : CRYPT_ERROR_PARAM4;
 			}
 		return( status );
 		}
@@ -789,9 +794,11 @@ int iCryptExportKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 	if( keyexFormat != CRYPT_PKCFORMAT_DEFAULT )
 		{
 		/* We're using a nonstandard keyex format, make sure that it's 
-		   compatible with the algorithm being used before enabling it */
+		   compatible with the algorithm and data format being used before 
+		   enabling it */
 		if( exportAlgo == CRYPT_ALGO_RSA && \
-			keyexFormat == CRYPT_PKCFORMAT_OAEP )
+			keyexFormat == CRYPT_PKCFORMAT_OAEP && \
+			formatType != CRYPT_FORMAT_PGP )
 			{
 			keyexType = ( keyexType == KEYEX_CRYPTLIB ) ? \
 						KEYEX_CRYPTLIB_OAEP : KEYEX_CMS_OAEP;

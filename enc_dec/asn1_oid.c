@@ -148,7 +148,7 @@ static const ALGOID_INFO algoIDinfoTbl[] = {
 	  /* When they ran out of valid dsaWithSHA's, they started using invalid
 	     ones.  This one is from JDK 1.1 and is actually dsaWithSHA(-0), but 
 		 it's used as if it were dsaWithSHA-1 (1 3 14 3 2 13) */
-	{ CRYPT_ALGO_DSA, CRYPT_ALGO_SHA2, 32, ALGOID_CLASS_PKC,
+	{ CRYPT_ALGO_DSA, CRYPT_ALGO_SHA2, 32, ALGOID_CLASS_PKCSIG,
 	  MKOID( "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x03\x02" ) 
 	  MKDESC( "dsaWithSha256 (2 16 840 1 101 3 4 3 2)" ) },
 #endif /* USE_DSA */

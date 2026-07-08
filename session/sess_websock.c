@@ -103,7 +103,7 @@ static int initVirtualStream( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						NET_OPTION_VIRTUAL );
 	if( !isServer( sessionInfoPtr ) )
 		{
-		const ATTRIBUTE_LIST *attributeListPtr;
+		const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 
 		/* Add the server name, whose presence has been checked for
 		   earlier */
@@ -354,7 +354,7 @@ static int checkProtocol( IN_BUFFER( reqProtocolLen ) \
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int activateWebSocketsClient( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
-	const ATTRIBUTE_LIST *attributeListPtr;
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 	HTTP_DATA_INFO httpDataInfo;
 	HTTP_REQ_INFO httpReqInfo;
 	HTTP_URI_INFO httpUriInfo;
@@ -479,7 +479,7 @@ static int activateWebSocketsClient( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int activateWebSocketsServer( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
-	const ATTRIBUTE_LIST *attributeListPtr;
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 	HTTP_DATA_INFO httpDataInfo;
 	HTTP_REQ_INFO httpReqInfo;
 	HTTP_URI_INFO httpUriInfo;

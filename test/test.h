@@ -30,12 +30,12 @@
    produce a cascade of device-not-present warnings */
 #define TEST_DEVICE			/* Test device functions */
 #endif /* 0 */
-#if defined( _MSC_VER ) && ( _MSC_VER == 1929 ) && !defined( NDEBUG ) && \
+#if defined( _MSC_VER ) && ( _MSC_VER == 1500 ) && !defined( NDEBUG ) && \
 	!defined( _M_X64 ) && 0
-  /* We enable the device test under VS 2019 32-bit debug so that it gets 
+  /* We enable the device test under VS 2008 32-bit debug so that it gets 
      tested in at least one configuration */
   #define TEST_DEVICE
-#endif /* VS 2019 32-bit debug */
+#endif /* VS 2008 32-bit debug */
 #if 1
 #define TEST_SESSION		/* Test session functions */
 #define TEST_SESSION_LOOPBACK/* Test session functions via local loopback */
@@ -1205,7 +1205,7 @@ int testSessionTLS12ClientCert( void );
 int testSessionTLS12Server( void );
 int testSessionTLS12ServerEccKey( void );
 int testSessionTLS12ServerClientCertManual( void );
-int testSessionTLS12ServerWhitelist( void );
+int testSessionTLS12ServerAllowlist( void );
 int testSessionTLS12WrongServer( void );
 int testSessionTLS12WebSockets( void );
 int testSessionTLS12WebSocketsServer( void );
@@ -1223,6 +1223,7 @@ int testSessionTLSBadSSL( void );
    support since they run the client and server in different threads */
 
 #ifdef TEST_SESSION_LOOPBACK
+  /* SSH */
   int testSessionSSHClientServer( void );
   int testSessionSSHClientServerDsaKey( void );
   int testSessionSSHClientServerEccKey( void );
@@ -1243,6 +1244,8 @@ int testSessionTLSBadSSL( void );
   int testSessionSSHClientServerDualThread( void );
   int testSessionSSHClientServerMultiThread( void );
   int testSessionSSHClientServerDebugCheck( void );
+  
+  /* TLS */
   int testSessionSSLClientServer( void );
   int testSessionSSLClientCertClientServer( void );
   int testSessionTLSClientServer( void );
@@ -1254,13 +1257,17 @@ int testSessionTLSBadSSL( void );
   int testSessionTLS11ClientCertClientServer( void );
   int testSessionTLS11ResumeClientServer( void );
   int testSessionTLS12ClientServer( void );
+  int testSessionTLS12SharedKeyClientServer( void );
+  int testSessionTLS12NoSharedKeyClientServer( void );
   int testSessionTLS12ClientServerEccKey( void );
   int testSessionTLS12ClientServerEcc384Key( void );
   int testSessionTLS12ClientCertClientServer( void );
   int testSessionTLS12ClientCertManualClientServer( void );
+  int testSessionTLS12BulkTransferClientServer( void );
+  int testSessionTLS12LocalServerSocketClientServer( void );
   int testSessionTLS12SNIClientServer( void );
-  int testSessionTLS12WhitelistClientServer( void );
-  int testSessionTLS12WhitelistFailClientServer( void );
+  int testSessionTLS12AllowlistClientServer( void );
+  int testSessionTLS12AllowlistFailClientServer( void );
   int testSessionTLS12WebSocketsClientServer( void );
   int testSessionTLS13ClientServer( void );
   int testSessionTLS13ClientServerEccKey( void );
@@ -1272,6 +1279,8 @@ int testSessionTLSBadSSL( void );
   int testSessionTLSClientServerDualThread( void );
   int testSessionTLSClientServerMultiThread( void );
   int testSessionTLSClientServerDebugCheck( void );
+  
+  /* PKI */
   int testSessionHTTPCertstoreClientServer( void );
   int testSessionRTCSClientServer( void );
   int testSessionSCVPClientServer( void );

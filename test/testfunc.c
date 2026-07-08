@@ -1321,13 +1321,27 @@ BOOLEAN testSessionsLoopback( void )
 		return( FALSE );
 	if( !testSessionTLS11ClientCertClientServer() )
 		return( FALSE );
-	
+
 	/* TLS 1.2 tests */
 	if( !testSessionTLS12ClientServer() )
+		return( FALSE );
+	if( !testSessionTLS12SharedKeyClientServer() )
+		return( FALSE );
+	if( !testSessionTLS12NoSharedKeyClientServer() )
 		return( FALSE );
 	if( !testSessionTLS12ClientCertClientServer() )
 		return( FALSE );
 	if( !testSessionTLS12ClientCertManualClientServer() )
+		return( FALSE );
+	if( !testSessionTLS12BulkTransferClientServer() )
+		return( FALSE );
+	if( !testSessionTLS12LocalServerSocketClientServer() )
+		return( FALSE );
+	if( !testSessionTLS12SNIClientServer() )
+		return( FALSE );
+	if( !testSessionTLS12AllowlistClientServer() )
+		return( FALSE );
+	if( !testSessionTLS12AllowlistFailClientServer() )
 		return( FALSE );
 	if( !testSessionTLS12WebSocketsClientServer() )
 		return( FALSE );

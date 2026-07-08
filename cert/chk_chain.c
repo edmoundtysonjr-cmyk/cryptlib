@@ -118,8 +118,11 @@ static int getCertInfo( const CERT_INFO *certInfoPtr,
 	assert( isWritePtr( certChainPtr, sizeof( CERT_INFO * ) ) );
 
 	REQUIRES( certChainIndex >= -1 && \
-			  certChainIndex < certChainInfo->chainEnd && \
+			  certChainIndex <= certChainInfo->chainEnd && \
 			  certChainIndex < MAX_CHAINLENGTH );
+			  /* We allow certChainIndex == certChainInfo->chainEnd which 
+			     means that we've reached the end of the chain, the default-
+			     exit at the end of the function */
 
 	/* Clear return value */
 	*certChainPtr = NULL;
@@ -247,7 +250,7 @@ static int performAbsTrustOperation( INOUT_PTR CERT_INFO *certInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int findTrustAnchor( INOUT_PTR CERT_INFO *certInfoPtr, 
-							OUT_RANGE( -1, MAX_CHAINLENGTH - 1 ) \
+							OUT_RANGE( -1, MAX_CHAINLENGTH ) \
 								int *trustAnchorIndexPtr, 
 							OUT_HANDLE_OPT CRYPT_CERTIFICATE *trustAnchorCert )
 	{
@@ -323,7 +326,7 @@ static int findTrustAnchor( INOUT_PTR CERT_INFO *certInfoPtr,
 	   stopped at check to see whether the next certificate is the same as 
 	   the trust anchor.  If it is then we use the copy of the certificate 
 	   in the chain rather than the external one from the trust database */
-	if( trustAnchorIndex < certChainInfo->chainEnd - 1 )
+	if( trustAnchorIndex < certChainInfo->chainEnd )
 		{
 		status = krnlSendMessage( certChainInfo->chain[ trustAnchorIndex ],
 								  IMESSAGE_COMPARE, &iIssuerCert, 
@@ -350,6 +353,9 @@ static int setTrustAnchorErrorInfo( INOUT_PTR CERT_INFO *certInfoPtr )
 	assert( isWritePtr( certInfoPtr, sizeof( CERT_INFO ) ) );
 
 	ENSURES( lastCertIndex >= 0 && lastCertIndex < certChainInfo->chainEnd );
+			 /* certChainInfo->chainEnd should be > 0 since we can't have a
+			    certificate chain consisting of only a single certificate
+			    (see chain.c:buildCertChain()), so lastCertIndex >= 0 */
 
 	/* Select the certificate that caused the problem, which is the highest-
 	   level certificate in the chain */
@@ -416,7 +422,8 @@ static BOOLEAN isPolicyPresent( IN_PTR const POLICY_DATA *policyData,
 	assert( isReadPtrDynamic( policyValue, policyValueLength ) );
 
 	REQUIRES_B( policyCount >= 0 && policyCount < MAX_POLICIES );
-	REQUIRES_B( policyValueLength > 0 && policyValueLength < MAX_POLICY_SIZE );
+	REQUIRES_B( policyValueLength > 0 && \
+				policyValueLength <= MAX_POLICY_SIZE );
 
 	/* Check whether the given policy is already present in the set of 
 	   acceptable policies */
@@ -509,8 +516,7 @@ static int addExplicitPolicies( INOUT_PTR POLICY_INFO *policyInfo,
 				   policyCount = policyInfo->noPolicies ), 
 				( DATAPTR_ISSET( attributeCursor ) && \
 				  policyCount < MAX_POLICIES ),
-				( attributeCursor = findNextFieldInstance( attributeCursor ), 
-				  policyCount++ ) )
+				attributeCursor = findNextFieldInstance( attributeCursor ) )
 		{
 		ENSURES( LOOP_INVARIANT_LARGE( policyCount, policyInfo->noPolicies, 
 									   MAX_POLICIES - 1 ) );
@@ -519,16 +525,19 @@ static int addExplicitPolicies( INOUT_PTR POLICY_INFO *policyInfo,
 							attributeCursor, certChainIndex, FALSE );
 		if( status == OK_SPECIAL )
 			{
-			/* This policy is already present, there's nothing further to 
-			   do */
+			/* This policy is already present, move on to the next one */
 			continue;
 			}
 		if( cryptStatusError( status ) )
 			return( status );
+		policyCount++;
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( policyCount >= MAX_POLICIES )
+	if( policyCount >= MAX_POLICIES && DATAPTR_ISSET( attributeCursor ) )
+		{
+		/* We've hit the limit with more policies still to go */
 		return( CRYPT_ERROR_OVERFLOW );
+		}
 	policyInfo->noPolicies = policyCount;
 
 	return( CRYPT_OK );
@@ -571,8 +580,7 @@ static int addMappedPolicies( INOUT_PTR POLICY_INFO *policyInfo,
 				( sourcePolicyAttributeCursor = \
 					findNextFieldInstance( sourcePolicyAttributeCursor ), \
 				  destPolicyAttributeCursor = \
-					findNextFieldInstance( destPolicyAttributeCursor ),
-				  policyCount++ ) )
+					findNextFieldInstance( destPolicyAttributeCursor ) ) )
 		{
 		void *policyValuePtr;
 		int policyValueLength;
@@ -612,10 +620,15 @@ static int addMappedPolicies( INOUT_PTR POLICY_INFO *policyInfo,
 			}
 		if( cryptStatusError( status ) )
 			return( status );
+		policyCount++;
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( policyCount >= MAX_POLICIES )
-		return(  CRYPT_ERROR_OVERFLOW );
+	if( policyCount >= MAX_POLICIES && \
+		DATAPTR_ISSET( sourcePolicyAttributeCursor ) )
+		{
+		/* We've hit the limit with more policies still to go */
+		return( CRYPT_ERROR_OVERFLOW );
+		}
 	policyInfo->noPolicies = policyCount;
 
 	return( CRYPT_OK );
@@ -678,7 +691,12 @@ static int createPolicySet( OUT_PTR POLICY_INFO *policyInfo,
 
 		ENSURES( LOOP_INVARIANT_REV( certIndex, 0, startCertIndex - 1 ) );
 
-		/* Get information for the current certificate in the chain */
+		/* Get information for the current certificate in the chain.  The 
+		   getCertInfo() failing is a should-never-occur error condition, if 
+		   we do hit it we continue with what we've got, this is a fail-
+		   closed check since it just means that we have a potentially 
+		   smaller policy set, which is reported appropriately by 
+		   checkPolicyConstraints() */
 		status = getCertInfo( certInfoPtr, &subjectCertInfoPtr, certIndex );
 		if( cryptStatusError( status ) )
 			break;
@@ -1048,7 +1066,28 @@ static int checkConstraints( INOUT_PTR CERT_INFO *certInfoPtr,
 			}
 		if( cryptStatusOK( status ) && hasPathLength )
 			{
-			status = checkPathConstraints( subjectCertInfoPtr, pathLength );
+			if( pathLength < 0 )
+				{
+				/* This should never occur because a non-EE certificate at 
+				   pathLength 0 is a CA and gets caught by 
+				   checkPathConstraints(), a path-kludge certificate doesn't
+				   trigger the decrement further down, and an EE certificate 
+				   will be the last iteration in the loop.  As a result 
+				   while the decrement further down may move pathLength to 
+				   -1, the loop will exit before it gets here.  However, 
+				   given the mess in certificate-processing it's possible 
+				   that some exception to an exception to an exception added 
+				   in a future revision of the spec will cause us to end up 
+				   here, so we add a minimum check to handle this case 
+				   rather than triggering the >= 0 precondition in 
+				   checkPathConstraints() */
+				status = CRYPT_ERROR_INVALID;
+				}
+			else
+				{
+				status = checkPathConstraints( subjectCertInfoPtr, 
+											   pathLength );
+				}
 			}
 		if( cryptStatusError( status ) )
 			{
@@ -1159,9 +1198,9 @@ int checkCertChain( INOUT_PTR CERT_INFO *certInfoPtr )
 		}
 	if( cryptStatusError( status ) )
 		{
-		retExt( setTrustAnchorErrorInfo( certInfoPtr ),
-				( setTrustAnchorErrorInfo( certInfoPtr ), 
-				  CERTIFICATE_ERRINFO, 
+		status = setTrustAnchorErrorInfo( certInfoPtr );
+		retExt( status,
+				( status, CERTIFICATE_ERRINFO, 
 				  "Couldn't find trust anchor for certificate chain" ) );
 		}
 	CFI_CHECK_UPDATE( "findTrustAnchor" );
@@ -1292,7 +1331,7 @@ int checkCertChain( INOUT_PTR CERT_INFO *certInfoPtr )
 	   at the time that we early-exited the loop */
 	if( cryptStatusError( status ) )
 		{
-		certChainInfo->chainPos = certIndex ;
+		certChainInfo->chainPos = certIndex;
 		if( subjectCertInfoPtr != NULL && subjectCertInfoPtr != certInfoPtr )
 			krnlReleaseObject( subjectCertInfoPtr->objectHandle );
 		if( issuerCertInfoPtr != certInfoPtr )

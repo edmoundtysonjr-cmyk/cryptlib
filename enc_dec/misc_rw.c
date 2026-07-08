@@ -51,7 +51,8 @@ static int readInteger( INOUT_PTR STREAM *stream,
 
 	REQUIRES_S( ( checkType == BIGNUM_CHECK_VALUE_FIXEDLEN && \
 				  minLength >= MIN_PKCSIZE_BERNSTEIN && \
-				  minLength == maxLength ) || \
+				  minLength == maxLength && \
+				  maxLength <= CRYPT_MAX_PKCSIZE ) || \
 				( minLength > 0 && minLength < maxLength && \
 				  maxLength <= CRYPT_MAX_PKCSIZE ) );
 	REQUIRES_S( isEnumRange( lengthType, LENGTH ) );
@@ -610,7 +611,8 @@ static int readBignumInteger( INOUT_PTR STREAM *stream,
 
 	REQUIRES_S( ( checkType == BIGNUM_CHECK_VALUE_FIXEDLEN && \
 				  minLength >= MIN_PKCSIZE_BERNSTEIN && \
-				  minLength == maxLength ) || \
+				  minLength == maxLength && \
+				  maxLength <= CRYPT_MAX_PKCSIZE ) || \
 				( minLength > 0 && minLength < maxLength && \
 				  maxLength <= CRYPT_MAX_PKCSIZE ) );
 	REQUIRES_S( isEnumRange( lengthType, LENGTH ) );
@@ -774,7 +776,7 @@ int writeString32( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtrDynamic( string, stringLength ) );
 
-	REQUIRES_S( isIntegerRangeNZ( stringLength ) );
+	REQUIRES_S( isShortIntegerRangeNZ( stringLength ) );
 
 	writeUint32( stream, stringLength );
 	return( swrite( stream, string, stringLength ) );

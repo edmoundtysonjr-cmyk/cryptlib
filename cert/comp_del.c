@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							Delete Certificate Components					*
-*						Copyright Peter Gutmann 1997-2015					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -178,9 +178,14 @@ int deleteCertComponent( INOUT_PTR CERT_INFO *certInfoPtr,
 	   general attribute-handling code */
 	if( isGeneralNameSelectionComponent( certInfoType ) )
 		{
-		/* Check whether this GeneralName is present */
+		/* Check whether this GeneralName is present and select it */
 		status = selectGeneralName( certInfoPtr, certInfoType,
-									MUST_BE_PRESENT );
+									MAY_BE_ABSENT );
+		if( cryptStatusOK( status ) )
+			{
+			status = selectGeneralName( certInfoPtr, CRYPT_ATTRIBUTE_NONE,
+									   MUST_BE_PRESENT );
+			}
 		if( cryptStatusError( status ) )
 			return( status );
 

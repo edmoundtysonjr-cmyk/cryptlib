@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						  cryptlib Bignum Test Routines						*
-*						Copyright Peter Gutmann 1998-2017					*
+*						Copyright Peter Gutmann 1998-2025					*
 *																			*
 ****************************************************************************/
 
@@ -76,6 +76,9 @@ typedef struct {
    many corner cases) */
 
 static const SELFTEST_VALUE cmpSelftestValues[] = {
+	/* These checks test compare operations which return { 1, 0, -1 } rather
+	    than an actual result, so we encode the values as literal -1's rather
+	    than MK_NEGATIVE( 1 ) */
 	{ 1, MKDATA( "\x02" ), 1, MKDATA( "\x02" ), 0, 0, NULL },
 	{ 1, MKDATA( "\x03" ), 1, MKDATA( "\x02" ), 0, 1, NULL },
 	{ 1, MKDATA( "\x02" ), 1, MKDATA( "\x03" ), 0, -1, NULL },
@@ -778,6 +781,7 @@ static BOOLEAN selfTestOp( const SELFTEST_VALUE *selftestValue,
 							   1, 128, NULL, BIGNUM_CHECK_NONE );
 		if( cryptStatusError( status ) )
 			return( FALSE );
+		assert( !( selftestValue->aLen & BN_VAL_NEGATIVE ) );
 		CK( BN_mod_word( &word, &a, selftestValue->bWord ) );
 		if( bnStatusError( bnStatus) || word != selftestValue->resultLen )
 			return( FALSE );
@@ -818,12 +822,27 @@ static BOOLEAN selfTestOp( const SELFTEST_VALUE *selftestValue,
 
 	/* Some of the quantities may have flags indicating that they're meant 
 	   to be treated as negative values, so we have to extract the actual 
-	   value and the negative flag from the overall value */
+	   value and the negative flag from the overall value.
+	   
+	   Note that currently only an a value from a op b -> result is 
+	   negative, there are no negative results so the code is present here
+	   only for completeness */
 	aLen = selftestValue->aLen & ~BN_VAL_NEGATIVE;
 	aNeg = ( selftestValue->aLen & BN_VAL_NEGATIVE ) ? TRUE : FALSE;
-	expectedResultLen = selftestValue->resultLen & ~BN_VAL_NEGATIVE;
-	expectedResultNeg = ( selftestValue->resultLen & BN_VAL_NEGATIVE ) ? \
-						TRUE : FALSE;
+	if( isCompareOp )
+		{
+		/* The compare operations return { 1, 0, -1 } which is present as a
+		   literal value in the result length */
+		expectedResultLen = selftestValue->resultLen;
+		expectedResultNeg = FALSE;
+		}
+	else
+		{
+		expectedResultLen = selftestValue->resultLen & ~BN_VAL_NEGATIVE;
+		expectedResultNeg = ( selftestValue->resultLen & BN_VAL_NEGATIVE ) ? \
+							TRUE : FALSE;
+		assert( !expectedResultNeg );	/* Should never be negative */
+		}
 
 	/* Set up the test data */
 	status = importBignum( &a, selftestValue->a, aLen, 1, 128, NULL, 
@@ -966,7 +985,7 @@ static BOOLEAN selfTestOp( const SELFTEST_VALUE *selftestValue,
 		   so there's no result value to check.  In addition they return
 		   { -1, 0, 1 } so we can't use the processed expectedResultLen 
 		   value */
-		if( bnStatus != selftestValue->resultLen )
+		if( bnStatus != expectedResultLen )
 			return( FALSE );
 
 		return( TRUE );
@@ -1037,7 +1056,7 @@ static BOOLEAN selfTestOps( const SELFTEST_VALUE *selftestValueArray,
 	assert( isReadPtrDynamic( selftestValueArray, 
 							  selftestValueArraySize * sizeof( SELFTEST_VALUE ) ) );
 
-	REQUIRES_B( selftestValueArraySize >= 1 && selftestValueArraySize < 50 );
+	REQUIRES_B( selftestValueArraySize >= 1 && selftestValueArraySize <= 50 );
 	REQUIRES_B( isEnumRange( op, BN_OP ) );
 
 	LOOP_LARGE( i = 0, 

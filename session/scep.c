@@ -299,7 +299,7 @@ static int processUserName( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int processKeyFingerprint( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
-	const ATTRIBUTE_LIST *fingerprintPtr = \
+	const SESSION_ATTRIBUTE_LIST *fingerprintPtr = \
 				findSessionInfo( sessionInfoPtr,
 								 CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2 );
 	MESSAGE_DATA msgData;
@@ -363,7 +363,7 @@ int createScepAttributes( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						  IN_STRING const char *messageType,
 						  IN_STATUS const int scepStatus )
 	{
-	const ATTRIBUTE_LIST *userNamePtr = \
+	const SESSION_ATTRIBUTE_LIST *userNamePtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_USERNAME );
 	CRYPT_CERTIFICATE iCmsAttributes;
 	MESSAGE_CREATEOBJECT_INFO createInfo;

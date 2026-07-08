@@ -126,7 +126,6 @@ static void sanitiseFailedData( INOUT_BUFFER_FIXED( dataLength ) void *data,
 							   "KEYAGREE_PARAMS publicValue size" );
 
 				dataPtr = keyAgreeParams->publicValue;
-				length = KEYAGREE_DATA_SIZE;
 				}
 			else
 				{
@@ -135,8 +134,8 @@ static void sanitiseFailedData( INOUT_BUFFER_FIXED( dataLength ) void *data,
 							   "KEYAGREE_PARAMS wrappedKey size" );
 
 				dataPtr = keyAgreeParams->wrappedKey;
-				length = KEYAGREE_DATA_SIZE;
 				}
+			length = KEYAGREE_DATA_SIZE;
 			break;
 			}
 			

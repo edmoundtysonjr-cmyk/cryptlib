@@ -358,7 +358,7 @@ static int addCredential( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	{
 	const PROTOCOL_INFO *protocolInfo = \
 					DATAPTR_GET( sessionInfoPtr->protocolInfo );
-	const ATTRIBUTE_LIST *attributeListPtr;
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 	int flags = isServer( sessionInfoPtr ) ? \
 				ATTR_FLAG_MULTIVALUED : ATTR_FLAG_NONE;
 	int credentialMaxLength = credentialLength;
@@ -825,7 +825,7 @@ int getSessionAttribute( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		case CRYPT_SESSINFO_SERVER_PORT:
 		case CRYPT_SESSINFO_CLIENT_PORT:
 			{
-			const ATTRIBUTE_LIST *attributeListPtr = \
+			const SESSION_ATTRIBUTE_LIST *attributeListPtr = \
 									findSessionInfo( sessionInfoPtr, attribute );
 			if( attributeListPtr == NULL )
 				return( exitErrorNotInited( sessionInfoPtr, attribute ) );
@@ -860,7 +860,7 @@ int getSessionAttributeS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						  IN_ATTRIBUTE \
 								const CRYPT_ATTRIBUTE_TYPE attribute )
 	{
-	const ATTRIBUTE_LIST *attributeListPtr;
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( msgData, sizeof( MESSAGE_DATA ) ) );
@@ -1258,7 +1258,7 @@ int deleteSessionAttribute( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							IN_ATTRIBUTE \
 								const CRYPT_ATTRIBUTE_TYPE attribute )
 	{
-	const ATTRIBUTE_LIST *attributeListPtr;
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
@@ -1320,7 +1320,7 @@ int deleteSessionAttribute( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   activation sanity check catch situations where the user's 
 			   gone out of their way to be difficult */
 			deleteSessionInfo( sessionInfoPtr,
-							   ( ATTRIBUTE_LIST * ) attributeListPtr );
+						( SESSION_ATTRIBUTE_LIST * ) attributeListPtr );
 			return( CRYPT_OK );
 
 		case CRYPT_SESSINFO_REQUEST:

@@ -424,7 +424,7 @@ static int recoverPacketDataTLS13( IN_BUFFER( dataLength ) const BYTE *data,
 								const int dataLength,
 							OUT_LENGTH_BOUNDED_Z( dataLength ) \
 								int *payloadLength, 
-							OUT_RANGE( TLS_HAND_NONE, TLS_HAND_LAST ) \
+							OUT_RANGE( TLS_MSG_NONE, TLS_MSG_LAST ) \
 								int *packetType )
 	{
 	LOOP_INDEX payloadEnd;
@@ -438,24 +438,24 @@ static int recoverPacketDataTLS13( IN_BUFFER( dataLength ) const BYTE *data,
 
 	/* Clear return values */
 	*payloadLength = CRYPT_ERROR;
-	*packetType = TLS_HAND_NONE;
+	*packetType = TLS_MSG_NONE;
 
 	/* Find the end of the zero padding.  We need at least one byte of 
 	   content followed by the one-byte content-type value for a total of
 	   2 bytes */
 	LOOP_EXT_REV( payloadEnd = dataLength - 1, 
-				  payloadEnd >= 2 && data[ payloadEnd ] == 0, 
+				  payloadEnd >= 1 && data[ payloadEnd ] == 0, 
 				  payloadEnd--, MAX_PACKET_SIZE + 1 )
 		{
-		ENSURES( LOOP_INVARIANT_REV( payloadEnd, 2, dataLength - 1 ) );
+		ENSURES( LOOP_INVARIANT_REV( payloadEnd, 1, dataLength - 1 ) );
 		}
 	ENSURES( LOOP_BOUND_EXT_REV_OK( MAX_PACKET_SIZE + 1 ) );
-	if( payloadEnd < 2 )
+	if( payloadEnd < 1 )
 		return( CRYPT_ERROR_BADDATA );
 
 	/* Make sure that the content-type is valid */
-	if( data[ payloadEnd ] < TLS_HAND_FIRST || \
-		data[ payloadEnd ] > TLS_HAND_LAST )
+	if( data[ payloadEnd ] < TLS_MSG_FIRST || \
+		data[ payloadEnd ] > TLS_MSG_LAST )
 		return( CRYPT_ERROR_BADDATA );
 
 	/* Return the actual (not outer-packet camouflage) content-type and 
@@ -1037,8 +1037,8 @@ static int unwrapPacketTLSGCM( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	/* Shorten the packet by the size of the ICV.  The odd length check that
 	   follows is because TLS 1.3 has an additional byte containing the 
-	   actual packet type (see tls_rd.c:recoverPacketDataTLS13()) at the end 
-	   of the data */
+	   actual packet type (see recoverPacketDataTLS13()) at the end of the 
+	   data */
 	REQUIRES( !checkOverflowSub( length, sessionInfoPtr->authBlocksize ) );
 	length -= sessionInfoPtr->authBlocksize;
 	if( length < 1 || \
@@ -1196,7 +1196,7 @@ int unwrapPacketTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									 *dataLength ) void *data, 
 					   IN_DATALENGTH const int dataMaxLength, 
 					   OUT_DATALENGTH_Z int *dataLength,
-					   OUT_RANGE( TLS_HAND_NONE, TLS_HAND_LAST ) \
+					   OUT_RANGE( TLS_MSG_NONE, TLS_MSG_LAST ) \
 							int *actualPacketType,
 					   IN_RANGE( TLS_PACKETTYPE_FIRST, \
 								 TLS_PACKETTYPE_LAST ) \
@@ -1219,8 +1219,9 @@ int unwrapPacketTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			  packetType <= TLS_PACKETTYPE_LAST );
 	REQUIRES( sessionInfoPtr->cryptBlocksize == 1 );
 
-	/* Clear return value */
+	/* Clear return values */
 	*dataLength = 0;
+	*actualPacketType = TLS_MSG_NONE;
 
 	/* Unwrap the data based on the type of processing that we're using */
 	if( TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_BERNSTEIN ) )

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							Cert Management ACLs							*
-*						Copyright Peter Gutmann 1997-2017					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -18,7 +18,7 @@
 /* Macro to access the secondary parameter ACL information for a given
    parameter in a list of parameter ACLs */
 
-#define secParamInfo( parentACL, paramNo )	parentACL->secParamACL[ paramNo ]
+#define secParamInfo( parentACL, paramNo )	( parentACL )->secParamACL[ paramNo ]
 
 #if defined( USE_CERTIFICATES ) && defined( USE_KEYSETS )
 

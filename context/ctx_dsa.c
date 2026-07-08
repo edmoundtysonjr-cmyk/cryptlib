@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						cryptlib DSA Encryption Routines					*
-*						Copyright Peter Gutmann 1995-2005					*
+*						Copyright Peter Gutmann 1995-2025					*
 *																			*
 ****************************************************************************/
 
@@ -451,7 +451,7 @@ static int sign( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( dlpParams->inLen1 >= max( 20, MIN_HASHSIZE ) && \
 			  dlpParams->inLen1 <= CRYPT_MAX_HASHSIZE );
 	REQUIRES( dlpParams->inLen2 == 0 || dlpParams->inLen2 == -999 );
-	REQUIRES( qLen >= DLPPARAM_MIN_Q && qLen <= DLPPARAM_MAX_Q )
+	REQUIRES( qLen >= DLPPARAM_MIN_Q && qLen <= DLPPARAM_MAX_Q );
 	REQUIRES( capabilityInfoPtr != NULL );
 
 	/* Clear return values */

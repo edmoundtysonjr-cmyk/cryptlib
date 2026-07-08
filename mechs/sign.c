@@ -111,9 +111,9 @@ static CRYPT_FORMAT_TYPE getFormatType( IN_BUFFER( dataLength ) const void *data
 	{
 	STREAM stream;
 	long value;
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 	int packetLength;
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 	int status;
 
 	assert( isReadPtrDynamic( data, dataLength ) );
@@ -167,7 +167,7 @@ static CRYPT_FORMAT_TYPE getFormatType( IN_BUFFER( dataLength ) const void *data
 		return( formatType );
 		}
 
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 	/* It's not ASN.1 data, check for PGP data */
 	status = pgpReadPacketHeader( &stream, NULL, &packetLength, 30, 8192 );
 	if( cryptStatusOK( status ) && \
@@ -176,7 +176,7 @@ static CRYPT_FORMAT_TYPE getFormatType( IN_BUFFER( dataLength ) const void *data
 		sMemDisconnect( &stream );
 		return( CRYPT_FORMAT_PGP );
 		}
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 
 	sMemDisconnect( &stream );
 
@@ -200,6 +200,9 @@ C_RET cryptCreateSignatureEx( C_OUT_OPT void C_PTR signature,
 							  C_IN CRYPT_CONTEXT hashContext,
 							  C_IN CRYPT_HANDLE extraData )
 	{
+	const CRYPT_FORMAT_TYPE localFormatType = \
+				( formatType == CRYPT_FORMAT_AUTO ) ? \
+				  CRYPT_FORMAT_CRYPTLIB : formatType;
 	SIG_DATA_INFO sigDataInfo;
 	SIG_PARAMS sigParams;
 	BOOLEAN hasSigParams = FALSE;
@@ -256,9 +259,8 @@ C_RET cryptCreateSignatureEx( C_OUT_OPT void C_PTR signature,
 		}
 
 	/* Perform any required format-specific checking */
-	switch( formatType )
+	switch( localFormatType )
 		{
-		case CRYPT_FORMAT_AUTO:
 		case CRYPT_FORMAT_CRYPTLIB:
 			/* If it's a cryptlib-format signature there can't be any extra
 			   signing attributes present */
@@ -292,8 +294,8 @@ C_RET cryptCreateSignatureEx( C_OUT_OPT void C_PTR signature,
 			break;
 			}
 
-#ifdef USE_PGP
 		case CRYPT_FORMAT_PGP:
+#ifdef USE_PGP
 			/* PGP only supports a subset of the PKC algorithms */
 			if( signAlgo != CRYPT_ALGO_RSA && signAlgo != CRYPT_ALGO_DSA && \
 				signAlgo != CRYPT_ALGO_ECDSA )
@@ -304,6 +306,8 @@ C_RET cryptCreateSignatureEx( C_OUT_OPT void C_PTR signature,
 			if( extraData != CRYPT_UNUSED )
 				return( CRYPT_ERROR_PARAM7 );
 			break;
+#else
+			return( CRYPT_ERROR_PARAM4 );
 #endif /* USE_PGP */
 
 		default:
@@ -322,7 +326,7 @@ C_RET cryptCreateSignatureEx( C_OUT_OPT void C_PTR signature,
 			sigParams.iAuthAttr = extraData;
 		hasSigParams = TRUE;
 		}
-	if( formatType == CRYPT_FORMAT_PGP )
+	if( localFormatType == CRYPT_FORMAT_PGP )
 		{
 		/* The setSigParams() macro both initialises and sets the fields 
 		   so we don't need to precede it with an initSigParams() */
@@ -337,8 +341,8 @@ C_RET cryptCreateSignatureEx( C_OUT_OPT void C_PTR signature,
 	setSigDataInfoHash( &sigDataInfo, hashContext );
 	status = iCryptCreateSignature( signature, 
 					min( signatureMaxLength, MAX_INTLENGTH_SHORT - 1 ),
-					signatureLength, formatType, signContext, &sigDataInfo, 
-					hasSigParams ? &sigParams : NULL, 
+					signatureLength, localFormatType, signContext, 
+					&sigDataInfo, hasSigParams ? &sigParams : NULL, 
 					( ERROR_INFO * ) &dummyErrorInfo );
 	if( cryptArgError( status ) )
 		{
@@ -733,7 +737,7 @@ int iCryptCreateSignature( OUT_BUFFER_OPT( signatureMaxLength, *signatureLength 
 			}
 #endif /* USE_INT_CMS */
 
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 		case CRYPT_FORMAT_PGP:
 			REQUIRES( sigParams != NULL );
 			REQUIRES( sigParams->useDefaultAuthAttr == FALSE && \
@@ -749,7 +753,7 @@ int iCryptCreateSignature( OUT_BUFFER_OPT( signatureMaxLength, *signatureLength 
 										 sigParams->sigAttributeSize,
 										 sigParams->sigType, errorInfoPtr );
 			break;
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 
 #ifdef USE_TLS
 		case CRYPT_IFORMAT_TLS:
@@ -852,7 +856,10 @@ int iCryptCheckSignature( IN_BUFFER( signatureLength ) const void *signature,
 				sigDataInfo->hashContext2 == CRYPT_UNUSED && \
 				extraData == NULL ) );
 			  /* For CMS and S/MIME the extraData is optional, for example 
-			     for timestamping */
+			     for timestamping.
+			     TLS 1.3 signatures are handled under the TLS 1.2 format
+			     for checking, they're distinct for creation since the 
+			     format signals the use of RSA-PSS instead of RSA-PKCS1 */
 
 	/* Clear return value */
 	if( extraData != NULL )
@@ -909,13 +916,13 @@ int iCryptCheckSignature( IN_BUFFER( signatureLength ) const void *signature,
 			break;
 #endif /* USE_INT_CMS */
 
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 		case CRYPT_FORMAT_PGP:
 			status = checkSignaturePGP( signature, signatureLength,
 										iSigCheckContext, &localSigDataInfo,
 										errorInfoPtr );
 			break;
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 
 #ifdef USE_TLS
 		case CRYPT_IFORMAT_TLS:
@@ -925,8 +932,10 @@ int iCryptCheckSignature( IN_BUFFER( signatureLength ) const void *signature,
 			break;
 
 		case CRYPT_IFORMAT_TLS12:
-			/* This also covers CRYPT_IFORMAT_TLS13, which is handled 
-			   identically */
+			/* This also covers CRYPT_IFORMAT_TLS13 which is handled 
+			   identically, the caller specifies CRYPT_IFORMAT_TLS12 in both 
+			   case since CRYPT_IFORMAT_TLS13 is only used on signature 
+			   creation to signal the use of RSA-PSS instead of RSA-PKCS1 */
 			status = checkSignature( signature, signatureLength,
 									 iSigCheckContext, &localSigDataInfo, 
 									 SIGNATURE_TLS12, errorInfoPtr );
@@ -947,7 +956,7 @@ int iCryptCheckSignature( IN_BUFFER( signatureLength ) const void *signature,
 	if( cryptArgError( status ) && !isExternalCall )
 		{
 		/* Catch any parameter errors that slip through */
-		DEBUG_DIAG(( "Signature creation returned argError status" ));
+		DEBUG_DIAG(( "Signature check returned argError status" ));
 		assert( DEBUG_WARN );
 		status = CRYPT_ERROR_SIGNATURE;
 		}

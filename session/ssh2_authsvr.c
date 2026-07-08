@@ -55,7 +55,8 @@
    Handling the state machine required to process all of this gets rather
    complicated, the protocol flow that we enforce is:
 
-	Step 0 (optional):
+	Step 0 (optional, MobaXTerm can be used to test the full none -> pk_ok 
+			-> pk_auth flow):
 
 		Client sends SSH_MSG_USERAUTH_REQUEST with method "none" to query 
 		available authentication method types.
@@ -278,7 +279,7 @@ typedef enum {
 		  (+sig) |				|	Verify pkauth			| SUCCESS/ERROR
 	-------------+--------------+---------------------------+--------------
 	Name, "none" | _NONE		| Store/add name			| NOOP		 C4
-	Name,"pubkey"| _USERNAME_PK	| Check/match name,			|
+	Name,"pubkey"| _USERNAME	| Check/match name,			|
 				 |				|	add keyID				| NOOP_2
 	Name,"pubkey"| _USERNAME_PK	| Check/match name, keyID	|
 		  (+sig) |				|	Verify pkauth			| SUCCESS/ERROR
@@ -568,11 +569,12 @@ static int checkQueryValidity( INOUT_PTR SSH_INFO *sshInfo,
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int processPasswordAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							    IN_PTR const AUTH_INFO *authInfo,
-								IN_PTR const ATTRIBUTE_LIST *attributeListPtr )
+								IN_PTR const SESSION_ATTRIBUTE_LIST *attributeListPtr )
 	{
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isReadPtr( authInfo, sizeof( AUTH_INFO ) ) );
-	assert( isReadPtr( attributeListPtr, sizeof( ATTRIBUTE_LIST ) ) );
+	assert( isReadPtr( attributeListPtr, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	/* Beyond normal password authentication the client can also set the 
 	   kludgeFlag to indicate that it wants to change the password.  The RFC
@@ -637,7 +639,7 @@ static int processPasswordAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int readPublicKey( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						  INOUT_PTR STREAM *stream,
-						  IN_BOOL const BOOLEAN isInitialAuth )
+						  IN_BOOL const BOOLEAN isInitialPKMessage )
 	{
 	CRYPT_ALGO_TYPE pubkeyAlgo;
 	SSH_INFO *sshInfo = sessionInfoPtr->sessionSSH;
@@ -650,7 +652,7 @@ static int readPublicKey( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
-	REQUIRES( isBooleanValue( isInitialAuth ) );
+	REQUIRES( isBooleanValue( isInitialPKMessage ) );
 
 	/* Skip the first of the three copies of the algorithm name (see the 
 	   comment in ssh2_cli.c for more on this).  We don't do anything with 
@@ -715,7 +717,7 @@ static int readPublicKey( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		krnlSendNotifier( createInfo.cryptHandle, IMESSAGE_DECREFCOUNT );
 		return( status );
 		}
-	if( isInitialAuth )
+	if( isInitialPKMessage )
 		{
 		/* This is the first authentication-exchange message, remember 
 		   the key that was presented */
@@ -965,7 +967,7 @@ static int processPubkeyAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   client thinks it's using by sending back an ACK for key B when 
 		   the client has proposed key A.
 		   
-		   This allows makes it very easy to fingerprint users, and there's
+		   This also makes it very easy to fingerprint users, and there's 
 		   even a demo SSH server that does this, 
 		   https://github.com/FiloSottile/whoami.filippo.io, greeting you by 
 		   name when you connect via SSH (no user interaction required) and 
@@ -980,8 +982,8 @@ static int processPubkeyAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   Because only OpenSSH appears to bother checking this message, we 
 		   send back an easter egg for any other implementation to catch 
 		   anything that we're not currently aware of that does actually 
-		   check what's coming back.  In the years since this code was 
-		   written no-one has ever reported a problem */
+		   check what's coming back.  Throughout the entire time this code 
+		   has been present in cryptlib no-one has ever reported a problem */
 		status = openPacketStreamSSH( &responseStream, sessionInfoPtr, 
 									  SSH_MSG_USERAUTH_PK_OK );
 		if( cryptStatusError( status ) )
@@ -1199,8 +1201,9 @@ static int readAuthPacketBody( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							   INOUT_PTR AUTH_INFO *authInfo,
 							   INOUT_PTR STREAM *stream,
 							   IN_ENUM( SSH_AUTHTYPE ) \
-									SSH_AUTHTYPE_TYPE authType,
-							   IN_BOOL const BOOLEAN isInitialAuth )
+									const SSH_AUTHTYPE_TYPE authType,
+							   IN_ENUM( CREDENTIAL ) \
+									const CREDENTIAL_TYPE credentialType )
 	{
 	int status;
 
@@ -1209,7 +1212,7 @@ static int readAuthPacketBody( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
 	REQUIRES( isEnumRange( authType, SSH_AUTHTYPE ) );
-	REQUIRES( isBooleanValue( isInitialAuth ) );
+	REQUIRES( isEnumRange( credentialType, CREDENTIAL ) );
 
 	/* Read the authentication information */
 	switch( authType )
@@ -1240,8 +1243,20 @@ static int readAuthPacketBody( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			break;
 
 		case SSH_AUTHTYPE_PUBKEY:
-			/* Read the public key */
-			status = readPublicKey( sessionInfoPtr, stream, isInitialAuth );
+			/* Read the public key.  The last argument indicates whether 
+			   this is the first authentication message with public-key
+			   information present, which determines whether we record the
+			   key or compare it the existing recorded information.
+			   
+			   The option of CREDENTIAL_USERNAME_PASSWORD_PRESENT looks a
+			   bit odd but it's valid when we're coming in through 
+			   processFixedAuth() for which the caller has provided the
+			   credentials that we check against */
+			status = readPublicKey( sessionInfoPtr, stream, 
+						( credentialType == CREDENTIAL_NONE_PRESENT || \
+						  credentialType == CREDENTIAL_USERNAME_PRESENT || \
+						  credentialType == CREDENTIAL_USERNAME_PASSWORD_PRESENT ) ? \
+						  TRUE : FALSE );
 			if( cryptStatusError( status ) )
 				return( status );
 			break;
@@ -1267,7 +1282,7 @@ static int processUserAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	STREAM stream;
 	const BOOLEAN allowPubkeyAuth = \
 			isHandleRangeValid( sessionInfoPtr->cryptKeyset ) ? TRUE : FALSE;
-	const ATTRIBUTE_LIST *attributeListPtr DUMMY_INIT_PTR;
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr DUMMY_INIT_PTR;
 	AUTH_INFO authInfo;
 	SSH_AUTHTYPE_TYPE authType;
 	CFI_CHECK_TYPE CFI_CHECK_VALUE = CFI_CHECK_INIT;
@@ -1392,9 +1407,7 @@ static int processUserAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   checkQueryValidity(), since we did't yet have the public key data
 	   available for checking at that point */
 	status = readAuthPacketBody( sessionInfoPtr, &authInfo, &stream, 
-								 authType, 
-								 ( authState == AUTHSTATE_FIRST_MESSAGE ) ? \
-								   TRUE : FALSE );
+								 authType, credentialType );
 	if( cryptStatusError( status ) )
 		{
 		sMemDisconnect( &stream );
@@ -1495,7 +1508,7 @@ static int processUserAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		/* We've matched an existing user name, select the attribute that
 		   contains it */
 		DATAPTR_SET( sessionInfoPtr->attributeListCurrent,
-					 ( ATTRIBUTE_LIST * ) attributeListPtr );
+					 ( SESSION_ATTRIBUTE_LIST * ) attributeListPtr );
 		}
 	CFI_CHECK_UPDATE( "findSessionInfoEx" );
 
@@ -1914,7 +1927,7 @@ int processServerAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				 authInfo.status == OK_SPECIAL ) && \
 			   authInfo.userAuthInfo != USERAUTH_SUCCESS ) );
 	if( !memcmp( &authInfo, &failsafeAuthSuccessTemplate, \
-		sizeof( FAILSAFE_AUTH_INFO ) ) )
+				 sizeof( FAILSAFE_AUTH_INFO ) ) )
 		{
 		/* The user has authenticated successfully and this fact has been 
 		   verified in a (reasonably) failsafe manner, we're done */

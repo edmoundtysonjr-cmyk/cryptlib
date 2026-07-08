@@ -602,11 +602,12 @@ int setofBegin( INOUT_PTR SETOF_STACK *setofStack,
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 int setofCheckRestart( IN_PTR const STREAM *stream, 
 					   INOUT_PTR SETOF_STATE_INFO *setofInfoPtr,
-					   OUT_PTR_PTR const ATTRIBUTE_INFO **attributeInfoPtrPtr );
+					   INOUT_PTR_PTR \
+							const ATTRIBUTE_INFO **attributeInfoPtrPtr );
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 int setofCheckEnd( IN_PTR const STREAM *stream, 
 				   INOUT_PTR SETOF_STACK *setofStack,
-				   INOUT_PTR const ATTRIBUTE_INFO **attributeInfoPtrPtr );
+				   INOUT_PTR_PTR const ATTRIBUTE_INFO **attributeInfoPtrPtr );
 
 /* Support function in ext_rda.c needed by setofCheckEnd() */
 

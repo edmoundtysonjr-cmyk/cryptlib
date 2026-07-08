@@ -90,7 +90,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4 ) ) \
 static int createPubkeyAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							 const SSH_HANDSHAKE_INFO *handshakeInfo,
 							 INOUT_PTR STREAM *stream,
-							 const ATTRIBUTE_LIST *userNamePtr )
+							 const SESSION_ATTRIBUTE_LIST *userNamePtr )
 	{
 	void *packetDataPtr DUMMY_INIT_PTR;
 	int packetDataLength, status;
@@ -98,7 +98,7 @@ static int createPubkeyAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isReadPtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
-	assert( isReadPtr( userNamePtr, sizeof( ATTRIBUTE_LIST ) ) );
+	assert( isReadPtr( userNamePtr, sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	/*	byte	type = SSH_MSG_USERAUTH_REQUEST
 		string	user_name
@@ -515,10 +515,10 @@ static int processAuthFailure( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int sendAuthRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
-							IN_PTR const ATTRIBUTE_LIST *userNamePtr,
+							IN_PTR const SESSION_ATTRIBUTE_LIST *userNamePtr,
 							IN_BOOL const BOOLEAN preferPublickeyAuth )
 	{
-	const ATTRIBUTE_LIST *passwordPtr = \
+	const SESSION_ATTRIBUTE_LIST *passwordPtr = \
 			findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_PASSWORD );
 	const BOOLEAN usePasswordAuth = \
 			( passwordPtr != NULL && !preferPublickeyAuth ) ? TRUE : FALSE;
@@ -527,7 +527,7 @@ static int sendAuthRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
-	assert( isReadPtr( userNamePtr, sizeof( ATTRIBUTE_LIST ) ) );
+	assert( isReadPtr( userNamePtr, sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES( isBooleanValue( preferPublickeyAuth ) );
 
@@ -711,7 +711,7 @@ static int pamAuthenticate( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								const void *pamRequestData, 
 							IN_LENGTH_SHORT const int pamRequestDataLength )
 	{
-	const ATTRIBUTE_LIST *passwordPtr = \
+	const SESSION_ATTRIBUTE_LIST *passwordPtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_PASSWORD );
 	STREAM stream;
 	BYTE nameBuffer[ CRYPT_MAX_TEXTSIZE + 8 ];
@@ -857,14 +857,14 @@ static int pamAuthenticate( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int processPamAuthentication( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
-	const ATTRIBUTE_LIST *userNamePtr = \
+	const SESSION_ATTRIBUTE_LIST *userNamePtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_USERNAME );
 	STREAM stream;
 	LOOP_INDEX pamIteration;
 	int length, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
-	assert( isReadPtr( userNamePtr, sizeof( ATTRIBUTE_LIST ) ) );
+	assert( isReadPtr( userNamePtr, sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
 	REQUIRES( userNamePtr != NULL && \
@@ -994,7 +994,7 @@ int processClientAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					   INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo )
 	{
 	SSH_AUTHTYPE_TYPE requiredAuthType;
-	const ATTRIBUTE_LIST *userNamePtr = \
+	const SESSION_ATTRIBUTE_LIST *userNamePtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_USERNAME );
 	const BOOLEAN hasPassword = \
 				( findSessionInfo( sessionInfoPtr,

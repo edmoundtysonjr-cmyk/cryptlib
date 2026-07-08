@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						 cryptlib Configuration Routines					*
-*						Copyright Peter Gutmann 1994-2019					*
+*						Copyright Peter Gutmann 1994-2025					*
 *																			*
 ****************************************************************************/
 
@@ -142,15 +142,7 @@ static const BUILTIN_OPTION_INFO builtinOptionInfo[] = {
 
 	/* Miscellaneous options, base = 500.  The network options are mostly 
 	   used by sessions but also apply to other object types like network 
-	   keysets so they're classed as miscellaneous options. 
-	   
-	   Side-channel protection is disabled by default on slower CPUs because 
-	   a survey of users found that a total of 0% indicated that they wanted
-	   side-channel protection in exchange for a performance drop 
-	   (particularly in embedded systems where PKC ops already consume about 
-	   150% of the available CPU budget), however on faster systems we 
-	   enable it by default because they should be fast enough that no-one 
-	   will notice */
+	   keysets so they're classed as miscellaneous options */
 	MK_OPTION_S( CRYPT_OPTION_NET_SOCKS_SERVER, NULL, 0, 500 ),
 	MK_OPTION_S( CRYPT_OPTION_NET_SOCKS_USERNAME, NULL, 0, 501 ),
 	MK_OPTION_S( CRYPT_OPTION_NET_HTTP_PROXY, NULL, 0, 502 ),
@@ -158,11 +150,7 @@ static const BUILTIN_OPTION_INFO builtinOptionInfo[] = {
 	MK_OPTION( CRYPT_OPTION_NET_READTIMEOUT, NET_TIMEOUT_READ, 504 ),
 	MK_OPTION( CRYPT_OPTION_NET_WRITETIMEOUT, NET_TIMEOUT_WRITE, 505 ),
 	MK_OPTION_B( CRYPT_OPTION_MISC_ASYNCINIT, TRUE, 506 ),
-#if defined( CONFIG_SLOW_CPU )
-	MK_OPTION( CRYPT_OPTION_MISC_SIDECHANNELPROTECTION, 0, 507 ),
-#else
 	MK_OPTION( CRYPT_OPTION_MISC_SIDECHANNELPROTECTION, 1, 507 ),
-#endif /* Options based on CPU speed */
 
 	/* All options beyond this point are ephemeral and aren't stored to disk. 
 	   Remember to update the LAST_STORED_OPTION define in user_int.h when 
@@ -614,6 +602,7 @@ int setOptionString( INOUT_ARRAY( configOptionsCount ) \
 			clFree( "setOptionString", optionInfoPtr->strValue );
 			}
 		optionInfoPtr->strValue = ( char * ) builtinOptionInfoPtr->strDefault;
+		optionInfoPtr->intValue = builtinOptionInfoPtr->intDefault;
 		optionInfoPtr->dirty = TRUE;
 		setConfigChanged( configOptions, configOptionsCount );
 		return( CRYPT_OK );
@@ -634,6 +623,7 @@ int setOptionString( INOUT_ARRAY( configOptionsCount ) \
 					  valuePtr ); 
 		zeroise( optionInfoPtr->strValue, optionInfoPtr->intValue );
 		clFree( "setOptionString", optionInfoPtr->strValue );
+		optionInfoPtr->strValue = NULL;
 		}
 
 	/* Set the value and remember that the configuration options have been 
@@ -791,6 +781,7 @@ void endOptions( IN_ARRAY( configOptionsCount ) OPTION_INFO *configOptions,
 				REQUIRES_V( isShortIntegerRangeNZ( optionInfoPtr->intValue ) ); 
 				zeroise( optionInfoPtr->strValue, optionInfoPtr->intValue );
 				clFree( "endOptions", optionInfoPtr->strValue );
+				optionInfoPtr->strValue = NULL;
 				}
 			}
 		}

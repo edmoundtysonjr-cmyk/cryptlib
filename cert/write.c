@@ -925,17 +925,17 @@ static int writeRevRequestInfo( INOUT_PTR STREAM *stream,
 									  CRYPT_CERTTYPE_REQUEST_REVOCATION );
 	if( cryptStatusError( status ) )
 		return( status );
-	payloadLength = sizeofInteger( subjectCertInfoPtr->cCertCert->serialNumber,
-								   subjectCertInfoPtr->cCertCert->serialNumberLength ) + \
+	payloadLength = sizeofInteger( subjectCertInfoPtr->cCertReq->serialNumber,
+								   subjectCertInfoPtr->cCertReq->serialNumberLength ) + \
 					sizeofShortObject( subjectCertInfoPtr->issuerDNsize );
-	if( extensionSize > 0 )
-		payloadLength += sizeofShortObject( extensionSize );
 
 	/* Write the header, inner header, serial number and issuer DN */
-	writeSequence( stream, sizeofShortObject( payloadLength ) );
+	writeSequence( stream, sizeofShortObject( payloadLength ) + \
+						   ( ( extensionSize > 0 ) ? \
+							 sizeofShortObject( extensionSize ) : 0 ) );
 	writeSequence( stream, payloadLength );
-	writeInteger( stream, subjectCertInfoPtr->cCertCert->serialNumber,
-				  subjectCertInfoPtr->cCertCert->serialNumberLength,
+	writeInteger( stream, subjectCertInfoPtr->cCertReq->serialNumber,
+				  subjectCertInfoPtr->cCertReq->serialNumberLength,
 				  CTAG_CF_SERIALNUMBER );
 	writeConstructed( stream, subjectCertInfoPtr->issuerDNsize,
 					  CTAG_CF_ISSUER );

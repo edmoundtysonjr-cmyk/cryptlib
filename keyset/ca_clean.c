@@ -429,9 +429,13 @@ int caCleanup( INOUT_PTR DBMS_INFO *dbmsInfo,
 									 errorInfo );
 		if( cryptStatusError( status ) )
 			{
-			/* If we've processed all of the entries, we're done */
+			/* If we've processed all of the entries, convert the signalling 
+			   OK_SPECIAL status to a more meaningful value and exit */
 			if( status == OK_SPECIAL )
+				{
+				status = CRYPT_ERROR_NOTFOUND;
 				break;
+				}
 
 			/* If we're stuck in a loop fetching the same value over and 
 			   over, make an emergency exit */

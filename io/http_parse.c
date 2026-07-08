@@ -35,6 +35,10 @@ typedef enum { HTTP_HEADER_NONE, HTTP_HEADER_HOST, HTTP_HEADER_CONTENT_LENGTH,
 			   HTTP_HEADER_LAST
 			 } HTTP_HEADER_TYPE;
 
+/* The maximum number of HTTP header lines that we allow */
+
+#define MAX_HTTP_HEADER_LINES		30
+
 /* HTTP header parsing information.  Note that the first letter of the
    header string must be uppercase for the case-insensitive quick match */
 
@@ -287,6 +291,29 @@ static int getChunkLength( IN_BUFFER( dataLength ) const char *data,
 		return( status );
 
 	return( chunkLength );
+	}
+
+/* Check for the presence of an HTTP token */
+
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 3 ) ) \
+static BOOLEAN checkToken( IN_BUFFER( stringLength ) const char *string, 
+						   IN_LENGTH_SHORT const int stringLength,
+						   IN_BUFFER( tokenLength ) const char *token, 
+						   IN_LENGTH_SHORT const int tokenLength )
+	{
+	assert( isReadPtrDynamic( string, stringLength ) );
+	assert( isReadPtrDynamic( token, tokenLength ) );
+
+	REQUIRES_B( isShortIntegerRangeNZ( stringLength ) );
+	REQUIRES_B( isShortIntegerRangeNZ( tokenLength ) );
+
+	/* We check for an exact length match since the token should be the only
+	   thing present.  In particular allowing a more permissive 
+	   'stringLength < tokenLength' would match something like "ChunkedXYZ"
+	   where the requested token is "Chunked" */
+	if( stringLength != tokenLength )
+		return( FALSE );
+	return( strCompare( string, token, tokenLength ) ? FALSE : TRUE );
 	}
 
 /* Exit with extended error information relating to header-line parsing.  
@@ -644,8 +671,8 @@ static int readHTTPStatus( IN_BUFFER( dataLength ) const char *data,
 	remainderLength = dataLength - 3;
 	if( remainderLength < 2 || \
 		( offset = strSkipWhitespace( data + 3, remainderLength ) ) < 0 || \
-		checkOverflowSub( dataLength, offset ) || \
-		dataLength - offset < 1 )
+		checkOverflowSub( remainderLength, offset ) || \
+		remainderLength - offset < 1 )
 		{
 		retExt( CRYPT_ERROR_BADDATA,
 				( CRYPT_ERROR_BADDATA, errorInfo, 
@@ -662,7 +689,7 @@ static int readHTTPStatus( IN_BUFFER( dataLength ) const char *data,
 	   information we have, not from any externally-supplied message) */
 	if( httpStatusInfo->status != CRYPT_OK )
 		{
-		assert_nofuzz( httpStatusInfo->httpStatusString != NULL );
+		assert_nofuzz( httpStatusInfo->httpErrorString != NULL );
 							/* Catch oddball errors in debug version */
 		retExt( httpStatusInfo->status,
 				( httpStatusInfo->status, errorInfo, 
@@ -948,7 +975,7 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 	   finicky with the checking though or we'll end up rejecting non-
 	   malicious requests from some of the broken HTTP implementations out
 	   there */
-	LOOP_MED( lineCount = 0, lineCount < 30, lineCount++ )
+	LOOP_MED( lineCount = 0, lineCount < MAX_HTTP_HEADER_LINES, lineCount++ )
 		{
 		HTTP_HEADER_TYPE headerType;
 		BOOLEAN textDataError;
@@ -1115,15 +1142,13 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 								"Invalid HTTP content subtype '%s', line %d",
 								lineBufPtr, lineLength, lineCount ) );
 					}
-				if( contentTypeLen == 4 && \
-					!strCompare( contentType, "text", 4 ) )
+				if( checkToken( contentType, contentTypeLen, "text", 4 ) )
 					SET_FLAG( headerInfo->flags, HTTP_FLAG_TEXTMSG );
 				break;
 				}
 
 			case HTTP_HEADER_TRANSFER_ENCODING:
-				if( lineLength < 7 || \
-					strCompare( lineBufPtr, "Chunked", 7 ) )
+				if( !checkToken( lineBufPtr, lineLength, "Chunked", 7 ) )
 					{
 					return( retHeaderError( stream, 
 							  "Invalid HTTP transfer encoding method "
@@ -1148,8 +1173,7 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 				/* We can't handle any type of content encoding (e.g. gzip,
 				   compress, deflate, mpeg4, interpretive dance) except the
 				   no-op identity encoding */
-				if( lineLength < 8 || \
-					strCompare( lineBufPtr, "Identity", 8 ) )
+				if( !checkToken( lineBufPtr, lineLength, "Identity", 8 ) )
 					{
 					headerInfo->httpStatus = 415;	/* Unsupp.media type */
 					return( retHeaderError( stream, 
@@ -1165,10 +1189,8 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 				   printable.  If any implementations erroneously use a
 				   C-T-E, we make sure that it's something that we can
 				   handle */
-				if( !( lineLength >= 6 && \
-					   !strCompare( lineBufPtr, "Binary", 6 ) ) && \
-					!( lineLength >= 8 && \
-					   !strCompare( lineBufPtr, "Identity", 8 ) ) )
+				if( !checkToken( lineBufPtr, lineLength, "Binary", 6 ) && \
+					!checkToken( lineBufPtr, lineLength, "Identity", 8 ) )
 					{
 					headerInfo->httpStatus = 415;	/* Unsupp.media type */
 					return( retHeaderError( stream, 
@@ -1234,17 +1256,19 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 							  "Duplicate HTTP 'Connection:' header, line %d",
 							  lineCount + 2 ) );
 					}
+					
 				/* If the other side has indicated that it's going to close
 				   the connection, record the fact that this is the last 
-				   message in the session */
-				if( lineLength >= 5 && \
-					!strCompare( lineBufPtr, "Close", 5 ) )
+				   message in the session.  In theory the connection header
+				   can be multivalued (RFC 2616 section 14.10) but for the
+				   two that we're interested in there shouldn't be more than
+				   the one token present */
+				if( checkToken( lineBufPtr, lineLength, "Close", 5 ) )
 					{
 					SET_FLAG( netStream->nFlags, STREAM_NFLAG_LASTMSGR );
 					}
 				if( TEST_FLAG( headerInfo->flags, HTTP_FLAG_UPGRADE ) && \
-					( lineLength < 7 || \
-					  strCompare( lineBufPtr, "Upgrade", 7 ) ) )
+					!checkToken( lineBufPtr, lineLength, "Upgrade", 7 ) ) 
 					{
 					return( retHeaderError( stream, 
 							  "Invalid HTTP connection type '%s', expected "
@@ -1281,7 +1305,11 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 				/* Make sure that we've been given an HTTP URL as the 
 				   redirect location.  We need to do this because 
 				   sNetParseURL() will accept a wide range of URL types
-				   while we only allow "http://"* */
+				   while we only allow "http://"*.
+				   
+				   Note that we don't use checkToken() here because it 
+				   requires an exact length match while we're only checking
+				   for a prefix string */
 				if( lineLength < 10 || \
 					strCompare( lineBufPtr, "http://", 7 ) )
 					{
@@ -1313,8 +1341,7 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 				   to them.  We do this automatically because we're merely
 				   using HTTP as a substrate, the real decision will be made
 				   at the higher-level protocol layer */
-				if( lineLength >= 12 && \
-					!strCompare( lineBufPtr, "100-Continue", 12 ) )
+				if( checkToken( lineBufPtr, lineLength, "100-Continue", 12 ) )
 					sendHTTPError( stream, 100 );
 				break;
 
@@ -1327,8 +1354,7 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 							  "Duplicate HTTP 'Upgrade:' header, line %d",
 							  lineCount + 2 ) );
 					}
-				if( lineLength < 9 || \
-					strCompare( lineBufPtr, "WebSocket", 9 ) )
+				if( !checkToken( lineBufPtr, lineLength, "WebSocket", 9 ) )
 					{
 					return( retHeaderError( stream, 
 							  "Invalid HTTP upgrade type '%s', expected "
@@ -1347,7 +1373,7 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 							  "expected %d...%d, line %d", lineLength,
 							  2, CRYPT_MAX_TEXTSIZE, lineCount + 2 ) );
 					}
-				REQUIRES( rangeCheck( lineLength, 1, CRYPT_MAX_TEXTSIZE ) );
+				REQUIRES( rangeCheck( lineLength, 2, CRYPT_MAX_TEXTSIZE ) );
 				memcpy( headerInfo->wsProtocol, lineBufPtr, lineLength );
 				headerInfo->wsProtocolLen = lineLength;
 				break;
@@ -1365,7 +1391,14 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 				   The chances of any of this working are rather remote, so
 				   we just hardcode in a check for the sole RFC-defined 
 				   version */
-				if( lineLength < 2 || strCompare( lineBufPtr, "13", 2 ) )
+				if( seenVersion )
+					{
+					retExt( CRYPT_ERROR_BADDATA,
+							( CRYPT_ERROR_BADDATA, NETSTREAM_ERRINFO, 
+							  "Duplicate HTTP 'Sec-WebSocket-Version:' "
+							  "header, line %d", lineCount + 2 ) );
+					}
+				if( !checkToken( lineBufPtr, lineLength, "13", 2 ) )
 					{
 					return( retHeaderError( stream, 
 							  "Invalid WebSockets version '%s', expected "
@@ -1429,12 +1462,13 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 			}
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( lineCount >= 30 )
+	if( lineCount >= MAX_HTTP_HEADER_LINES )
 		{
+		/* The count is zero-based so "more than x" is the correct text */
 		retExt( CRYPT_ERROR_OVERFLOW,
 				( CRYPT_ERROR_OVERFLOW, NETSTREAM_ERRINFO, 
-				  "Received too many HTTP header lines (more than %d)",
-				  FAILSAFE_ITERATIONS_MED ) );
+				  "Received more than %d HTTP header lines",
+				  MAX_HTTP_HEADER_LINES ) );
 		}
 
 	/* If this is a tunnel being opened via an HTTP proxy then we're done */

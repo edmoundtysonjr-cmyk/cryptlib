@@ -781,7 +781,7 @@ static int readEccPrivateKeyOld( INOUT_PTR STREAM *stream,
 *																			*
 ****************************************************************************/
 
-#ifdef USE_PGP 
+#ifdef USE_PGPKEYS 
 
 /* Read PGP private key components.  This function assumes that the public
    portion of the context has already been set up */
@@ -903,7 +903,7 @@ static int readPgpEccPrivateKey( INOUT_PTR STREAM *stream,
 
 	return( CRYPT_OK );
 	}
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 /****************************************************************************
 *																			*
@@ -950,10 +950,10 @@ static int readPrivateKeyRsaFunction( INOUT_PTR STREAM *stream,
 			return( readRsaPrivateKeyOld( stream, contextInfoPtr ) );
 #endif /* USE_PKCS12 && USE_INT_ASN1 */
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS
 		case KEYFORMAT_PGP:
 			return( readPgpRsaPrivateKey( stream, contextInfoPtr ) );
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 		}
 
 	retIntError();
@@ -998,10 +998,10 @@ static int readPrivateKeyDlpFunction( INOUT_PTR STREAM *stream,
 			return( readDsaPrivateKeyOld( stream, contextInfoPtr ) );
 #endif /* USE_PKCS12 && USE_INT_ASN1 */
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS
 		case KEYFORMAT_PGP:
 			return( readPgpDlpPrivateKey( stream, contextInfoPtr ) );
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 		}
 
 	retIntError();
@@ -1046,10 +1046,10 @@ static int readPrivateKeyEccFunction( INOUT_PTR STREAM *stream,
 			return( readEccPrivateKeyOld( stream, contextInfoPtr ) );
 #endif /* USE_PKCS12 && USE_INT_ASN1 */
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS
 		case KEYFORMAT_PGP:
 			return( readPgpEccPrivateKey( stream, contextInfoPtr ) );
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 		}
 
 	retIntError();

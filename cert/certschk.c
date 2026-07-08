@@ -54,7 +54,7 @@ static int generateCertID( IN_BUFFER( dnLength ) const void *dn,
 	memset( certID, 0, min( 16, certIdLength ) );
 
 	/* Get the hash algorithm information */
-	getHashParameters( CRYPT_ALGO_SHA1, 0, &hashFunction, NULL );
+	getHashParameters( CRYPT_ALGO_SHA1, 0, &hashFunction, NULL, NULL );
 
 	/* Write the relevant information to a buffer and hash the data to get
 	   the ID:

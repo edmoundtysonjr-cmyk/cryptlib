@@ -100,7 +100,7 @@ static int readDummyCCS( INOUT_PTR SESSION_INFO *sessionInfoPtr )
    hash state at the current time and allows the hashing to continue */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-static int completeSessionHash( IN_PTR TLS_HANDSHAKE_INFO *handshakeInfo )
+static int completeSessionHash( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo )
 	{
 	MESSAGE_DATA msgData;
 	int status;
@@ -191,7 +191,7 @@ static int processHelloRetry( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						sessionInfoPtr->receiveBuffer, 
 						handshakeInfo->originalClientHelloLength );
 	getHashParameters( CRYPT_ALGO_SHA2, bitsToBytes( 256 ), &hashFunction, 
-					   &hashSize );
+					   &hashSize, NULL );
 	hashFunction( hashInfo, NULL, 0, hashBuffer, 4 + hashSize, 
 				  HASH_STATE_START );
 	hashFunction( hashInfo, NULL, 0, 
@@ -751,7 +751,8 @@ static int readCertRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	status = length = readUint16( stream );
 	if( !cryptStatusError( status ) )
 		{
-		if( length < ( UINT16_SIZE * 3 ) || length > packetLength )
+		if( length < ( UINT16_SIZE * 3 ) || \
+			length > packetLength - UINT16_SIZE )
 			status = CRYPT_ERROR_BADDATA;
 		}
 	if( !cryptStatusError( status ) )
@@ -942,8 +943,6 @@ static int writeFinished( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 												innerOffset, 
 												isServerFinished );
 		}
-	if( cryptStatusError( status ) )
-		sMemDisconnect( stream );
 	return( status );
 	}
 
@@ -983,10 +982,7 @@ static int createCertAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 												TRUE );
 		}
 	if( cryptStatusError( status ) )
-		{
-		sMemDisconnect( stream );
 		return( status );
-		}
 
 	/* Clone the hash context at the point where we've hashed
 	   ClientHello || ... || ServerCertificate (server auth) or 
@@ -995,16 +991,12 @@ static int createCertAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	status = cloneHashContext( handshakeInfo->sha2context, 
 							   &transcriptHashContext );
 	if( cryptStatusError( status ) )
-		{
-		sMemDisconnect( stream );
 		return( status );
-		}
 	status = krnlSendMessage( transcriptHashContext, IMESSAGE_CTX_HASH, 
 							  "", 0 );
 	if( cryptStatusError( status ) )
 		{
 		krnlSendNotifier( transcriptHashContext, IMESSAGE_DECREFCOUNT );
-		sMemDisconnect( stream );
 		return( status );
 		}
 
@@ -1027,8 +1019,6 @@ static int createCertAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 												TRUE );
 		}
 	krnlSendNotifier( transcriptHashContext, IMESSAGE_DECREFCOUNT );
-	if( cryptStatusError( status ) )
-		sMemDisconnect( stream );
 	return( status );
 	}
 
@@ -1200,19 +1190,17 @@ static int completeHandshakeClient( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	CFI_CHECK_UPDATE( "readCertRequest" );
 
-	/* Process the optional Certificate Chain and Certificate Verify 
-	   messages.  Since client certificate authentication implies server 
-	   certificate authentication we also force this code path if no server 
-	   certificate is present in order to produce an error if this is 
-	   missing */
-	if( sPeek( &stream ) == TLS_HAND_CERTIFICATE || needClientCert )
+	/* Process the theoretically optional but always present Certificate 
+	   Chain and Certificate Verify messages.  Unlike the classic TLS case
+	   we don't do PSK (at least until someone requests it) for complexity/
+	   attack-surface reduction (but see also the comment in 
+	   readKeyexTLS13() for the mess this would create if implemented), so 
+	   we always require a server certificate */
+	status = processCertAuth( sessionInfoPtr, handshakeInfo, &stream );
+	if( cryptStatusError( status ) )
 		{
-		status = processCertAuth( sessionInfoPtr, handshakeInfo, &stream );
-		if( cryptStatusError( status ) )
-			{
-			sMemDisconnect( &stream );
-			return( status ); 
-			}
+		sMemDisconnect( &stream );
+		return( status ); 
 		}
 	CFI_CHECK_UPDATE( "processCertAuth" );
 	sMemDisconnect( &stream );

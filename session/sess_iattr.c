@@ -35,7 +35,8 @@
 			attributeListPtr->flags |= ATTR_FLAG_CURSORMOVED
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-static BOOLEAN accessFunction( INOUT_PTR ATTRIBUTE_LIST *attributeListPtr,
+static BOOLEAN accessFunction( INOUT_PTR \
+									SESSION_ATTRIBUTE_LIST *attributeListPtr,
 							   IN_ENUM( ATTR ) const ATTR_TYPE attrGetType )
 	{
 	static const CRYPT_ATTRIBUTE_TYPE attributeOrderList[] = {
@@ -47,7 +48,8 @@ static BOOLEAN accessFunction( INOUT_PTR ATTRIBUTE_LIST *attributeListPtr,
 	BOOLEAN doContinue;
 	int iterationCount = 0, LOOP_ITERATOR;
 
-	assert( isWritePtr( attributeListPtr, sizeof( ATTRIBUTE_LIST ) ) );
+	assert( isWritePtr( attributeListPtr, 
+						sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES_B( isEnumRange( attrGetType, ATTR ) );
 
@@ -144,7 +146,8 @@ static BOOLEAN accessFunction( INOUT_PTR ATTRIBUTE_LIST *attributeListPtr,
    internal fields */
 
 CHECK_RETVAL_PTR \
-static const void *getAttrFunction( IN_PTR_OPT TYPECAST( ATTRIBUTE_LIST * ) \
+static const void *getAttrFunction( IN_PTR_OPT \
+										TYPECAST( SESSION_ATTRIBUTE_LIST * ) \
 										const void *attributePtr, 
 									OUT_OPT_ATTRIBUTE_Z \
 										CRYPT_ATTRIBUTE_TYPE *groupID, 
@@ -154,12 +157,14 @@ static const void *getAttrFunction( IN_PTR_OPT TYPECAST( ATTRIBUTE_LIST * ) \
 										CRYPT_ATTRIBUTE_TYPE *instanceID,
 									IN_ENUM( ATTR ) const ATTR_TYPE attrGetType )
 	{
-	ATTRIBUTE_LIST *attributeListPtr = ( ATTRIBUTE_LIST * ) attributePtr;
+	SESSION_ATTRIBUTE_LIST *attributeListPtr = \
+					( SESSION_ATTRIBUTE_LIST * ) attributePtr;
 	BOOLEAN subGroupMove;
 	int value, status;
 
 	assert( attributeListPtr == NULL || \
-			isReadPtr( attributeListPtr, sizeof( ATTRIBUTE_LIST ) ) );
+			isReadPtr( attributeListPtr, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 	assert( groupID == NULL || \
 			isWritePtr( groupID, sizeof( CRYPT_ATTRIBUTE_TYPE ) ) );
 	assert( attributeID == NULL || \
@@ -271,11 +276,13 @@ static const void *getAttrFunction( IN_PTR_OPT TYPECAST( ATTRIBUTE_LIST * ) \
    they're treated as normal attributes */
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-void lockEphemeralAttributes( INOUT_PTR ATTRIBUTE_LIST *attributeListHead )
+void lockEphemeralAttributes( INOUT_PTR \
+								SESSION_ATTRIBUTE_LIST *attributeListHead )
 	{
-	LOOP_INDEX_PTR ATTRIBUTE_LIST *attributeListCursor;
+	LOOP_INDEX_PTR SESSION_ATTRIBUTE_LIST *attributeListCursor;
 
-	assert( isWritePtr( attributeListHead, sizeof( ATTRIBUTE_LIST * ) ) );
+	assert( isWritePtr( attributeListHead, \
+						sizeof( SESSION_ATTRIBUTE_LIST * ) ) );
 
 	/* Clear the ATTR_FLAG_EPHEMERAL flag on all attributes */
 	LOOP_MAX( attributeListCursor = attributeListHead, 
@@ -296,13 +303,14 @@ void lockEphemeralAttributes( INOUT_PTR ATTRIBUTE_LIST *attributeListHead )
 
 CHECK_RETVAL_ENUM( CRYPT_ATTRIBUTE ) \
 CRYPT_ATTRIBUTE_TYPE checkMissingInfo( IN_PTR_OPT \
-											const ATTRIBUTE_LIST *attributeListHead,
+											const SESSION_ATTRIBUTE_LIST *attributeListHead,
 									   IN_BOOL const BOOLEAN isServer )
 	{
-	const ATTRIBUTE_LIST *attributeListPtr = attributeListHead;
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr = attributeListHead;
 
 	assert( attributeListHead == NULL || \
-			isReadPtr( attributeListHead, sizeof( ATTRIBUTE_LIST * ) ) );
+			isReadPtr( attributeListHead, \
+					   sizeof( SESSION_ATTRIBUTE_LIST * ) ) );
 
 	REQUIRES( isBooleanValue( isServer ) );
 
@@ -364,15 +372,17 @@ int getSessionAttributeCursor( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							   IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE sessionInfoType,
 							   OUT_ATTRIBUTE_Z CRYPT_ATTRIBUTE_TYPE *valuePtr )
 	{
-	ATTRIBUTE_LIST *attributeListHead = \
+	SESSION_ATTRIBUTE_LIST *attributeListHead = \
 							DATAPTR_GET( sessionInfoPtr->attributeList ); 
-	ATTRIBUTE_LIST *attributeListCursor = \
+	SESSION_ATTRIBUTE_LIST *attributeListCursor = \
 							DATAPTR_GET( sessionInfoPtr->attributeListCurrent ); 
 
 	assert( attributeListHead == NULL || \
-			isReadPtr( attributeListHead, sizeof( ATTRIBUTE_LIST ) ) );
+			isReadPtr( attributeListHead, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 	assert( attributeListCursor == NULL || \
-			isReadPtr( attributeListCursor, sizeof( ATTRIBUTE_LIST ) ) );
+			isReadPtr( attributeListCursor, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 	assert( isWritePtr( valuePtr, sizeof( int ) ) );
 
 	REQUIRES( sanityCheckSession( sessionInfoPtr ) );
@@ -439,15 +449,17 @@ int setSessionAttributeCursor( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 										 CRYPT_CURSOR_FIRST ) /* Values are -ve */
 									const int position )
 	{
-	ATTRIBUTE_LIST *attributeListHead = \
+	SESSION_ATTRIBUTE_LIST *attributeListHead = \
 					DATAPTR_GET( sessionInfoPtr->attributeList );
-	ATTRIBUTE_LIST *attributeListCursor = \
+	SESSION_ATTRIBUTE_LIST *attributeListCursor = \
 					DATAPTR_GET( sessionInfoPtr->attributeListCurrent );
 
 	assert( attributeListHead == NULL || \
-			isReadPtr( attributeListHead, sizeof( ATTRIBUTE_LIST ) ) );
+			isReadPtr( attributeListHead, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 	assert( attributeListCursor == NULL || \
-			isReadPtr( attributeListCursor, sizeof( ATTRIBUTE_LIST ) ) );
+			isReadPtr( attributeListCursor, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 	
 	REQUIRES( sanityCheckSession( sessionInfoPtr ) );
 	REQUIRES( sessionInfoType == CRYPT_ATTRIBUTE_CURRENT_GROUP || \
@@ -494,7 +506,7 @@ int setSessionAttributeCursor( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* Move the cursor */
-	attributeListCursor = ( ATTRIBUTE_LIST * ) \
+	attributeListCursor = ( SESSION_ATTRIBUTE_LIST * ) \
 						  attributeMoveCursor( attributeListCursor, getAttrFunction,
 											   sessionInfoType, position );
 	if( attributeListCursor == NULL )
@@ -512,15 +524,16 @@ int setSessionAttributeCursor( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 /* Find a session attribute by type */
 
 CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1 ) ) \
-const ATTRIBUTE_LIST *findSessionInfo( const SESSION_INFO *sessionInfoPtr,
-									   IN_ATTRIBUTE \
-											const CRYPT_ATTRIBUTE_TYPE attributeID )
+const SESSION_ATTRIBUTE_LIST *findSessionInfo( const SESSION_INFO *sessionInfoPtr,
+											   IN_ATTRIBUTE \
+													const CRYPT_ATTRIBUTE_TYPE attributeID )
 	{
-	const ATTRIBUTE_LIST *attributeListPtr = \
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr = \
 							DATAPTR_GET( sessionInfoPtr->attributeList ); 
 
 	assert( attributeListPtr == NULL || \
-			isReadPtr( attributeListPtr, sizeof( ATTRIBUTE_LIST ) ) );
+			isReadPtr( attributeListPtr, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES_N( attributeID > CRYPT_SESSINFO_FIRST && \
 				attributeID < CRYPT_SESSINFO_LAST );
@@ -530,11 +543,12 @@ const ATTRIBUTE_LIST *findSessionInfo( const SESSION_INFO *sessionInfoPtr,
 	}
 
 CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1 ) ) \
-const ATTRIBUTE_LIST *findSessionInfoNext( const ATTRIBUTE_LIST *attributeListPtr,
-										   IN_ATTRIBUTE \
-												const CRYPT_ATTRIBUTE_TYPE attributeID )
+const SESSION_ATTRIBUTE_LIST *findSessionInfoNext( const SESSION_ATTRIBUTE_LIST *attributeListPtr,
+												   IN_ATTRIBUTE \
+													const CRYPT_ATTRIBUTE_TYPE attributeID )
 	{
-	assert( isReadPtr( attributeListPtr, sizeof( ATTRIBUTE_LIST ) ) );
+	assert( isReadPtr( attributeListPtr, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES_N( attributeID > CRYPT_SESSINFO_FIRST && \
 				attributeID < CRYPT_SESSINFO_LAST );
@@ -548,18 +562,19 @@ const ATTRIBUTE_LIST *findSessionInfoNext( const ATTRIBUTE_LIST *attributeListPt
 /* Find a session attribute by type and content */
 
 CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1, 3 ) ) \
-const ATTRIBUTE_LIST *findSessionInfoEx( const SESSION_INFO *sessionInfoPtr,
-										 IN_ATTRIBUTE \
-											const CRYPT_ATTRIBUTE_TYPE attributeID,
-										 IN_BUFFER( valueLength ) const void *value, 
-										 IN_LENGTH_SHORT const int valueLength )
+const SESSION_ATTRIBUTE_LIST *findSessionInfoEx( const SESSION_INFO *sessionInfoPtr,
+												 IN_ATTRIBUTE \
+													const CRYPT_ATTRIBUTE_TYPE attributeID,
+												 IN_BUFFER( valueLength ) const void *value, 
+												 IN_LENGTH_SHORT const int valueLength )
 	{
-	const ATTRIBUTE_LIST *attributeListPtr = \
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr = \
 							DATAPTR_GET( sessionInfoPtr->attributeList ); 
-	LOOP_INDEX_PTR const ATTRIBUTE_LIST *attributeListCursor;
+	LOOP_INDEX_PTR const SESSION_ATTRIBUTE_LIST *attributeListCursor;
 
 	assert( attributeListPtr == NULL || \
-			isReadPtr( attributeListPtr, sizeof( ATTRIBUTE_LIST ) ) );
+			isReadPtr( attributeListPtr, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 	assert( isReadPtrDynamic( value, valueLength ) );
 
 	REQUIRES_N( sanityCheckSession( sessionInfoPtr ) );
@@ -617,16 +632,16 @@ static int addInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					IN_PTR_OPT const ATTRACCESS_FUNCTION accessFunction, 
 					IN_FLAGS_Z( ATTR ) const int flags )
 	{
-	LOOP_INDEX_PTR ATTRIBUTE_LIST *insertPoint = \
+	LOOP_INDEX_PTR SESSION_ATTRIBUTE_LIST *insertPoint = \
 							DATAPTR_GET( sessionInfoPtr->attributeList );
-	ATTRIBUTE_LIST *newElement;
+	SESSION_ATTRIBUTE_LIST *newElement;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( ( data == NULL ) || \
 			( isReadPtrDynamic( data, dataLength ) && \
 			  dataLength <= dataMaxLength ) );
 	assert( insertPoint == NULL || \
-			isWritePtr( insertPoint, sizeof( ATTRIBUTE_LIST ) ) );
+			isWritePtr( insertPoint, sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES( sanityCheckSession( sessionInfoPtr ) );
 	REQUIRES( groupID > CRYPT_SESSINFO_FIRST && \
@@ -649,7 +664,7 @@ static int addInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   isn't already present */
 	if( insertPoint != NULL )
 		{
-		ATTRIBUTE_LIST *prevElement = NULL;
+		SESSION_ATTRIBUTE_LIST *prevElement = NULL;
 
 		LOOP_MAX_CHECKINC( insertPoint != NULL,
 						   insertPoint = DATAPTR_GET( insertPoint->next ) )
@@ -673,13 +688,14 @@ static int addInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   reserved up to dataMaxLength (if it's greater than dataLength) to
 	   allow the contents to be replaced with a new fixed-length value  */
 	REQUIRES( dataMaxLength == 0 || isShortIntegerRangeNZ( dataMaxLength ) );
-	REQUIRES( isShortIntegerRangeNZ( sizeof( ATTRIBUTE_LIST ) + \
+	REQUIRES( isShortIntegerRangeNZ( sizeof( SESSION_ATTRIBUTE_LIST ) + \
 									 dataMaxLength ) );
-	if( ( newElement = ( ATTRIBUTE_LIST * ) \
-					   clAlloc( "addSessionAttribute", sizeof( ATTRIBUTE_LIST ) + \
-													   dataMaxLength ) ) == NULL )
+	if( ( newElement = ( SESSION_ATTRIBUTE_LIST * ) \
+					   clAlloc( "addSessionAttribute", \
+								sizeof( SESSION_ATTRIBUTE_LIST ) + \
+										dataMaxLength ) ) == NULL )
 		return( CRYPT_ERROR_MEMORY );
-	initVarStruct( newElement, ATTRIBUTE_LIST, dataMaxLength, value );
+	initVarStruct( newElement, SESSION_ATTRIBUTE_LIST, dataMaxLength, value );
 	newElement->groupID = groupID;
 	newElement->attributeID = attributeID;
 	INIT_FLAGS( newElement->flags, flags );
@@ -696,7 +712,7 @@ static int addInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		newElement->valueLength = dataLength;
 		}
 	insertDoubleListElement( &sessionInfoPtr->attributeList, insertPoint, 
-							 newElement, ATTRIBUTE_LIST );
+							 newElement, SESSION_ATTRIBUTE_LIST );
 
 	return( CRYPT_OK );
 	}
@@ -806,12 +822,14 @@ int updateSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					   IN_LENGTH_SHORT const int dataMaxLength, 
 					   IN_FLAGS_Z( ATTR ) const int flags )
 	{
-	ATTRIBUTE_LIST *attributeListPtr = DATAPTR_GET( sessionInfoPtr->attributeList );
+	SESSION_ATTRIBUTE_LIST *attributeListPtr = \
+					DATAPTR_GET( sessionInfoPtr->attributeList );
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isReadPtrDynamic( data, dataLength ) );
 	assert( attributeListPtr == NULL || \
-			isWritePtr( attributeListPtr, sizeof( ATTRIBUTE_LIST ) ) );
+			isWritePtr( attributeListPtr, \
+						sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES( sanityCheckSession( sessionInfoPtr ) );
 	REQUIRES( attributeID > CRYPT_SESSINFO_FIRST && \
@@ -867,15 +885,17 @@ int updateSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int deleteSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
-					   INOUT_PTR ATTRIBUTE_LIST *attributeListPtr )
+					   INOUT_PTR SESSION_ATTRIBUTE_LIST *attributeListPtr )
 	{
-	const ATTRIBUTE_LIST *attributeListCurrent = \
+	const SESSION_ATTRIBUTE_LIST *attributeListCurrent = \
 						DATAPTR_GET( sessionInfoPtr->attributeListCurrent );
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
-	assert( isWritePtr( attributeListPtr, sizeof( ATTRIBUTE_LIST ) ) );
+	assert( isWritePtr( attributeListPtr, \
+						sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 	assert( attributeListCurrent == NULL || \
-			isReadPtr( attributeListCurrent, sizeof( ATTRIBUTE_LIST ) ) );
+			isReadPtr( attributeListCurrent, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES( sanityCheckSession( sessionInfoPtr ) );
 	REQUIRES( DATAPTR_ISVALID( sessionInfoPtr->attributeListCurrent ) );
@@ -888,7 +908,7 @@ int deleteSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   a single attribute */
 	if( attributeListCurrent == attributeListPtr )
 		{
-		ATTRIBUTE_LIST *attributeListCursor = \
+		SESSION_ATTRIBUTE_LIST *attributeListCursor = \
 								DATAPTR_GET( attributeListPtr->next );
 
 		REQUIRES( DATAPTR_ISVALID( attributeListPtr->next ) );
@@ -905,10 +925,25 @@ int deleteSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	/* Remove the item from the list */
 	deleteDoubleListElement( &sessionInfoPtr->attributeList, 
-							 attributeListPtr, ATTRIBUTE_LIST );
+							 attributeListPtr, SESSION_ATTRIBUTE_LIST );
 
-	/* Clear all data in the list item and free the memory */
-	endVarStruct( attributeListPtr, ATTRIBUTE_LIST );
+	/* Clear all data in the list item and free the memory.  Most of the 
+	   object attributes checked for below should never be found in an
+	   attribute list since they're stored in the main SESSION_INFO, but we 
+	   check for them just in case a future change moves them into the 
+	   attribute list */
+	if( ( attributeListPtr->attributeID == CRYPT_SESSINFO_PRIVATEKEY || \
+		  attributeListPtr->attributeID == CRYPT_SESSINFO_KEYSET || \
+		  attributeListPtr->attributeID == CRYPT_SESSINFO_REQUEST || \
+		  attributeListPtr->attributeID == CRYPT_SESSINFO_RESPONSE || \
+		  attributeListPtr->attributeID == CRYPT_SESSINFO_CACERTIFICATE ) && \
+		attributeListPtr->intValue != CRYPT_ERROR )
+		{
+		krnlSendNotifier( attributeListPtr->intValue, 
+						  IMESSAGE_DECREFCOUNT );
+		attributeListPtr->intValue = CRYPT_ERROR;
+		}
+	endVarStruct( attributeListPtr, SESSION_ATTRIBUTE_LIST );
 	clFree( "deleteSessionInfo", attributeListPtr );
 
 	return( CRYPT_OK );
@@ -917,12 +952,13 @@ int deleteSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 STDC_NONNULL_ARG( ( 1 ) ) \
 void deleteSessionInfoAll( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
-	LOOP_INDEX_PTR ATTRIBUTE_LIST *attributeListCursor = \
+	LOOP_INDEX_PTR SESSION_ATTRIBUTE_LIST *attributeListCursor = \
 							DATAPTR_GET( sessionInfoPtr->attributeList );
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( attributeListCursor == NULL || \
-			isReadPtr( attributeListCursor, sizeof( ATTRIBUTE_LIST ) ) );
+			isReadPtr( attributeListCursor, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES_V( sanityCheckSession( sessionInfoPtr ) );
 	REQUIRES_V( DATAPTR_ISVALID( sessionInfoPtr->attributeList ) );
@@ -937,7 +973,7 @@ void deleteSessionInfoAll( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	/* Destroy any remaining list items */
 	LOOP_MAX_WHILE( attributeListCursor != NULL )
 		{
-		ATTRIBUTE_LIST *itemToFree = attributeListCursor;
+		SESSION_ATTRIBUTE_LIST *itemToFree = attributeListCursor;
 
 		ENSURES_V( LOOP_INVARIANT_MAX_GENERIC() );
 

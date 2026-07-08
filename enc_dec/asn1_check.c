@@ -594,9 +594,16 @@ static ASN1_STATE checkPrimitive( INOUT_PTR STREAM *stream, const ASN1_ITEM *ite
 					status = sread( stream, oidBuffer, length );
 					if( cryptStatusError( status ) )
 						return( ASN1_STATE_ERROR );
-					if( memcmp( oidBuffer, 
+					if( length < 9 || \
+						memcmp( oidBuffer, 
 								"\x2B\x06\x01\x04\x01\x82\x37\x15\x08", 9 ) )
+						{
+						/* The length will always be >= 9 because we can 
+						   only get here if it's > MAX_OID_SIZE - 2, the 
+						   check exists purely to document that the memcmp() 
+						   is safe */
 						return( ASN1_STATE_ERROR );
+						}
 
 					/* It's a Microsoft gibberish OID, report it as a 
 					   standard OID */
@@ -910,7 +917,7 @@ static ASN1_STATE checkASN1( INOUT_PTR STREAM *stream,
 		   at this point because we can't know the length status before we
 		   start, but it's implicitly indicated by finding a length of
 		   LENGTH_MAGIC at the topmost level */
-		if( level == 0 && length == LENGTH_MAGIC )
+		if( level <= 0 && length == LENGTH_MAGIC )
 			return( ASN1_STATE_NONE );
 
 		/* Check whether we've reached the end of the current (definite-

@@ -84,7 +84,7 @@ static int readRawObject( INOUT_PTR STREAM *stream,
 	if( length <= 0 || length > 0x7F )
 		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 	buffer[ offset++ ] = intToByte( length );
-	REQUIRES( !checkOverflowAdd( offset, length ) );
+	REQUIRES_S( !checkOverflowAdd( offset, length ) );
 	if( offset + length > bufferMaxLength )
 		return( sSetError( stream, CRYPT_ERROR_OVERFLOW ) );
 
@@ -462,6 +462,7 @@ static int compareHashInfo( INOUT_PTR STREAM *stream,
    originally signed, performed as a pairwise consistency check on the 
    private-key signing operation */
 
+CHECK_RETVAL STDC_NONNULL_ARG( ( 2, 4 ) ) \
 static int checkRecoveredSignature( IN_HANDLE const CRYPT_CONTEXT iSignContext,
 									IN_BUFFER( preSigDataLen ) \
 										const void *preSigData,
@@ -1036,7 +1037,7 @@ static int generateMHash( OUT_BUFFER_FIXED( mHashMaxLen ) BYTE *mHash,
 						  IN_BUFFER( hashSize ) const void *hash, 
 						  IN_LENGTH_HASH const int hashSize,
 						  IN_BUFFER( saltLen ) const void *salt, 
-						  IN_LENGTH_PKC const int saltLen )
+						  IN_LENGTH_HASH const int saltLen )
 	{
 	HASH_FUNCTION_ATOMIC hashFunctionAtomic;
 	BYTE mData[ 8 + CRYPT_MAX_HASHSIZE + CRYPT_MAX_HASHSIZE + 8 ];
@@ -1121,8 +1122,7 @@ static int generatePssDataBlock( OUT_BUFFER_FIXED( dataMaxLen ) BYTE *data,
 								 IN_LENGTH_PKC const int saltLen,
 								 IN_ALGO const CRYPT_ALGO_TYPE hashAlgo,
 								 IN_BUFFER( hashSize ) const void *hash, 
-								 IN_RANGE( MIN_KEYSIZE, CRYPT_MAX_KEYSIZE ) \
-									const int hashSize,
+								 IN_LENGTH_HASH const int hashSize,
 								 IN_RANGE( bytesToBits( MIN_PKCSIZE ),
 										   bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
 									const int pkcSizeBits )
@@ -1294,7 +1294,11 @@ static int recoverPssDataBlock( OUT_BUFFER( mHashMaxLen, *mHashLen ) \
 	dbMask[ padLen - 1 ] = 0x01;
 	if( memcmp( db, dbMask, padLen ) || \
 		( ( const BYTE * ) data )[ dataLen - 1 ] != 0xBC )
+		{
+		zeroise( db, CRYPT_MAX_PKCSIZE ); 
+		zeroise( dbMask, CRYPT_MAX_PKCSIZE );
 		return( CRYPT_ERROR_BADDATA );
+		}
 
 	/* Now that we've got the salt, we can regenerate mHash and return it to 
 	   the caller to verify against the copy of mHash stored in the 
@@ -1303,6 +1307,8 @@ static int recoverPssDataBlock( OUT_BUFFER( mHashMaxLen, *mHashLen ) \
 						    db + padLen, hashSize );
 	if( cryptStatusOK( status ) )
 		*mHashLen = hashSize;
+	zeroise( db, CRYPT_MAX_PKCSIZE ); 
+	zeroise( dbMask, CRYPT_MAX_PKCSIZE );
 	return( status );
 	}
 
@@ -1635,7 +1641,7 @@ static void manipulateDataBlock( INOUT_BUFFER_FIXED( length ) BYTE *buffer,
 			   in ( 2 16 840 1 101 3 4 2 1 ) */
 #ifdef DEFAULT_ALGO_SHA2
 			assert( buffer[ payloadStart - 8 ] == 0x03 );
-			buffer[ payloadStart - 6 ]++;
+			buffer[ payloadStart - 8 ]++;
 #else
 			buffer[ payloadStart - 10 ]++;
 #endif /* DEFAULT_ALGO_xxx */

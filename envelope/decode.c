@@ -1099,11 +1099,10 @@ static int copyToDeenvelope( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	{
 	BYTE *bufPtr = ( BYTE * ) buffer;
 	const int maxSegments = ( length <= FAILSAFE_ITERATIONS_LARGE * 1024 ) ? \
-								FAILSAFE_ITERATIONS_LARGE : \
-								length / FAILSAFE_ITERATIONS_LARGE;
+							  FAILSAFE_ITERATIONS_LARGE : length / 1024;
 	LOOP_INDEX segmentCount;
 	int currentLength = length, bytesCopied;
-		/* The calculation for maxIterations is necessary in order to deal 
+		/* The calculation for maxSegments is necessary in order to deal 
 		   with the use of very large data quantities and buffers, if the
 		   input data contains (say) 1K segments and 10MB of data then we
 		   can exceed the fixed FAILSAFE_ITERATIONS_xxx value so we have to

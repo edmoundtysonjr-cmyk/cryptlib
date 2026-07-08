@@ -34,7 +34,7 @@ static int processKeyFingerprint( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								  IN_LENGTH_SHORT const int keyDataLength )
 	{
 	HASH_FUNCTION_ATOMIC hashFunctionAtomic;
-	const ATTRIBUTE_LIST *attributeListPtr = \
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr = \
 				findSessionInfo( sessionInfoPtr,
 								 CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2 );
 	BYTE fingerPrint[ CRYPT_MAX_HASHSIZE + 8 ];
@@ -1294,7 +1294,6 @@ static int completeClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		if( cryptStatusError( status ) )
 			return( status );
 		}
-#if 1
 	status = sendChannelOpen( sessionInfoPtr );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1308,24 +1307,6 @@ static int completeClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	handshakeInfo->completedHSstate = HANDSHAKE_STATE_COMPLETE;
 
 	return( CRYPT_OK );
-#else	/* Test handling of OpenSSH "no-more-sessions@openssh.com" */
-	status = sendChannelOpen( sessionInfoPtr );
-	if( cryptStatusError( status ) )
-		return( status );
-
-	/* byte	type = SSH_MSG_GLOBAL_REQUEST
-	   string	request_name = "no-more-sessions@openssh.com"
-	   boolean	want_reply = FALSE */
-	status = openPacketStreamSSH( &stream, sessionInfoPtr, CRYPT_USE_DEFAULT,
-								  SSH_MSG_GLOBAL_REQUEST );
-	writeString32( &stream, "no-more-sessions@openssh.com", 28 );
-	sputc( &stream, 0 );
-	status = wrapPacketSSH2( sessionInfoPtr, &stream, 0, TRUE, TRUE );
-	if( cryptStatusOK( status ) )
-		status = sendPacketSSH2( sessionInfoPtr, &stream, TRUE );
-	sMemDisconnect( &stream );
-	return( status );
-#endif /* 0 */
 	}
 
 /****************************************************************************

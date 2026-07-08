@@ -41,7 +41,6 @@ static int incCtr( INOUT_BUFFER_FIXED( blockSize ) void *ctr,
 				   IN_LENGTH_IV const int blockSize )
 	{
 	BYTE *ctrPtr = ctr, ctrLSB, ctrLSBnext, ctrLSBnext2;
-	LOOP_INDEX i;
 
 	REQUIRES( blockSize >= MIN_IVSIZE && blockSize <= CRYPT_MAX_IVSIZE );
 
@@ -58,17 +57,33 @@ static int incCtr( INOUT_BUFFER_FIXED( blockSize ) void *ctr,
 
 	/* Walk along the counter incrementing each byte if required.  This
 	   code will overflow with probability 2^-127 on average, which isn't
-	   worth checking for, or at least the chances of a check going wrong
-	   are higher than the chances of an overflow */
-	LOOP_MED_REV( i = blockSize - 1, i >= 0, i-- )
+	   worth checking for or at least the chances of a check going wrong
+	   are higher than the chances of an overflow.
+	   
+	   In 254/255 cases we're just incrementing a single byte so we special-
+	   case that to avoid the loop setup and iteration overhead */
+	if( ctrPtr[ blockSize - 1 ] != 0xFF )
+		ctrPtr[ blockSize - 1 ]++;
+	else
 		{
-		ENSURES( LOOP_INVARIANT_REV( i, 0, blockSize - 1 ) );
+		LOOP_INDEX i;
 
-		ctrPtr[ i ]++;
-		if( ctrPtr[ i ] != 0 )
-			break;
+		LOOP_MED_REV( i = blockSize - 1, i >= 0, i-- )
+			{
+			ENSURES( LOOP_INVARIANT_REV( i, 0, blockSize - 1 ) );
+
+			/* The somewhat odd code structure is to avoid potential UB 
+			   issues that would arise with the more obvious 'value++; 
+			   if value != 0 -> break' */
+			if( ctrPtr[ i ] != 0xFF )
+				{
+				ctrPtr[ i ]++;
+				break;
+				}
+			ctrPtr[ i ] = 0;
+			}
+		ENSURES( LOOP_BOUND_MED_REV_OK );
 		}
-	ENSURES( LOOP_BOUND_MED_REV_OK );
 	ENSURES( ( ctrPtr[ blockSize - 1 ] == ctrLSB + 1 && \
 			   ctrPtr[ blockSize - 2 ] == ctrLSBnext && \
 			   ctrPtr[ blockSize - 3 ] == ctrLSBnext2 ) || \
@@ -723,7 +738,7 @@ int initSecurityInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   form, which we do by generating a pseudo-header and hashing that
 	   separately.  The nonce is "A", "B", "C", ... */
 	getHashParameters( handshakeInfo->exchangeHashAlgo, 0, &hashFunction, 
-					   &hashSize );
+					   &hashSize, NULL );
 	if( TEST_FLAG( sessionInfoPtr->protocolFlags, 
 				   SSH_PFLAG_NOHASHSECRET ) )
 		{

@@ -724,7 +724,7 @@ static int writeTlsPQCPublicKey( INOUT_PTR STREAM *stream,
 *																			*
 ****************************************************************************/
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS 
 
 /* Write PGP public keys:
 
@@ -865,7 +865,7 @@ static int writePgpEccPublicKey( INOUT_PTR STREAM *stream,
 	zeroise( buffer, MAX_PKCSIZE_ECCPOINT );
 	return( status );
 	}
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 /****************************************************************************
 *																			*
@@ -916,10 +916,10 @@ int writePublicKeyRsaFunction( INOUT_PTR STREAM *stream,
 			return( writeSsh1RsaPublicKey( stream, contextInfoPtr ) );
 #endif /* USE_SSH1 */
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS 
 		case KEYFORMAT_PGP:
 			return( writePgpRsaPublicKey( stream, contextInfoPtr ) );
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 		}
 
 	retIntError();
@@ -974,11 +974,11 @@ int writePublicKeyDlpFunction( INOUT_PTR STREAM *stream,
 									  TRUE : FALSE ) );
 #endif /* USE_TLS */
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS 
 		case KEYFORMAT_PGP:
 			return( writePgpDlpPublicKey( stream, contextInfoPtr, 
 										  cryptAlgo ) );
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 		case KEYFORMAT_PRIVATE:
 		case KEYFORMAT_PRIVATE_EXT:
@@ -1032,11 +1032,11 @@ int writePublicKeyEccFunction( INOUT_PTR STREAM *stream,
 										  cryptAlgo ) );
 #endif /* USE_TLS */
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS 
 		case KEYFORMAT_PGP:
 			return( writePgpEccPublicKey( stream, contextInfoPtr,
 										  cryptAlgo ) );
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 #ifdef USE_SSH
 		case KEYFORMAT_SSH:
@@ -1485,12 +1485,12 @@ int encodeDLValuesFunction( OUT_BUFFER( bufMaxSize, *bufSize ) BYTE *buffer,
 			break;
 #endif /* USE_INT_ASN1 */
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS 
 		case CRYPT_FORMAT_PGP:
 			writeBignumInteger16Ubits( &stream, value1 );
 			status = writeBignumInteger16Ubits( &stream, value2 );
 			break;
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 #ifdef USE_SSH
 		case CRYPT_IFORMAT_SSH:

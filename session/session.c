@@ -61,7 +61,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int initSessionNetConnectInfo( IN_PTR const SESSION_INFO *sessionInfoPtr,
 							   OUT_PTR NET_CONNECT_INFO *connectInfo )
 	{
-	const ATTRIBUTE_LIST *clientNamePtr, *serverNamePtr, *portInfoPtr;
+	const SESSION_ATTRIBUTE_LIST *clientNamePtr, *serverNamePtr;
+	const SESSION_ATTRIBUTE_LIST *portInfoPtr;
 
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( connectInfo, sizeof( NET_CONNECT_INFO ) ) );
@@ -78,9 +79,9 @@ int initSessionNetConnectInfo( IN_PTR const SESSION_INFO *sessionInfoPtr,
 	if( sessionInfoPtr->subProtocol == CRYPT_SUBPROTOCOL_EAPTTLS || \
 		sessionInfoPtr->subProtocol == CRYPT_SUBPROTOCOL_PEAP )
 		{
-		const ATTRIBUTE_LIST *userNamePtr = \
+		const SESSION_ATTRIBUTE_LIST *userNamePtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_USERNAME );
-		const ATTRIBUTE_LIST *keyPtr = \
+		const SESSION_ATTRIBUTE_LIST *keyPtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_PASSWORD );
 		
 		ENSURES( userNamePtr != NULL && keyPtr != NULL );
@@ -803,7 +804,7 @@ int activateSession( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	/* Activate the connection if necessary */
 	if( !TEST_FLAG( sessionInfoPtr->flags, SESSION_FLAG_ISOPEN ) )
 		{
-		ATTRIBUTE_LIST *attributeList;
+		SESSION_ATTRIBUTE_LIST *attributeList;
 
 		/* If there's a sub-protocol selected, set up the access methods 
 		   for it */
@@ -847,7 +848,7 @@ int activateSession( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 			if( status == OK_SPECIAL )
 				{
 				DEBUG_DIAG(( "Session activation ended with lower-level "
-							 "protocol conclusing the exchange" ));
+							 "protocol concluding the exchange" ));
 				return( CRYPT_OK );
 				}
 			return( status );

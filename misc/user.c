@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							cryptlib User Routines							*
-*						Copyright Peter Gutmann 1999-2007					*
+*						Copyright Peter Gutmann 1999-2025					*
 *																			*
 ****************************************************************************/
 
@@ -351,7 +351,7 @@ static USER_FILE_INFO *findFreeEntry( IN_ARRAY( noUserIndexEntries ) \
 				break;
 			}
 		ENSURES_N( LOOP_BOUND_OK_ALT );
-		if( i >= MAX_USER_OBJECTS )
+		if( i >= noUserIndexEntries )
 			break;
 		}
 	ENSURES_N( LOOP_BOUND_OK );
@@ -597,7 +597,7 @@ static int readUserData( INOUT_PTR USER_FILE_INFO *userFileInfoPtr,
 						 IN_LENGTH_SHORT const int userDataLength )
 	{
 	STREAM stream;
-	int enumValue, length, status;
+	int enumValue, dummy, status;
 
 	assert( isWritePtr( userFileInfoPtr, sizeof( USER_FILE_INFO ) ) );
 	assert( isReadPtrDynamic( userData, userDataLength ) );
@@ -610,16 +610,25 @@ static int readUserData( INOUT_PTR USER_FILE_INFO *userFileInfoPtr,
 	/* Read the user info */
 	sMemConnect( &stream, userData, userDataLength );
 	readSequence( &stream, NULL );
-	readEnumerated( &stream, &enumValue );
-	userFileInfoPtr->type = enumValue;
-	readOctetString( &stream, userFileInfoPtr->userID, &length, 
-					 KEYID_SIZE, KEYID_SIZE );
-	readOctetString( &stream, userFileInfoPtr->creatorID, &length, 
-					 KEYID_SIZE, KEYID_SIZE );
-	status = readCharacterString( &stream, userFileInfoPtr->userName,
-								  CRYPT_MAX_TEXTSIZE, 
-								  &userFileInfoPtr->userNameLength,
-								  BER_STRING_UTF8 );
+	status = readEnumerated( &stream, &enumValue );
+	if( cryptStatusOK( status ) )
+		{
+		userFileInfoPtr->type = enumValue;
+		status = readOctetString( &stream, userFileInfoPtr->userID, 
+								  &dummy, KEYID_SIZE, KEYID_SIZE );
+		}
+	if( cryptStatusOK( status ) )
+		{
+		status = readOctetString( &stream, userFileInfoPtr->creatorID, 
+								  &dummy, KEYID_SIZE, KEYID_SIZE );
+		}
+	if( cryptStatusOK( status ) )
+		{
+		status = readCharacterString( &stream, userFileInfoPtr->userName,
+									  CRYPT_MAX_TEXTSIZE, 
+									  &userFileInfoPtr->userNameLength,
+									  BER_STRING_UTF8 );
+		}
 	sMemDisconnect( &stream );
 
 	return( status );
@@ -1153,10 +1162,7 @@ int zeroiseUsers( INOUT_PTR USER_INFO *userInfoPtr )
 										strnlen_s( userFileName, 16 ), 
 										BUILDPATH_GETPATH );
 		if( cryptStatusOK( status ) )
-			{
-			userFilePath[ userFilePathLen ] = '\0';
 			fileErase( userFilePath );
-			}
 		}
 	ENSURES( LOOP_BOUND_OK );
 
@@ -1165,10 +1171,7 @@ int zeroiseUsers( INOUT_PTR USER_INFO *userInfoPtr )
 									&userFilePathLen, "index", 5, 
 									BUILDPATH_GETPATH );
 	if( cryptStatusOK( status ) )
-		{
-		userFilePath[ userFilePathLen ] = '\0';
 		fileErase( userFilePath );
-		}
 	return( status );
 	}
 
@@ -1183,8 +1186,8 @@ static int createUserKeyset( INOUT_PTR USER_INFO *defaultUserInfoPtr,
 	USER_FILE_INFO *userIndexPtr;
 	int status;
 
-	assert( isReadPtr( defaultUserInfoPtr, sizeof( USER_INFO ) ) );
-	assert( isReadPtr( newUserInfoPtr, sizeof( USER_INFO ) ) );
+	assert( isWritePtr( defaultUserInfoPtr, sizeof( USER_INFO ) ) );
+	assert( isWritePtr( newUserInfoPtr, sizeof( USER_INFO ) ) );
 
 	/* Try and open the index file */
 	status = openIndexKeyset( &iIndexKeyset, CRYPT_IKEYOPT_EXCLUSIVEWRITE );
@@ -1224,7 +1227,8 @@ static int createUserKeyset( INOUT_PTR USER_INFO *defaultUserInfoPtr,
 		   so it's deleted automatically on close) */
 		krnlSendNotifier( iUserKeyset, IMESSAGE_DECREFCOUNT );
 		}
-	krnlSendNotifier( iIndexKeyset, IMESSAGE_DECREFCOUNT );
+	else
+		newUserInfoPtr->iKeyset = iUserKeyset;
 
 	/* Clean up */
 	return( status );
@@ -1250,6 +1254,7 @@ int setUserPassword( INOUT_PTR USER_INFO *userInfoPtr,
 /*!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!*/
 /*!!!!!! Dummy references to keep the compiler happy !!!!!*/
 /*!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!*/
+retIntError();
 {
 USER_FILE_INFO dummyUserInfo = { 0 }, *userFileInfoPtr = &dummyUserInfo;
 USER_INFO userInfo;
@@ -1263,6 +1268,7 @@ clearErrorInfo( &errorInfo );
 #endif /* USE_ENVELOPES */
 ( void ) createSOKey( 0, &userInfo, "", 1 );
 ( void ) createUserKeyset( &userInfo, &userInfo );
+krnlSendNotifier( userInfo.iKeyset, IMESSAGE_DECREFCOUNT );
 }
 /*!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!*/
 
@@ -1362,10 +1368,7 @@ int initUserIndex( OUT_PTR_PTR_OPT void **userIndexPtrPtr )
 											&userFilePathLen, "index", 5,
 											BUILDPATH_GETPATH );
 			if( cryptStatusOK( status ) )
-				{
-				userFilePath[ userFilePathLen ] = '\0';
 				fileErase( userFilePath );
-				}
 			}
 #endif /* 0 */
 

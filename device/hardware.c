@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					  cryptlib Generic Crypto HW Routines					*
-*						Copyright Peter Gutmann 1998-2019					*
+*						Copyright Peter Gutmann 1998-2025					*
 *																			*
 ****************************************************************************/
 
@@ -116,10 +116,15 @@ static int initDevice( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 
 	/* The only real difference between a zeroise and an initialise is that 
 	   the zeroise only clears existing state and exits while the initialise 
-	   resets the state with the device ready to be used again */
+	   resets the state with the device ready to be used again.  The setting
+	   of the two boolean flags { updateBackingStore, isFileKeyset ) is
+	   { FALSE, TRUE } for a file keyset, which deletes the file storage 
+	   object, and { TRUE, FALSE } for a memory storage object, which clears 
+	   the backing store */
 	if( isZeroise )
 		{
-		return( deleteDeviceStorageObject( TRUE, 
+		return( deleteDeviceStorageObject( hardwareInfo->isFileKeyset ? \
+												FALSE : TRUE, 
 										   hardwareInfo->isFileKeyset,
 										   storageFunctions,
 										   deviceInfoPtr->contextHandle ) );
@@ -216,7 +221,9 @@ static int completeInit( INOUT_PTR DEVICE_INFO *deviceInfoPtr )
 
 	/* Grab 256 bits of entropy and send it to the system device.  Since 
 	   we're using a crypto hardware device we assume that it's good-quality 
-	   entropy */
+	   entropy.  This is an opportunistic add (and in any case we couldn't 
+	   do much with an error at this point) so we don't act on an error
+	   result */
 	status = getRandomFunction( deviceInfoPtr, buffer, 32, NULL );
 	ENSURES( cryptStatusOK( status ) );
 	setMessageData( &msgData, buffer, 32 );
@@ -249,10 +256,9 @@ static int completeInit( INOUT_PTR DEVICE_INFO *deviceInfoPtr )
 		deviceInfoPtr->iCryptKeyset = iCryptKeyset;
 		if( status == OK_SPECIAL )
 			hardwareInfo->isFileKeyset = TRUE;
-		status = CRYPT_OK;
 		}
 
-	return( status );
+	return( CRYPT_OK );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
@@ -440,7 +446,8 @@ static int controlFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 		   data to storage but instead clear it */
 		if( hardwareInfo->discardData )
 			{
-			return( deleteDeviceStorageObject( TRUE, 
+			return( deleteDeviceStorageObject( hardwareInfo->isFileKeyset ? \
+													FALSE : TRUE, 
 											   hardwareInfo->isFileKeyset,
 											   storageFunctions,
 											   deviceInfoPtr->contextHandle ) );
@@ -463,6 +470,7 @@ static int controlFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 		hardwareInfo->discardData = TRUE;
 		krnlSendNotifier( deviceInfoPtr->iCryptKeyset, 
 						  IMESSAGE_DECREFCOUNT );
+		deviceInfoPtr->iCryptKeyset = CRYPT_ERROR;
 		hardwareInfo->discardData = FALSE;
 
 		/* Redo the initialisation */
@@ -631,7 +639,6 @@ int deviceInitHardware( void )
 			}
 		}
 	ENSURES( LOOP_BOUND_OK );
-	ENSURES( i < noCapabilities );
 
 	/* Finally, patch in the generic-secret capability.  This is a bit of an 
 	   odd capability that doesn't represent any encryption algorithm but is

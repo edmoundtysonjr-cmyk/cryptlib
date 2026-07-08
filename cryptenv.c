@@ -1010,12 +1010,14 @@ static int envelopeMessageFunction( INOUT_PTR TYPECAST( ENVELOPE_INFO * ) \
 			REQUIRES( isIntegerRangeNZ( envelopeInfoPtr->bufSize ) ); 
 			zeroise( envelopeInfoPtr->buffer, envelopeInfoPtr->bufSize );
 			safeBufferFree( envelopeInfoPtr->buffer );
+			envelopeInfoPtr->buffer = NULL;
 			}
 		if( envelopeInfoPtr->auxBuffer != NULL )
 			{
 			REQUIRES( isIntegerRangeNZ( envelopeInfoPtr->auxBufSize ) ); 
 			zeroise( envelopeInfoPtr->auxBuffer, envelopeInfoPtr->auxBufSize );
 			clFree( "envelopeMessageFunction", envelopeInfoPtr->auxBuffer );
+			envelopeInfoPtr->auxBuffer = NULL;
 			}
 
 		return( status );

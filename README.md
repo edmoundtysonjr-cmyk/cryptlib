@@ -8,14 +8,16 @@ protocols like EAP-TLS, EAP-TTLS, and PEAP.
 
 ## Overview
 
-cryptlib's primary goal is stability and reliability, consisting of a highly
-mature code base with a 30-year history and an API that's been stable for the
-last 20 years - you should be able to take 20-year-old code, recompile it
-against the current code base, and it'll still work (you'll just get the
-latest algorithms and crypto mechanisms).  This emphasis on long-term
-stability means that what you deploy today will still be fine in 10-20 years -
-there's no need to roll out patches every two weeks to deal with bugs and
-security vulnerabilities.
+cryptlib's primary goal is stability and reliability based on very
+conservative margins, extensive tests and validation, and careful application
+of proven solutions.  cryptlib consists of a highly mature code base with a
+30-year history and an API that's been stable for the last 20 years - you
+should be able to take 20-year-old code, recompile it against the current code
+base, and it'll still work (you'll just get the latest algorithms and crypto
+mechanisms).  This emphasis on long-term stability and reliability means that
+what you deploy today will still be fine in 10-20 years - there's no need to
+roll out patches every two weeks to deal with bugs and security
+vulnerabilities.
 
 cryptlib provides a strong emphasis on safe, reliable operation.  Main memory
 sections are statically allocated (only variable-sized items like certificates

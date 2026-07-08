@@ -219,14 +219,8 @@ static int checkKeyIntegrity( IN_BUFFER( dataLength ) const void *data,
 	   time the following block won't be affected, however the DLP key load 
 	   checks also verify x when the key is loaded.  The padding checking is 
 	   effectively free and helps make Klima-Rosa type attacks harder */
-	if( blockSize <= ( length & ( blockSize - 1 ) ) )
-		padSize = UNDERFLOW_MARKER;
-	else
-		{
-		REQUIRES( !checkOverflowSub( blockSize,
-									 length & ( blockSize - 1 ) ) );
-		padSize = blockSize - ( length & ( blockSize - 1 ) );
-		}
+	REQUIRES( !checkOverflowSub( blockSize, length & ( blockSize - 1 ) ) );
+	padSize = blockSize - ( length & ( blockSize - 1 ) );
 	if( padSize < 1 || padSize > CRYPT_MAX_IVSIZE || \
 		checkOverflowAdd( length, padSize ) || \
 		length + padSize > dataLength )

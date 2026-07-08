@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						Certificate Sanity-check Routines					*
-*						Copyright Peter Gutmann 1996-2018					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -177,7 +177,7 @@ static BOOLEAN sanityCheckCertificate( const CERT_INFO *certInfoPtr )
 		if( certInfo->chainEnd < 0 || \
 			certInfo->chainEnd >= MAX_CHAINLENGTH || \
 			certInfo->chainPos < -1 || \
-			certInfo->chainPos > certInfo->chainEnd )
+			certInfo->chainPos >= certInfo->chainEnd )
 			{
 			DEBUG_PUTS(( "sanityCheckCert: Chain info" ));
 			return( FALSE );

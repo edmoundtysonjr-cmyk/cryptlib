@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					Certificate Attribute Add/Delete Routines				*
-*						Copyright Peter Gutmann 1996-2021					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -450,7 +450,7 @@ static int findFieldInsertLocation( IN_DATAPTR_OPT \
 	const ATTRIBUTE_LIST *prevElement = NULL;
 	LOOP_INDEX_PTR const ATTRIBUTE_LIST *insertPoint;
 
-	assert( isWritePtr( insertPointPtrPtr, sizeof( ATTRIBUTE_LIST ) ) );
+	assert( isWritePtr( insertPointPtrPtr, sizeof( ATTRIBUTE_LIST * ) ) );
 
 	REQUIRES( DATAPTR_ISVALID( attributePtr ) );
 	REQUIRES( ( attributeID == CRYPT_ATTRIBUTE_NONE ) || \

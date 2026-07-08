@@ -441,6 +441,7 @@ int readPkcs15Keyset( INOUT_PTR STREAM *stream,
 				/* We didn't copy the payload over because it's not one that 
 				   we can do anything with, free it and continue */
 				clFree( "readKeyset", object );
+				object = NULL;
 				status = CRYPT_OK;
 				}
 			}

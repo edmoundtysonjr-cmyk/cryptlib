@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					  cryptlib CAST-128 Encryption Routines					*
-*						Copyright Peter Gutmann 1997-2005					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -420,7 +420,8 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		convInfo->userKeyLength = keyLength;
 		}
 
-	CAST_set_key( convInfo->key, CAST_KEY_LENGTH, ( BYTE * ) key );
+	CAST_set_key( convInfo->key, convInfo->userKeyLength, 
+				  convInfo->userKey );
 	return( CRYPT_OK );
 	}
 

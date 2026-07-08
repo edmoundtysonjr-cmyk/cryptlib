@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						  Certificate Signing Routines						*
-*						Copyright Peter Gutmann 1997-2016					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -688,23 +688,10 @@ static int copySigningCertChain( INOUT_PTR CERT_INFO *certInfoPtr,
 		certInfo->chainEnd = 0;
 		}
 
-	/* If it's a self-signed certificate then it must be the only one in the 
-	   chain (creating a chain like this doesn't make much sense but we 
-	   handle it anyway) */
+	/* If it's a self-signed certificate then there's no need for a signing 
+	   chain and we're done */
 	if( TEST_FLAG( certInfoPtr->flags, CERT_FLAG_SELFSIGNED ) )
-		{
-		if( certInfo->chainEnd > 0 )
-			{
-			setObjectErrorInfo( certInfoPtr, CRYPT_CERTINFO_CERTIFICATE,
-								CRYPT_ERRTYPE_ATTR_PRESENT );
-			retExt( CRYPT_ERROR_INVALID,
-					( CRYPT_ERROR_INVALID, CERTIFICATE_ERRINFO,
-					  "Self-signed certificate must be the only one in the "
-					  "chain" ) );
-			}
-		
 		return( CRYPT_OK );
-		}
 
 	/* Copy the certificate chain into the certificate to be signed */
 	return( copyCertChain( certInfoPtr, iSignContext, FALSE ) );

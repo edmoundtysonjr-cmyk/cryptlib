@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *								CMS Signature Routines						*
-*						Copyright Peter Gutmann 1993-2024					*
+*						Copyright Peter Gutmann 1993-2025					*
 *																			*
 ****************************************************************************/
 
@@ -30,14 +30,10 @@
 /* Following PKIX/CMS tradition, the ESSCertID/ESSCertIDv2 isn't just a hash 
    but a complex composite field.  To deal with this we use a fixed SEQUENCE 
    { OCTET STRING ... } header before the SHA-2 hash value (see the comment
-   in addSigningCertificate() for why we hardcode SHA-2).  We also define 
-   the equivalent ESSCertID (v1) in case we encounter that instead of the v2 
-   ID */
+   in addSigningCertificate() for why we hardcode SHA-2) */
 
-#define ESSCERTIDv1_HEADER		"\x30\x22\x04\x14"
 #define ESSCERTIDv2_HEADER		"\x30\x22\x04\x20"
-#define ESSCERTIDv1_HEADER_SIZE	4
-#define ESSCERTIDv2_HEADER_SIZE	ESSCERTIDv1_HEADER_SIZE
+#define ESSCERTIDv2_HEADER_SIZE	4
 
 /* A structure to store CMS attribute information */
 
@@ -438,7 +434,7 @@ static int checkSigningCertificate( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttrib
 		/* We couldn't get the v2 ID, try for a v1 ID */
 		isESSCertIDv2 = FALSE;
 		setMessageData( &msgData, essCertID, 
-						ESSCERTIDv1_HEADER_SIZE + CRYPT_MAX_HASHSIZE );
+						ESSCERTIDv2_HEADER_SIZE + CRYPT_MAX_HASHSIZE );
 		status = krnlSendMessage( iCmsAttributes, IMESSAGE_GETATTRIBUTE_S, 
 								  &msgData, 
 								  CRYPT_CERTINFO_CMS_SIGNINGCERT_ESSCERTID );

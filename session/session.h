@@ -576,7 +576,7 @@ typedef struct AL {
 
 	/* Variable-length storage for the attribute data */
 	DECLARE_VARSTRUCT_VARS;
-	} ATTRIBUTE_LIST;
+	} SESSION_ATTRIBUTE_LIST;
 
 /* Defines to make access to the union fields less messy */
 
@@ -886,29 +886,29 @@ int setSessionAttributeCursor( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 										 CRYPT_CURSOR_FIRST ) /* Values are -ve */
 									const int position );
 CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1 ) ) \
-const ATTRIBUTE_LIST *findSessionInfo( const SESSION_INFO *sessionInfoPtr,
-									   IN_ATTRIBUTE \
-											const CRYPT_ATTRIBUTE_TYPE attributeID );
+const SESSION_ATTRIBUTE_LIST *findSessionInfo( const SESSION_INFO *sessionInfoPtr,
+											   IN_ATTRIBUTE \
+													const CRYPT_ATTRIBUTE_TYPE attributeID );
 CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1 ) ) \
-const ATTRIBUTE_LIST *findSessionInfoNext( const ATTRIBUTE_LIST *attributeListPtr,
-										   IN_ATTRIBUTE \
-												const CRYPT_ATTRIBUTE_TYPE attributeID );
+const SESSION_ATTRIBUTE_LIST *findSessionInfoNext( const SESSION_ATTRIBUTE_LIST *attributeListPtr,
+												   IN_ATTRIBUTE \
+														const CRYPT_ATTRIBUTE_TYPE attributeID );
 CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1, 3 ) ) \
-const ATTRIBUTE_LIST *findSessionInfoEx( const SESSION_INFO *sessionInfoPtr,
-										 IN_ATTRIBUTE \
-											const CRYPT_ATTRIBUTE_TYPE attributeID,
-										 IN_BUFFER( valueLength ) const void *value, 
-										 IN_LENGTH_SHORT const int valueLength );
+const SESSION_ATTRIBUTE_LIST *findSessionInfoEx( const SESSION_INFO *sessionInfoPtr,
+												 IN_ATTRIBUTE \
+													const CRYPT_ATTRIBUTE_TYPE attributeID,
+												 IN_BUFFER( valueLength ) const void *value, 
+												 IN_LENGTH_SHORT const int valueLength );
 STDC_NONNULL_ARG( ( 1 ) ) \
-void lockEphemeralAttributes( INOUT_PTR ATTRIBUTE_LIST *attributeListHead );
+void lockEphemeralAttributes( INOUT_PTR SESSION_ATTRIBUTE_LIST *attributeListHead );
 STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int deleteSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
-					   INOUT_PTR ATTRIBUTE_LIST *attributeListPtr );
+					   INOUT_PTR SESSION_ATTRIBUTE_LIST *attributeListPtr );
 STDC_NONNULL_ARG( ( 1 ) ) \
 void deleteSessionInfoAll( INOUT_PTR SESSION_INFO *sessionInfoPtr );
 CHECK_RETVAL_ENUM( CRYPT_ATTRIBUTE ) \
 CRYPT_ATTRIBUTE_TYPE checkMissingInfo( IN_PTR_OPT \
-											const ATTRIBUTE_LIST *attributeListHead,
+											const SESSION_ATTRIBUTE_LIST *attributeListHead,
 									   IN_BOOL const BOOLEAN isServer );
 
 /* Prototypes for functions in session.c */

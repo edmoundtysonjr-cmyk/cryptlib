@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					  cryptlib Elgamal Encryption Routines					*
-*						Copyright Peter Gutmann 1997-2019					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -376,8 +376,8 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	BIGNUM *r = &pkcInfo->tmp3, *s = &pkcInfo->dlpTmp1;
 	BIGNUM *phi_p = &pkcInfo->dlpTmp2;
 	const int length = bitsToBytes( pkcInfo->keySizeBits );
-	LOOP_INDEX i, bnStatus = BN_STATUS;
-	int status;
+	int bnStatus = BN_STATUS, status;
+	LOOP_INDEX i;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( dlpParams, sizeof( DLP_PARAMS ) ) );
@@ -520,7 +520,7 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
 	DLP_PARAMS *dlpParams = ( DLP_PARAMS * ) buffer;
 	const BIGNUM *x = &pkcInfo->dlpParam_x;
-	BIGNUM *p = &pkcInfo->dlpParam_p;
+	const BIGNUM *p = &pkcInfo->dlpParam_p;
 	BIGNUM *r = &pkcInfo->tmp1, *s = &pkcInfo->tmp2, *tmp = &pkcInfo->tmp3;
 	const int length = bitsToBytes( pkcInfo->keySizeBits );
 	int offset, dummy, bnStatus = BN_STATUS, status;
@@ -695,11 +695,7 @@ static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			  keySizeBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
 
 	status = generateDLPkey( contextInfoPtr, keySizeBits );
-	if( cryptStatusOK( status ) &&
-#ifndef USE_FIPS140
-		TEST_FLAG( contextInfoPtr->flags, 
-				   CONTEXT_FLAG_SIDECHANNELPROTECTION ) &&
-#endif /* USE_FIPS140 */
+	if( cryptStatusOK( status ) && \
 		!pairwiseConsistencyTest( contextInfoPtr, TRUE ) )
 		{
 		DEBUG_DIAG(( "Consistency check of freshly-generated Elgamal key "

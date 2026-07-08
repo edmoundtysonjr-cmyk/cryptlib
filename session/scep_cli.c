@@ -990,7 +990,7 @@ static int createScepCert( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int completeScepCertRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
-	const ATTRIBUTE_LIST *attributeListPtr = \
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_PASSWORD );
 	MESSAGE_DATA msgData;
 #ifdef USE_ERRMSGS
@@ -1189,7 +1189,7 @@ static int createScepRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	clearErrorInfo( &localErrorInfo );
 	if( protocolInfo->caSignOnlyKey )
 		{
-		const ATTRIBUTE_LIST *attributeListPtr = \
+		const SESSION_ATTRIBUTE_LIST *attributeListPtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_PASSWORD );
 
 		REQUIRES( attributeListPtr != NULL );
@@ -1397,7 +1397,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int checkScepResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr, 
 							  INOUT_PTR SCEP_PROTOCOL_INFO *protocolInfo )
 	{
-	const ATTRIBUTE_LIST *userNamePtr = \
+	const SESSION_ATTRIBUTE_LIST *userNamePtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_USERNAME );
 	CRYPT_CERTIFICATE iCmsAttributes;
 	MESSAGE_CREATEOBJECT_INFO createInfo;
@@ -1540,7 +1540,7 @@ static int checkScepResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   password */
 	if( protocolInfo->clientSignOnlyKey )
 		{
-		const ATTRIBUTE_LIST *attributeListPtr = \
+		const SESSION_ATTRIBUTE_LIST *attributeListPtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_PASSWORD );
 
 		REQUIRES( attributeListPtr != NULL );

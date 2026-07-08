@@ -59,6 +59,9 @@ int adjustPKCS1Data( OUT_BUFFER_FIXED( outDataMaxLen ) BYTE *outData,
 	REQUIRES( keySize >= MIN_PKCSIZE && keySize <= CRYPT_MAX_PKCSIZE );
 	REQUIRES( outData != inData );
 
+	/* Clear return value */
+	memset( outData, 0, min( 16, outDataMaxLen ) );
+
 	/* Make sure that the result will fit in the output buffer.  This has 
 	   already been checked by the kernel mechanism ACL and by the 
 	   REQUIRES() predicate above but we make the check explicit here */
@@ -158,14 +161,17 @@ int mgf1( OUT_BUFFER_FIXED( maskLen ) void *mask,
 	assert( isWritePtrDynamic( mask, maskLen ) );
 	assert( isReadPtrDynamic( seed, seedLen ) );
 
-	REQUIRES( maskLen >= 20 && maskLen <= CRYPT_MAX_PKCSIZE );
-	REQUIRES( seedLen >= 20 && seedLen <= CRYPT_MAX_PKCSIZE );
+	REQUIRES( maskLen >= MIN_HASHSIZE && maskLen <= CRYPT_MAX_PKCSIZE );
+	REQUIRES( seedLen >= MIN_HASHSIZE && seedLen <= CRYPT_MAX_PKCSIZE );
 	REQUIRES( isHashAlgo( hashAlgo ) );
 	REQUIRES( ( hashParam == 0 ) || \
 			  ( hashParam >= MIN_HASHSIZE && \
 				hashParam <= CRYPT_MAX_HASHSIZE ) );
 
-	getHashParameters( hashAlgo, hashParam, &hashFunction, &hashSize );
+	/* Clear return value */
+	memset( mask, 0, min( 16, maskLen ) );
+
+	getHashParameters( hashAlgo, hashParam, &hashFunction, &hashSize, NULL );
 
 	/* Set up the block counter buffer.  This will never have more than the
 	   last few bits set (8 bits = 5120 bytes of mask for the smallest hash,

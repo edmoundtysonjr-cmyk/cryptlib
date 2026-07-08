@@ -613,7 +613,8 @@ static int readResponseHeader( INOUT_PTR STREAM *stream,
 		}
 	ENSURES( LOOP_BOUND_OK );
 
-	/* We used up our maximum number of retries, bail out */
+	/* We used up our maximum number of retries, bail out.  The count is 
+	   zero-based so "more than x" is the correct text */
 	retExt( CRYPT_ERROR_READ,
 			( CRYPT_ERROR_READ, NETSTREAM_ERRINFO, 
 			  "Encountered more than %d HTTP retry/redirect requests", 
@@ -677,13 +678,16 @@ static int readFunction( INOUT_PTR STREAM *stream,
 		{
 		status = readRequestHeader( stream, headerBuffer, HTTP_LINEBUF_SIZE,
 									httpDataInfo, &flags );
+		if( cryptStatusError( status ) )
+			return( status );
 		}
 	else
 		{
 		status = readResponseHeader( stream, headerBuffer, HTTP_LINEBUF_SIZE,
 									 httpDataInfo, &flags );
-		if( cryptStatusOK( status ) && \
-			httpDataInfo->bytesAvail > httpDataInfo->bufSize )
+		if( cryptStatusError( status ) )
+			return( status );
+		if( httpDataInfo->bytesAvail > httpDataInfo->bufSize )
 			{
 			void *newBuffer;
 
@@ -711,8 +715,6 @@ static int readFunction( INOUT_PTR STREAM *stream,
 			httpDataInfo->bufferResize = FALSE;
 			}
 		}
-	if( cryptStatusError( status ) )
-		return( status );
 	ENSURES( httpDataInfo->bytesAvail <= httpDataInfo->bufSize );
 
 	REQUIRES( !TEST_FLAG( netStream->nFlags, STREAM_NFLAG_ISSERVER ) || \

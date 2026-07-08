@@ -101,7 +101,7 @@ int initServerAuthentMAC( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							  KEYMGMT_ITEM_PKIUSER );
 	if( cryptStatusError( status ) )
 		{
-		const ATTRIBUTE_LIST *userNamePtr = \
+		const SESSION_ATTRIBUTE_LIST *userNamePtr = \
 					findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_USERNAME );
 
 		protocolInfo->pkiFailInfo = CMPFAILINFO_SIGNERNOTTRUSTED;
@@ -420,7 +420,7 @@ static int serverTransact( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	MESSAGE_KEYMGMT_INFO setkeyInfo;
 	STREAM stream;
 	CMP_PROTOCOL_INFO protocolInfo;
-	const ATTRIBUTE_LIST *userNamePtr;
+	const SESSION_ATTRIBUTE_LIST *userNamePtr;
 #ifdef USE_ERRMSGS
 	char certName[ CRYPT_MAX_TEXTSIZE + 8 ];
 #endif /* USE_ERRMSGS */
@@ -689,7 +689,16 @@ static int serverTransact( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 									  IMESSAGE_GETATTRIBUTE, &value,
 									  CRYPT_IATTRIBUTE_CERTHASHALGO );
 			if( cryptStatusOK( status ) )
+				{
+				/* In theory on the error path here we'd have to perform a
+				   CRYPT_CERTACTION_CERT_CREATION_DROP on the newly-created
+				   certificate (see the code a bit further down), however 
+				   this is handling a should-never-occur condition since an 
+				   attribute read on a freshly-created certificate shouldn't 
+				   fail, and it'll be cleaned up on the next 
+				   CRYPT_CERTACTION_CLEANUP in any case */
 				protocolInfo.confHashAlgo = value;
+				}
 			}
 		}
 	else

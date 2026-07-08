@@ -382,7 +382,7 @@ int getContextAttributeS( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			return( attributeCopy( msgData, contextInfoPtr->ctxPKC->keyID,
 								   KEYID_SIZE ) );
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS 
 		case CRYPT_IATTRIBUTE_KEYID_PGP2:
 			REQUIRES( contextType == CONTEXT_PKC );
 
@@ -400,7 +400,7 @@ int getContextAttributeS( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				return( CRYPT_ERROR_NOTFOUND );
 			return( attributeCopy( msgData, contextInfoPtr->ctxPKC->openPgpKeyID,
 								   PGP_KEYID_SIZE ) );
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 		case CRYPT_IATTRIBUTE_KEY_SPKI:
 		case CRYPT_IATTRIBUTE_KEY_SPKI_PARTIAL:
@@ -447,14 +447,14 @@ int getContextAttributeS( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			return( status );
 			}
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS 
 		case CRYPT_IATTRIBUTE_PGPVALIDITY:
 			REQUIRES( contextType == CONTEXT_PKC );
 
 			*( ( time_t * ) msgData->data ) = \
 									contextInfoPtr->ctxPKC->pgpCreationTime;
 			return( CRYPT_OK );
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 		case CRYPT_IATTRIBUTE_DEVICESTORAGEID:
 #if defined( USE_DEVICES ) && ( defined( USE_HARDWARE ) || defined( USE_TPM ) )
@@ -1136,7 +1136,7 @@ int setContextAttributeS( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			contextInfoPtr->labelSize = dataLength;
 			return( CRYPT_OK );
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS 
 		case CRYPT_IATTRIBUTE_KEYID_OPENPGP:
 			REQUIRES( contextType == CONTEXT_PKC );
 			REQUIRES( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_RSA || \
@@ -1163,7 +1163,7 @@ int setContextAttributeS( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 						  PKCINFO_FLAG_PGPKEYID_SET );
 				}
 			return( CRYPT_OK );
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 		case CRYPT_IATTRIBUTE_KEY_SPKI:
 		case CRYPT_IATTRIBUTE_KEY_SPKI_PARTIAL:
@@ -1177,13 +1177,13 @@ int setContextAttributeS( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			return( setEncodedKey( contextInfoPtr, attribute, data, 
 								   dataLength ) );
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS 
 		case CRYPT_IATTRIBUTE_PGPVALIDITY:
 			REQUIRES( contextType == CONTEXT_PKC );
 
 			contextInfoPtr->ctxPKC->pgpCreationTime = *( ( time_t * ) data );
 			return( CRYPT_OK );
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 		case CRYPT_IATTRIBUTE_DEVICESTORAGEID:
 #if defined( USE_DEVICES ) && ( defined( USE_HARDWARE ) || defined( USE_TPM ) )

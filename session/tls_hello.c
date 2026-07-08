@@ -1220,8 +1220,9 @@ int processHelloTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{
 		int extensionLength;
 		
-		/* For what's left to be valid extension data we need a length field 
-		   (UINT16_SIZE) and a minimum-length extension (1 + UINT16_SIZE):
+		/* For what's left to be valid extension data we need an extension 
+		   list length field (UINT16_SIZE) and a minimum-length extension 
+		   (UINT16_SIZE + UINT16_SIZE, type + length):
 		   
 					stell()	 stell()  stell()
 						|		|		|
@@ -1235,9 +1236,8 @@ int processHelloTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   because there isn't room for at least a minimal-length extension,
 		   and the third isn't valid because the data present has gone past
 		   the end of the claimed data present */
-		REQUIRES( !checkOverflowSub( endPos, 
-									 UINT16_SIZE + 1 + UINT16_SIZE ) );
-		if( stell( stream ) > endPos - ( UINT16_SIZE + 1 + UINT16_SIZE ) )
+		REQUIRES( !checkOverflowSub( endPos, UINT16_SIZE * 3 ) );
+		if( stell( stream ) > endPos - ( UINT16_SIZE * 3 ) )
 			{
 			retExt( CRYPT_ERROR_BADDATA,
 					( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 

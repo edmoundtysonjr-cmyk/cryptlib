@@ -124,7 +124,7 @@ int radiusMD5MacBuffer( OUT_BUFFER_FIXED( 16 ) BYTE *macValue,
 	REQUIRES( isShortIntegerRangeNZ( dataLength ) );
 	REQUIRES( rangeCheck( keyDataLength, 1, HMAC_BLOCK_SIZE ) );
 
-	getHashParameters( CRYPT_ALGO_MD5, 0, &hashFunction, &hashSize );
+	getHashParameters( CRYPT_ALGO_MD5, 0, &hashFunction, &hashSize, NULL );
 
 	/* Perform the inner hash */
 	memset( hmacBlockBuffer, 0, HMAC_BLOCK_SIZE );
@@ -190,7 +190,7 @@ int radiusMD5HashBuffer( OUT_BUFFER_FIXED( 16 ) BYTE *hashValue,
 	REQUIRES( isShortIntegerRangeNZ( dataLength ) );
 	REQUIRES( isShortIntegerRangeNZ( keyDataLength ) );
 
-	getHashParameters( CRYPT_ALGO_MD5, 0, &hashFunction, &hashSize );
+	getHashParameters( CRYPT_ALGO_MD5, 0, &hashFunction, &hashSize, NULL );
 
 	/* Hash the packet data followed by the password.  Note that the hash 
 	   value is written back into the data block so we can't clear it like 
@@ -568,15 +568,15 @@ static int activateEAPClient( INOUT_PTR STREAM *stream,
 	if( cryptStatusError( status ) )
 		return( status );
 
-	/* If we've been asked to send an RFC 5997 RADIUS ping, just do that and
-	   exit */
+	/* If we've been asked to send an RFC 5997 RADIUS ping, which is just an 
+	   empty (zero-length payload) message, just do that and exit */
 	if( eapInfo->userNameLength == 6 && \
 		!memcmp( eapInfo->userName, "[ping]", 6 ) )
 		{
 		DEBUG_PRINT(( "Sending RFC 5997 RADIUS ping to server.\n" ));
 		status = writeRADIUSPing( stream, eapInfo );
 		if( cryptStatusOK( status ) )
-			status = readRADIUSPingResponse( stream, eapInfo );
+			status = readRADIUSMessage( stream, eapInfo, FALSE );
 		return( cryptStatusError( status ) ? status : OK_SPECIAL );
 		}
 

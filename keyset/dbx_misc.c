@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						  cryptlib DBMS Misc Interface						*
-*						Copyright Peter Gutmann 1996-2007					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -223,7 +223,7 @@ int makeKeyID( OUT_BUFFER( keyIdMaxLen, *keyIdLen ) char *keyID,
 
 	assert( isWritePtrDynamic( keyID, keyIdMaxLen ) );
 	assert( isWritePtr( keyIdLen, sizeof( int ) ) );
-	assert( isReadPtrDynamic( keyID, idValueLength ) );
+	assert( isReadPtrDynamic( idValue, idValueLength ) );
 
 	REQUIRES( isShortIntegerRangeMin( keyIdMaxLen, 
 									  ENCODED_DBXKEYID_SIZE ) );

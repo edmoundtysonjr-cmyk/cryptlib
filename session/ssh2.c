@@ -226,7 +226,7 @@ int checkKeyexValueLength( const SSH_HANDSHAKE_INFO *handshakeInfo,
    documenting the message flow */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN checkStrictKEX( IN_BUFFER( packetTraceLen ) BYTE *packetTrace,
+BOOLEAN checkStrictKEX( IN_BUFFER( packetTraceLen ) const BYTE *packetTrace,
 						IN_LENGTH_SHORT const int packetTraceLen,
 						IN_BOOL const BOOLEAN isServer )
 	{
@@ -464,14 +464,15 @@ int writeExtensionsSSH( INOUT_PTR STREAM *stream )
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int createPreauthChallengeResponse( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
-									const ATTRIBUTE_LIST *attributeListPtr )
+									const SESSION_ATTRIBUTE_LIST *attributeListPtr )
 	{
 	MESSAGE_DATA msgData;
 	BYTE nonce[ SSH_PREAUTH_NONCE_SIZE + 8 ];
 	int status;
 
 	assert( isWritePtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
-	assert( isReadPtr( attributeListPtr, sizeof( ATTRIBUTE_LIST ) ) );
+	assert( isReadPtr( attributeListPtr, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES( sanityCheckSSHHandshakeInfo( handshakeInfo ) );
 
@@ -497,7 +498,7 @@ int createPreauthChallengeResponse( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int createPreauthResponse( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
-						   const ATTRIBUTE_LIST *attributeListPtr )
+						   const SESSION_ATTRIBUTE_LIST *attributeListPtr )
 	{
 	HASH_FUNCTION_ATOMIC hashFunctionAtomic;
 	MAC_FUNCTION_ATOMIC macFunctionAtomic;
@@ -513,7 +514,8 @@ int createPreauthResponse( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
 				   "SSH_PREAUTH_NONCE_SIZE larger than SHA-256 hash" );
 
 	assert( isWritePtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
-	assert( isReadPtr( attributeListPtr, sizeof( ATTRIBUTE_LIST ) ) );
+	assert( isReadPtr( attributeListPtr, \
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES( sanityCheckSSHHandshakeInfo( handshakeInfo ) );
 
@@ -994,9 +996,9 @@ static int processBodyFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	sshInfo->readSeqNo++;
 	ENSURES( isBufsizeRange( payloadLength ) && \
-			 payloadLength < sessionInfoPtr->pendingPacketLength + dataLength );
-			 /* pendingPacketLength check must be '<' rather than '<=' 
-			    because of the stripped padding */
+			 payloadLength < sessionInfoPtr->pendingPacketLength );
+			 /* payloadLength must always be < pendingPacketLength because 
+			    of the stripped padding */
 	DEBUG_PRINT(( "Read %s (%d) packet, length %d.\n", 
 				  getSSHPacketName( sshInfo->packetType ), 
 				  sshInfo->packetType, payloadLength ));

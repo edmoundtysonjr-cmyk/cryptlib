@@ -31,7 +31,8 @@
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
 static int getPadSize( IN_HANDLE const CRYPT_CONTEXT iExportContext,
-					   IN_RANGE( MIN_KEYSIZE, CRYPT_MAX_KEYSIZE ) \
+					   IN_RANGE( CMS_KEYBLOCK_HEADERSIZE + MIN_KEYSIZE, \
+								 CMS_KEYBLOCK_HEADERSIZE + CRYPT_MAX_KEYSIZE ) \
 						const int payloadSize, 
 					   OUT_LENGTH_SHORT_Z int *padSize )
 	{
@@ -40,8 +41,8 @@ static int getPadSize( IN_HANDLE const CRYPT_CONTEXT iExportContext,
 	assert( isWritePtr( padSize, sizeof( int ) ) );
 
 	REQUIRES( isHandleRangeValid( iExportContext ) );
-	REQUIRES( payloadSize >= MIN_KEYSIZE && \
-			  payloadSize <= CRYPT_MAX_KEYSIZE );
+	REQUIRES( payloadSize >= CMS_KEYBLOCK_HEADERSIZE + MIN_KEYSIZE && \
+			  payloadSize <= CMS_KEYBLOCK_HEADERSIZE + CRYPT_MAX_KEYSIZE );
 
 	/* Clear return value */
 	*padSize = 0;
@@ -58,8 +59,8 @@ static int getPadSize( IN_HANDLE const CRYPT_CONTEXT iExportContext,
 	   minimum size of two blocks.  Unlike PKCS #5 padding, the total may be 
 	   zero.  This can't overflow because of the check earlier but we repeat it 
 	   here to document that fact  */
-	REQUIRES( payloadSize >= MIN_KEYSIZE && \
-			  payloadSize <= CRYPT_MAX_KEYSIZE );
+	REQUIRES( payloadSize >= CMS_KEYBLOCK_HEADERSIZE + MIN_KEYSIZE && \
+			  payloadSize <= CMS_KEYBLOCK_HEADERSIZE + CRYPT_MAX_KEYSIZE );
 	totalSize = roundUp( payloadSize, blockSize );
 	REQUIRES( !checkOverflowMul( blockSize, 2 ) );
 	if( totalSize < blockSize * 2 )

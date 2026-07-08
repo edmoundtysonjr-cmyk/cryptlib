@@ -79,7 +79,7 @@ BOOLEAN sanityCheckSSHHandshakeInfo( IN_PTR \
 	{
 	/* Check exchange hash information */
 	if( handshakeInfo->sessionIDlength < 0 || \
-		handshakeInfo->sessionIDlength >CRYPT_MAX_HASHSIZE || \
+		handshakeInfo->sessionIDlength > CRYPT_MAX_HASHSIZE || \
 		!( handshakeInfo->exchangeHashAlgo == CRYPT_ALGO_NONE || \
 		   isHashAlgo( handshakeInfo->exchangeHashAlgo ) ) || \
 		!( handshakeInfo->iExchangeHashContext == CRYPT_ERROR || \
@@ -576,7 +576,7 @@ static int getAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	if( type == CRYPT_SESSINFO_SSH_PREAUTH )
 		{
-		const ATTRIBUTE_LIST *attributeListPtr;
+		const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 
 		attributeListPtr = findSessionInfo( sessionInfoPtr, 
 											CRYPT_SESSINFO_SSH_PREAUTH );
@@ -702,7 +702,7 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-static int checkAttributeFunction( SESSION_INFO *sessionInfoPtr,
+static int checkAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								   IN_PTR const void *data,
 								   IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE type )
 	{

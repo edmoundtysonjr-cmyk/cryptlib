@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						cryptlib LDAP Mapping Routines						*
-*					  Copyright Peter Gutmann 1998-2004						*
+*					  Copyright Peter Gutmann 1998-2025						*
 *																			*
 ****************************************************************************/
 
@@ -46,9 +46,9 @@
 
 /* #define USE_LDAP_WRITE */
 
-/* LDAP requires us to set up complicated structures to handle DN's.  The
+/* LDAP requires us to set up complicated structures to handle DNs.  The
    following values define the upper limit for DN string data and the
-   maximum number of attributes we write to a directory */
+   maximum number of attributes that we write to a directory */
 
 #define MAX_DN_STRINGSIZE		1024
 #define MAX_LDAP_ATTRIBUTES		20
@@ -81,7 +81,7 @@
   #include <sys/time.h>				/* For 'struct timeval' */
   #ifdef LDAP_API
 	/* Some OpenLDAP versions have their own LDAP_API macro which is 
-	   incompatible with the usage here, so we clear it before we define our
+	   incompatible with the usage here so we clear it before we define our
 	   own */
 	#undef LDAP_API
   #endif /* LDAP_API */
@@ -924,11 +924,11 @@ static int getItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 			{
 #ifdef USE_ERRMSGS
 			char certDataText[ CRYPT_MAX_TEXTSIZE + 8 ];
-#endif /* USE_ERRMSGS */
 
 			formatHexData( certDataText, CRYPT_MAX_TEXTSIZE, 
 						   valuePtrs[ 0 ]->bv_val, 
 						   valuePtrs[ 0 ]->bv_len );
+#endif /* USE_ERRMSGS */
 			retExt( status,
 					( status, KEYSET_ERRINFO,
 					  "Object '%s' sent from server doesn't appear to be a "
@@ -1203,10 +1203,17 @@ static int addCert( KEYSET_INFO *keysetInfoPtr,
 									 MAX_LDAP_ATTRIBUTES + 1 ) );
 
 		if( ldapMod[ ldapModIndex ]->mod_op & LDAP_MOD_BVALUES )
+			{
 			clFree( "addCert", ldapMod[ ldapModIndex ]->mod_bvalues );
+			ldapMod[ ldapModIndex ]->mod_bvalues = NULL;
+			}
 		else
+			{
 			clFree( "addCert", ldapMod[ ldapModIndex ]->mod_values );
+			ldapMod[ ldapModIndex ]->mod_values = NULL;
+			}
 		clFree( "addCert", ldapMod[ ldapModIndex ] );
+		ldapMod[ ldapModIndex ] = NULL;
 		}
 	ENSURES( LOOP_BOUND_OK );
 	if( ldapModIndex >= MAX_LDAP_ATTRIBUTES )

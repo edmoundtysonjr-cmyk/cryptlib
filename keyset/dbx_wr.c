@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							cryptlib DBMS Interface							*
-*						Copyright Peter Gutmann 1996-2020					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -185,6 +185,8 @@ static int checkReplacementCert( INOUT_PTR DBMS_INFO *dbmsInfo,
 	if( cryptStatusError( status ) || \
 		memcmp( newCertNameID, existingCertNameID, keyIDlength ) )
 		{
+		krnlSendNotifier( iExistingCert, IMESSAGE_DESTROY );
+
 		/* We're trying to add a certificate with the same key but a 
 		   different DN, this shouldn't happen */
 		DEBUG_DIAG(( "Attempt to add certificate with the same key as an "

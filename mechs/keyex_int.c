@@ -75,7 +75,7 @@ int exportConventionalKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 	STREAM stream;
 	BYTE buffer[ CRYPT_MAX_KEYSIZE + 16 + 8 ];
 	CFI_CHECK_TYPE CFI_CHECK_VALUE = CFI_CHECK_INIT;
-	int keySize, ivSize, status;
+	int ivSize, status;
 
 	assert( ( encryptedKey == NULL && encryptedKeyMaxLength == 0 ) || \
 			isWritePtrDynamic( encryptedKey, encryptedKeyMaxLength ) );
@@ -125,10 +125,6 @@ int exportConventionalKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 #endif /* USE_PGP */
 
 	/* Get the export parameters */
-	status = krnlSendMessage( iSessionKeyContext, IMESSAGE_GETATTRIBUTE,
-							  &keySize, CRYPT_CTXINFO_KEYSIZE );
-	if( cryptStatusError( status ) )
-		return( cryptArgError( status ) ? CRYPT_ARGERROR_NUM1 : status );
 	if( cryptStatusError( krnlSendMessage( iExportContext,
 										   IMESSAGE_GETATTRIBUTE, &ivSize,
 										   CRYPT_CTXINFO_IVSIZE ) ) )
@@ -143,7 +139,7 @@ int exportConventionalKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 	   of the two evils is to load the IV here and assume that anyone 
 	   loading the IV themselves will read the docs, which warn about the 
 	   side-effects of exporting a key.  This is borne out by the fact that
-	   in 20+ years of use no-one has complained about this.
+	   in 30-ish years of use no-one has complained about this.
 
 	   Note that we always load a new IV when we export a key because the
 	   caller may be using the context to exchange multiple keys.  Since each
@@ -259,7 +255,9 @@ int exportPublicKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 	STREAM stream;
 	const BOOLEAN requiresSizeFixup = \
 				( ( keyexType == KEYEX_CMS || \
-					keyexType == KEYEX_CRYPTLIB ) && \
+				    keyexType == KEYEX_CMS_OAEP || \
+					keyexType == KEYEX_CRYPTLIB || \
+					keyexType == KEYEX_CRYPTLIB_OAEP ) && \
 				  ( encryptedKey != NULL ) ) ? TRUE : FALSE;
 	const BOOLEAN isOAEP = \
 				( keyexType == KEYEX_CMS_OAEP || \
@@ -333,7 +331,7 @@ int exportPublicKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 			return( status );
 			}
 		mechanismInfo.auxInfo = value;
-#if 0	/* Currently we always use SHA-256, since OAEP isn't used for 
+#if 0	/* Currently we always use SHA-256 since OAEP isn't used for 
 		   anything.  If it's necessary to use other variants then it'll
 		   require adding a new field, auxInfoParam, to MECHANISM_WRAP_INFO
 		   to support this */
@@ -612,6 +610,9 @@ int importPublicKey( IN_BUFFER( encryptedKeyLength ) const void *encryptedKey,
 	switch( keyexType )
 		{
 		case KEYEX_CMS:
+			ENSURES( boundsCheck( queryInfo.iAndSStart, 
+								  queryInfo.iAndSLength,
+								  encryptedKeyLength ) );
 			setMessageData( &msgData, \
 					( BYTE * ) encryptedKey + queryInfo.iAndSStart, \
 					queryInfo.iAndSLength );
@@ -671,6 +672,8 @@ int importPublicKey( IN_BUFFER( encryptedKeyLength ) const void *encryptedKey,
 				( queryInfo.cryptAlgoEncoding == ALGOID_ENCODING_OAEP ) ? \
 				TRUE : FALSE;
 
+		ENSURES( boundsCheck( queryInfo.dataStart, queryInfo.dataLength,
+							  encryptedKeyLength ) );
 		setMechanismWrapInfo( &mechanismInfo,
 							  ( BYTE * ) encryptedKey + queryInfo.dataStart, 
 							  queryInfo.dataLength, NULL, 0, 
@@ -694,6 +697,8 @@ int importPublicKey( IN_BUFFER( encryptedKeyLength ) const void *encryptedKey,
 		   can't import the wrapped key into a context via the standard key
 		   import functions but instead have to create the context as part
 		   of the unwrap process */
+		ENSURES( boundsCheck( queryInfo.dataStart, queryInfo.dataLength,
+							  encryptedKeyLength ) );
 		setMechanismWrapInfo( &mechanismInfo, 
 							  ( BYTE * ) encryptedKey + queryInfo.dataStart,
 							  queryInfo.dataLength, NULL, 0, 

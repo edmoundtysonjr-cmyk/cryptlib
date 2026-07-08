@@ -256,7 +256,10 @@ void endContextBignums( INOUT_PTR PKC_INFO *pkcInfo,
 	if( isDummyContext )
 		{
 		if( pkcInfo->publicKeyInfo != NULL )
+			{
 			clFree( "endContextBignums", pkcInfo->publicKeyInfo );
+			pkcInfo->publicKeyInfo = NULL;
+			}
 		return;
 		}
 
@@ -310,7 +313,10 @@ void endContextBignums( INOUT_PTR PKC_INFO *pkcInfo,
 			retIntError_Void();
 		}
 	if( pkcInfo->publicKeyInfo != NULL )
+		{
 		clFree( "endContextBignums", pkcInfo->publicKeyInfo );
+		pkcInfo->publicKeyInfo = NULL;
+		}
 	}
 
 /****************************************************************************

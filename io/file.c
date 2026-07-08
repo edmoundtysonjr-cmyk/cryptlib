@@ -123,10 +123,10 @@ static void initFileStream( OUT_PTR STREAM *stream,
 		INIT_FLAGS( stream->flags, STREAM_FLAG_NONE );
 	}
 
-/* Append a filename to a path and add the suffix.  If we're on an EBCDIC 
-   system we need two versions of this function, a standard ASCII one for
-   internal-use paths and an EBCDIC one for use with path components coming
-   from the OS like the location of $HOME */
+/* Append a filename to a path and add the suffix and null terminator.  If 
+   we're on an EBCDIC system then we need two versions of this function, a 
+   standard ASCII one for internal-use paths and an EBCDIC one for use with 
+   path components coming from the OS like the location of $HOME */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 4 ) ) \
 static int appendFilename( INOUT_BUFFER( pathMaxLen, *pathLen ) char *path, 
@@ -155,8 +155,8 @@ static int appendFilename( INOUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Clear return value */
 	*pathLen = 0;
 
-	/* If we're using a fixed filename it's quite simple, just append it
-	   and we're done (the +1 is for the null terminator) */
+	/* If we're using a fixed filename then it's quite simple, just append 
+	   it and we're done (the +1 is for the null terminator) */
 	if( option == BUILDPATH_RNDSEEDFILE )
 		{
 		if( partialPathLen + 12 + 1 > pathMaxLen )
@@ -1879,6 +1879,7 @@ int sFileOpen( OUT_PTR STREAM *stream,
 		if( status != 1 )
 			{
 			clFree( "sFileOpen", stream->buffer );
+			stream->buffer = NULL;
 			return( CRYPT_ERROR_READ );
 			}
 		return( CRYPT_OK );
@@ -1911,6 +1912,7 @@ int sFileClose( INOUT_PTR STREAM *stream )
 	REQUIRES( isIntegerRangeNZ( stream->bufSize ) ); 
 	zeroise( stream->buffer, stream->bufSize );
 	clFree( "sFileClose", stream->buffer );
+	stream->buffer = NULL;
 	zeroise( stream, sizeof( STREAM ) );
 
 	return( CRYPT_OK );

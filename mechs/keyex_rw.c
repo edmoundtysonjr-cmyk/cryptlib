@@ -946,7 +946,7 @@ static int readCryptlibKeytrans( INOUT_PTR STREAM *stream,
 
 	/* Finally, read the start of the encrypted key */
 	status = readOctetStringHole( stream, &queryInfo->dataLength, 
-								  MIN_KEYSIZE, DEFAULT_TAG );
+								  MIN_PKCSIZE, DEFAULT_TAG );
 	if( cryptStatusOK( status ) )
 		{
 		status = streamOffsetFromPosition( stream, startPos, 

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							Message ACLs Handlers							*
-*						Copyright Peter Gutmann 1997-2019					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -921,8 +921,6 @@ static BOOLEAN createAclConsistent( IN_PTR const CREATE_ACL *createACL,
 			return( FALSE );
 		}
 	ENSURES_B( LOOP_BOUND_OK );
-	if( i >= paramACLSize )
-		return( FALSE );
 
 	/* If there are no exceptions present, we're done */
 	if( createACL->exceptions[ 0 ] == OBJECT_TYPE_NONE && \
@@ -982,8 +980,6 @@ static BOOLEAN createAclConsistent( IN_PTR const CREATE_ACL *createACL,
 			}
 		}
 	ENSURES_B( LOOP_BOUND_OK );
-	if( i >= exceptionACLSize )
-		return( FALSE );
 	if( subType1 != 0 || subType2 != 0 )
 		return( FALSE );
 
@@ -1055,11 +1051,12 @@ int initMessageACL( void )
 			ENSURES( LOOP_INVARIANT_SMALL_ALT( j, 0, paramACLSize - 1 ) );
 
 			if( !paramAclConsistent( &paramACL[ j ] ) )
-				return( FALSE );
+				{
+				DEBUG_DIAG(( "Parameter ACLs inconsistent" ));
+				retIntError();
+				}
 			}
 		ENSURES( LOOP_BOUND_OK_ALT );
-		if( i >= paramACLSize )
-			return( FALSE );
 		}
 	ENSURES( LOOP_BOUND_OK );
 	ENSURES( i < FAILSAFE_ARRAYSIZE( compareACLTbl, COMPARE_ACL ) );

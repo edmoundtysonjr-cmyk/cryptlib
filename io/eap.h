@@ -484,9 +484,6 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int readRADIUSMessage( INOUT_PTR STREAM *stream,
 					   INOUT_PTR EAP_INFO *eapInfo,
 					   IN_BOOL const BOOLEAN isRequest );
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-int readRADIUSPingResponse( INOUT_PTR STREAM *stream,
-							INOUT_PTR EAP_INFO *eapInfo );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 5, 6 ) ) \
 int processRADIUSTLVs( INOUT_PTR STREAM *stream,
 					   INOUT_PTR EAP_INFO *eapInfo,

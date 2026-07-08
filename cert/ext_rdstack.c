@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *		Certificate Attribute SET/SET OF/SEQUENCE/SEQUENCE OF Routines		*
-*						 Copyright Peter Gutmann 1996-2020					*
+*						 Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -45,12 +45,12 @@
 
 static const SETOF_STATE_INFO stackPos0Data = {
 	NULL, 0, MAX_INTLENGTH_SHORT, SETOF_FLAG_NONE, 
-	CRYPT_ATTRIBUTE_NONE, SETOF_FLAG_NONE
+	CRYPT_ATTRIBUTE_NONE, ATTR_FLAG_NONE
 	};
 
 static const SETOF_STATE_INFO stackPosEmptyData = {
 	NULL, 0, 0, SETOF_FLAG_NONE, 
-	CRYPT_ATTRIBUTE_NONE, SETOF_FLAG_NONE
+	CRYPT_ATTRIBUTE_NONE, ATTR_FLAG_NONE
 	};
 
 /****************************************************************************
@@ -277,6 +277,7 @@ void setofSetNonemptyOpt( INOUT_PTR SETOF_STATE_INFO *setofInfoPtr,
 						  const IN_PTR SETOF_STACK *setofStack )
 	{
 	assert( isWritePtr( setofInfoPtr, sizeof( SETOF_STATE_INFO ) ) );
+	assert( isReadPtr( setofStack , sizeof( SETOF_STACK ) ) );
 
 	REQUIRES_V( sanityCheckSetofStateInfo( setofInfoPtr ) );
 
@@ -446,7 +447,7 @@ int setofBegin( INOUT_PTR SETOF_STACK *setofStack,
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 int setofCheckRestart( IN_PTR const STREAM *stream, 
 					   INOUT_PTR SETOF_STATE_INFO *setofInfoPtr,
-					   OUT_PTR_PTR \
+					   INOUT_PTR_PTR \
 							const ATTRIBUTE_INFO **attributeInfoPtrPtr )
 	{
 	const ATTRIBUTE_INFO *attributeInfoPtr;
@@ -496,7 +497,7 @@ int setofCheckRestart( IN_PTR const STREAM *stream,
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 int setofCheckEnd( IN_PTR const STREAM *stream, 
 				   INOUT_PTR SETOF_STACK *setofStack,
-				   INOUT_PTR const ATTRIBUTE_INFO **attributeInfoPtrPtr )
+				   INOUT_PTR_PTR const ATTRIBUTE_INFO **attributeInfoPtrPtr )
 	{
 	const ATTRIBUTE_INFO *oldAttributeInfoPtr = *attributeInfoPtrPtr;
 	const ATTRIBUTE_INFO *attributeInfoPtr = *attributeInfoPtrPtr;
@@ -534,7 +535,9 @@ int setofCheckEnd( IN_PTR const STREAM *stream,
 					currentPos >= setofInfoPtr->endPos, 
 					SETOF_STATE_STACKSIZE )
 		{
+#if 0	/* 18/5/26 See comment further down */
 		const int flags = setofInfoPtr->flags;
+#endif /* 0 */
 
 		ENSURES( LOOP_INVARIANT_EXT_GENERIC( SETOF_STATE_STACKSIZE ) );
 
@@ -570,6 +573,15 @@ int setofCheckEnd( IN_PTR const STREAM *stream,
 		/* If it's a pure SET/SEQUENCE rather than a SET OF/SEQUENCE OF and 
 		   there are no more elements present, go to the end of the 
 		   SET/SEQUENCE information in the decoding table */
+#if 0	/* 18/5/26 This doesn't actually do anything, the check
+				   currentPos >= setofInfoPtr->endPos is also the loop 
+				   condition, alongside !setofStackIsEmpty() which was 
+				   checked above, so we always go through another loop 
+				   iteration which sets attributeInfoPtr = 
+				   setofInfoPtr->infoStart, overwriting the value set by
+				   findItemEnd().  This also makes SETOF_FLAG_RESTARTPOINT
+				   redundant apart from its use in a postcondition in
+				   setofCheckRestart() */
 		if( !( flags & SETOF_FLAG_RESTARTPOINT ) && \
 			currentPos >= setofInfoPtr->endPos )
 			{
@@ -579,6 +591,7 @@ int setofCheckEnd( IN_PTR const STREAM *stream,
 			if( cryptStatusError( status ) )
 				return( status );
 			}
+#endif /* 0 */
 		}
 	ENSURES( LOOP_BOUND_OK );
 

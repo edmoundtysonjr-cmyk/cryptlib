@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					 cryptlib Configuration Read/Write Routines				*
-*						Copyright Peter Gutmann 1994-2024					*
+*						Copyright Peter Gutmann 1994-2025					*
 *																			*
 ****************************************************************************/
 
@@ -52,7 +52,7 @@ static int readConfigOption( INOUT_PTR STREAM *stream,
 	if( optionCode < 0 || optionCode > LAST_OPTION_INDEX )
 		{
 		/* Unknown option, ignore it */
-		DEBUG_DIAG(( "Skipping unknown configuration option %d", 
+		DEBUG_DIAG(( "Skipping unknown configuration option %ld", 
 					 optionCode ));
 		return( readUniversal( stream ) );
 		}
@@ -111,9 +111,20 @@ static int readConfigOption( INOUT_PTR STREAM *stream,
 			retIntError();
 		}
 
-	/* Set the option.  Note that we make this an external message since 
-	   the data is coming from a technically-trusted-but-we-can't-guarantee-
-	   it source.
+	/* Set the option.  In theory we should be making this an external 
+	   message since the data is coming from a technically-trusted-but-we-
+	   can't-guarantee-it source, however we can't do this because the 
+	   default user object isn't externally-accessible so any attempt to 
+	   send the option information to it via an external message will fail.
+	   
+	   In practical terms this use of an internal message shouldn't be a 
+	   problem because the options that can be set from a configuration file
+	   are treated identically for internal and external messages, so there 
+	   are no extra privileges available from the use of an internal message. 
+	   The check above for builtinOptionInfoPtr->index == CRYPT_UNUSED has 
+	   already filtered out options that can't be set, namely the read-only 
+	   cryptlib information at the start of the range and the action-
+	   triggering ones at the end of the range.
 	
 	   We don't treat a failure to set the option as a problem since the 
 	   user probably doesn't want the entire system to fail because of a bad 
@@ -122,18 +133,26 @@ static int readConfigOption( INOUT_PTR STREAM *stream,
 	if( builtinOptionInfoPtr->type == OPTION_STRING )
 		{
 		MESSAGE_DATA msgData;
+#ifndef NDEBUG
+		BYTE optionString[ CRYPT_MAX_TEXTSIZE + 8 ];
 
+		memcpy( optionString, dataPtr, min( length, CRYPT_MAX_TEXTSIZE ) );
+#endif /* !NDEBUG */
 		setMessageData( &msgData, dataPtr, length );
-		( void ) krnlSendMessage( iCryptUser, MESSAGE_SETATTRIBUTE_S, 
+		status = krnlSendMessage( iCryptUser, IMESSAGE_SETATTRIBUTE_S, 
 								  &msgData, builtinOptionInfoPtr->option );
-		DEBUG_DIAG(( "Set configuration option %d to '%s'", 
-					 builtinOptionInfoPtr->option, dataPtr ));
+		DEBUG_DIAG(( "%s configuration option %d to '%s'", 
+					 cryptStatusOK( status ) ? "Set" : "Failed to set",
+					 builtinOptionInfoPtr->option, 
+					 sanitiseString( optionString, CRYPT_MAX_TEXTSIZE, 
+									 length ) ));
 		}
 	else
 		{
-		( void ) krnlSendMessage( iCryptUser, MESSAGE_SETATTRIBUTE, 
+		status = krnlSendMessage( iCryptUser, IMESSAGE_SETATTRIBUTE, 
 								  &value, builtinOptionInfoPtr->option );
-		DEBUG_DIAG(( "Set configuration option %d to %d", 
+		DEBUG_DIAG(( "%s configuration option %d to %d", 
+					 cryptStatusOK( status ) ? "Set" : "Failed to set",
 					 builtinOptionInfoPtr->option, value ));
 		}
 	
@@ -684,10 +703,7 @@ int deleteConfig( IN_STRING const char *fileName )
 									strnlen_s( fileName, MAX_PATH_LENGTH ), 
 									BUILDPATH_GETPATH );
 	if( cryptStatusOK( status ) )
-		{
-		configFilePath[ configFilePathLen ] = '\0';
 		fileErase( configFilePath );
-		}
 	return( CRYPT_OK );
 	}
 #endif /* USE_KEYSETS */

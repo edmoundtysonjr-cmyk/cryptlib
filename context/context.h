@@ -253,13 +253,13 @@ typedef struct {
 	SAFE_FLAGS flags;				/* PKC information flags */
 	BUFFER_FIXED( KEYID_SIZE ) \
 	BYTE keyID[ KEYID_SIZE + 8 ];	/* Key ID for this key */
-#if defined( USE_PGP ) || defined( USE_PGPKEYS )
+#ifdef USE_PGPKEYS 
 	BUFFER_FIXED( PGP_KEYID_SIZE ) \
 	BYTE pgp2KeyID[ PGP_KEYID_SIZE + 8 ];/* PGP 2 key ID for this key */
 	BUFFER_FIXED( PGP_KEYID_SIZE ) \
 	BYTE openPgpKeyID[ PGP_KEYID_SIZE + 8 ];/* OpenPGP key ID for this key */
 	time_t pgpCreationTime;			/* Key creation time (for OpenPGP ID) */
-#endif /* USE_PGP || USE_PGPKEYS */
+#endif /* USE_PGPKEYS */
 
 	/* Public-key encryption keying information.  Since each algorithm has
 	   its own unique parameters, the bignums are given generic names here.
@@ -689,8 +689,9 @@ int testHash( IN_PTR const CAPABILITY_INFO *capabilityInfo,
 			  IN_BUFFER_OPT( dataLength ) const void *data, 
 			  IN_LENGTH_SHORT_Z const int dataLength, 
 			  IN_PTR const void *hashValue );
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 5, 7 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 4, 6, 8 ) ) \
 int testMAC( IN_PTR const CAPABILITY_INFO *capabilityInfo, 
+			 IN_LENGTH_HASH_Z const int macSize,
 			 IN_PTR const void *macDataStorage,
 			 IN_BUFFER( keySize ) const void *key, 
 			 IN_LENGTH_SHORT_MIN( MIN_KEYSIZE ) const int keySize, 

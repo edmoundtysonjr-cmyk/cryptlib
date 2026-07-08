@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						Certificate Attribute Read Routines					*
-*						 Copyright Peter Gutmann 1996-2020					*
+*						 Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -260,7 +260,14 @@ static int readAttributeWrapper( INOUT_PTR STREAM *stream,
    means that in order to handle any additional attributes present after the 
    ones encapsulated in the PKCS #9 extensionRequest we have to make a 
    second call to here after the main attribute-processing loop in 
-   readAttributes() has finished reading the encapsulated attributes */
+   readAttributes() has finished reading the encapsulated attributes.
+   
+   A carry-on effect from this is that the sanity bound on the maximum 
+   number of attributes that we'll accept can be reached twice, once for the
+   overall attributes and a second time for the ones inside an 
+   extensionRequest.  This isn't a problem because the sanity bound is 
+   merely to catch the loop not terminating, not to enforce a fixed total 
+   upper limit on the number of attributes */
 
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2, 3, 5, 6, 7 ) ) \
 static int readCertReqWrapper( INOUT_PTR STREAM *stream, 
@@ -332,7 +339,14 @@ static int readCertReqWrapper( INOUT_PTR STREAM *stream,
 			{
 			int length;
 
+			/* Read the attribute.  We require a nonzero length even though
+			   readAttribute() allows zero-length attributes due to them 
+			   containing all-default values because if we get a SCEP 
+			   attribute then it shouldn't be empty */
 			status = readSet( stream, &length );
+			if( cryptStatusOK( status ) && \
+				( length <= 0 || length >= MAX_ATTRIBUTE_SIZE ) )
+				status = CRYPT_ERROR_BADDATA;
 			if( cryptStatusOK( status ) )
 				{
 				status = readAttribute( stream, attributePtrPtr,
@@ -645,12 +659,20 @@ int readAttributes( INOUT_PTR STREAM *stream,
 				{
 				/* If there's a duplicate attribute present, set error
 				   information for it and flag it as a bad data error.  We
-				   can't set an error locus since it's an unknown blob */
+				   can't set an error locus since it's an unknown blob, and
+				   we can't use readAttributeErrorReturn() because it'll try
+				   and override the error type and locus with its own values. 
+				   
+				   The error message is somewhat generic, but since this is 
+				   something that shouldn't occur anyway there's no point in 
+				   spending a lot of effort to report it */
 				*errorLocus = ( attributeInfoPtr != NULL ) ? \
 								attributeInfoPtr->fieldID : \
 								CRYPT_ATTRIBUTE_NONE;
 				*errorType = CRYPT_ERRTYPE_ATTR_PRESENT;
-				status = CRYPT_ERROR_BADDATA;
+				retExt( CRYPT_ERROR_BADDATA,
+						( CRYPT_ERROR_BADDATA, errorInfo,
+						  "Duplicate blob attribute present" ) );
 				}
 			TRACE_DEBUG(( "Error %s adding unrecognised blob attribute data.", 
 						  getStatusName( status ) ));

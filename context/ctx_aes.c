@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						cryptlib AES Encryption Routines					*
-*						Copyright Peter Gutmann 2000-2017					*
+*						Copyright Peter Gutmann 2000-2025					*
 *																			*
 ****************************************************************************/
 
@@ -179,10 +179,15 @@ static int updateKey( BYTE *key, const int keySize,
 		case 24:
 			memcpy( keyData, newKey1 + 8, keySize );
 			memcpy( keyData + 8, newKey2, AES_BLOCKSIZE );
+			break;
 
 		case 32:
 			memcpy( keyData, newKey1, AES_BLOCKSIZE );
 			memcpy( keyData + 16, newKey2, AES_BLOCKSIZE );
+			break;
+			
+		default:
+			retIntError();
 		}
 
 	for( i = 0; i < keySize; i++ )
@@ -201,7 +206,7 @@ static int mct( CONTEXT_INFO *contextInfo,
 	int i;
 
 	memcpy( key, initialKey, keySize );
-	if( iv != NULL )
+	if( initialIV != NULL )
 		memcpy( iv, initialIV, AES_BLOCKSIZE );
 	memcpy( temp, initialPT, AES_BLOCKSIZE );
 	for( i = 0; i < 100; i++ )
@@ -213,16 +218,16 @@ static int mct( CONTEXT_INFO *contextInfo,
 												  keySize );
 		if( cryptStatusError( status ) )
 			return( status );
-		printVector( "Key", key, keySize );
-		if( iv != NULL )
-			printVector( "IV", iv, AES_BLOCKSIZE );
+		printVector( "Key", initialKey, keySize );
+		if( initialIV != NULL )
+			printVector( "IV", initialIV, AES_BLOCKSIZE );
 		printVector( "Plaintext", temp, AES_BLOCKSIZE );
-		if( iv != NULL )
+		if( initialIV != NULL )
 			memcpy( contextInfo->ctxConv->currentIV, iv, AES_BLOCKSIZE );
 		for( j = 0; j < 1000; j++ )
 			{
 /*			memcpy( prevTemp, temp, AES_BLOCKSIZE ); */
-			if( iv != NULL && j == 0 )
+			if( initialIV != NULL && j == 0 )
 				{
 				status = capabilityInfo->encryptCBCFunction( contextInfo, temp, 
 															 AES_BLOCKSIZE );
@@ -233,7 +238,7 @@ static int mct( CONTEXT_INFO *contextInfo,
 				{
 				status = capabilityInfo->encryptFunction( contextInfo, temp, 
 														  AES_BLOCKSIZE );
-				if( iv != NULL )
+				if( initialIV != NULL )
 					{
 					BYTE tmpTemp[ AES_BLOCKSIZE + 8 ];
 
@@ -881,17 +886,17 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 #ifdef USE_GCM
 	if( convInfo->mode == CRYPT_MODE_GCM )
 		{
-		if( gcm_init_and_key( convInfo->userKey, keyLength, 
+		if( gcm_init_and_key( convInfo->userKey, convInfo->userKeyLength, 
 							  GCM_KEY( convInfo ) ) != RETURN_GOOD ) 
 			return( CRYPT_ERROR_FAILED );
 		}
 	else
 #endif /* USE_GCM */
 		{
-		if( aes_encrypt_key( convInfo->userKey, keyLength, 
+		if( aes_encrypt_key( convInfo->userKey, convInfo->userKeyLength, 
 							 ENC_KEY( convInfo ) ) != EXIT_SUCCESS )
 			return( CRYPT_ERROR_FAILED );
-		if( aes_decrypt_key( convInfo->userKey, keyLength, 
+		if( aes_decrypt_key( convInfo->userKey, convInfo->userKeyLength, 
 							 DEC_KEY( convInfo ) ) != EXIT_SUCCESS )
 			return( CRYPT_ERROR_FAILED );
 		}

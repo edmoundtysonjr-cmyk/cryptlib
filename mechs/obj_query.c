@@ -35,7 +35,7 @@
 		kekRI		[2]	SEQUENCE { version = 4, ... },
 		passwordRI	[3]	SEQUENCE { version = 0, ... },
 		otherRI		[4]	SEQUENCE { OID, data },
-		rfuRI		[5..9] ...
+		rfuRI		[5..7] ...			-- Reserved for future use
 		}
 
 	SignerInfo ::= SEQUENCE {
@@ -169,7 +169,13 @@ static int getObjectInfo( INOUT_PTR STREAM *stream,
 			case MAKE_CTAG( CTAG_RI_OTHER + 1 ):
 			case MAKE_CTAG( CTAG_RI_OTHER + 2 ):
 			case MAKE_CTAG( CTAG_RI_OTHER + 3 ):
-				/* It's an unknown RecipientInfo type, leave it as a no-op */
+				/* It's an unknown RecipientInfo type, leave it as a no-op.  
+				   Given the addition of the kitchen-sink OtherRecipientInfo 
+				   which was the last RecipientInfo update in RFC 3369 in 
+				   2002 it's unlikely that further RecipientInfo types will 
+				   ever be added, but we leave this no-op handling here so
+				   we don't reject an entire message if it happens to 
+				   contain a plausibly new value */
 				DEBUG_DIAG(( "Found unknown RecipientInfo type %d", 
 							 EXTRACT_CTAG( tag ) ));
 				queryInfo->optType = CRYPT_OBJECT_PKCENCRYPTED_KEY;
@@ -265,7 +271,7 @@ static int getObjectInfo( INOUT_PTR STREAM *stream,
 	}
 #endif /* USE_INT_CMS */
 
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 
 /* Get information on a PGP data object.  This doesn't reset the stream like
    the ASN.1 equivalent because the PGP header is complex enough that it
@@ -481,7 +487,7 @@ int getPgpPacketInfo( INOUT_PTR STREAM *stream,
 	return( ( sMemDataLeft( stream ) < length ) ? \
 			CRYPT_ERROR_UNDERFLOW : CRYPT_OK );
 	}
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 
 /****************************************************************************
 *																			*
@@ -512,9 +518,17 @@ int queryAsn1Object( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 	/* Clear return value */
 	memset( queryInfo, 0, sizeof( QUERY_INFO ) );
 
-	/* Determine basic object information.  This also verifies that all of 
-	   the object data is present in the stream, and, if an objectTypeHint
-	   is given, that we've been fed the correct type of object  */
+	/* Determine basic object information by reading the start of the 
+	   object, resetting the stream at the end of the read in preparation 
+	   for the full object-type-specific read.  This also verifies that 
+	   all of the object data is present in the stream, and, if an 
+	   objectTypeHint is given, that we've been fed the correct type of 
+	   object.
+	   
+	   We read the information into a local QUERY_INFO copy because the
+	   object-subtype-specific reads clear their output parameter, which 
+	   means they'd clear the information that we've just read if we 
+	   passed in the main queryInfo */
 	status = getObjectInfo( stream, &basicQueryInfo, objectTypeHint );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -594,14 +608,13 @@ int queryAsn1Object( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 	}
 #endif /* USE_INT_CMS */
 
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int queryPgpObject( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr, 
 					OUT_PTR QUERY_INFO *queryInfo,
 					const QUERYOBJECT_TYPE objectTypeHint )
 	{
-	QUERY_INFO basicQueryInfo;
 	STREAM *stream = streamPtr;
 	const int startPos = stell( stream );
 	int status;
@@ -617,16 +630,24 @@ int queryPgpObject( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 
 	/* Determine basic object information.  This also verifies that all of 
 	   the object data is present in the stream and, if an objectTypeHint
-	   is given, that we've been fed the correct type of object */
-	status = getPgpPacketInfo( stream, &basicQueryInfo, objectTypeHint );
+	   is given, that we've been fed the correct type of object.
+
+	   Unlike the ASN.1 object read this doesn't reset the stream because 
+	   the PGP header is complex enough that it can't be read inline like 
+	   the ASN.1 equivalent, so we reset it ourselves here before re-reading 
+	   it in the object-subtype-specific read */
+	status = getPgpPacketInfo( stream, queryInfo, objectTypeHint );
 	if( cryptStatusError( status ) )
 		return( status );
 	sseek( stream, startPos );
-	ENSURES( basicQueryInfo.type != CRYPT_OBJECT_NONE || \
-			 basicQueryInfo.optType != CRYPT_OBJECT_NONE );
+	ENSURES( queryInfo->type != CRYPT_OBJECT_NONE || \
+			 queryInfo->optType != CRYPT_OBJECT_NONE );
 
-	/* Call the appropriate routine to find out more about the object */
-	switch( basicQueryInfo.type )
+	/* Call the appropriate routine to find out more about the object.  The
+	   subtype-specific functions also call getPgpPacketInfo() (because 
+	   they're shared with other code) so the queryInfo is re-populated on
+	   each call */
+	switch( queryInfo->type )
 		{
 		case CRYPT_OBJECT_ENCRYPTED_KEY:
 			{
@@ -634,7 +655,10 @@ int queryPgpObject( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 									getReadKekFunction( KEYEX_PGP );
 
 			if( readKekFunction == NULL )
+				{
+				zeroise( queryInfo, sizeof( QUERY_INFO ) );
 				return( CRYPT_ERROR_NOTAVAIL );
+				}
 			status = readKekFunction( stream, queryInfo );
 			break;
 			}
@@ -645,7 +669,10 @@ int queryPgpObject( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 									getReadKeytransFunction( KEYEX_PGP );
 
 			if( readKeytransFunction == NULL )
+				{
+				zeroise( queryInfo, sizeof( QUERY_INFO ) );
 				return( CRYPT_ERROR_NOTAVAIL );
+				}
 			status = readKeytransFunction( stream, queryInfo );
 			break;
 			}
@@ -656,7 +683,10 @@ int queryPgpObject( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 									getReadSigFunction( SIGNATURE_PGP );
 
 			if( readSigFunction == NULL )
+				{
+				zeroise( queryInfo, sizeof( QUERY_INFO ) );
 				return( CRYPT_ERROR_NOTAVAIL );
+				}
 			status = readSigFunction( stream, queryInfo );
 			break;
 			}
@@ -671,18 +701,21 @@ int queryPgpObject( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 			   already guaranteed that the size is an integer range, we
 			   restrict it even further here because we shouldn't be
 			   seeing gigantic keyex/signature objects */
-			if( !isShortIntegerRangeNZ( basicQueryInfo.size ) )
-				return( CRYPT_ERROR_OVERFLOW );
-			status = sSkip( stream, basicQueryInfo.size, 
-							MAX_INTLENGTH_SHORT );
+			if( !isShortIntegerRangeNZ( queryInfo->size ) )
+				status = CRYPT_ERROR_OVERFLOW;
+			else
+				{
+				status = sSkip( stream, queryInfo->size, 
+								MAX_INTLENGTH_SHORT );
+				}
 			break;
 
 		default:
 			retIntError();
 		}
 	if( cryptStatusOK( status ) && \
-		( checkOverflowAdd( startPos, basicQueryInfo.size ) || \
-		  startPos + basicQueryInfo.size != stell( stream ) ) )
+		( checkOverflowAdd( startPos, queryInfo->size ) || \
+		  startPos + queryInfo->size != stell( stream ) ) )
 		{
 		/* Make sure that the given size of the object matches what we've 
 		   actually processed */
@@ -695,31 +728,13 @@ int queryPgpObject( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 		}
 	sseek( stream, startPos );
 
-	/* Augment the per-object query information with the basic query 
-	   information that we got earlier */
-	queryInfo->formatType = basicQueryInfo.formatType;
-	if( queryInfo->type == CRYPT_OBJECT_LAST )
-		{
-		/* The non-type CRYPT_OBJECT_LAST denotes the first half of a one-
-		   pass signature packet, in which case the actual type is given in
-		   the packet data */
-		queryInfo->type = basicQueryInfo.type;
-		}
-	queryInfo->optType = basicQueryInfo.optType;
-	queryInfo->size = basicQueryInfo.size;
-	if( queryInfo->version == 0 )
-		{
-		/* PGP has multiple packet version numbers sprayed all over the
-		   place, and just because an outer version is X doesn't mean that
-		   a subsequent inner version can't be Y.  The information is really
-		   only used to control the formatting of what gets read, so we
-		   just report the first version that we encounter */
-		queryInfo->version = basicQueryInfo.version;
-		}
+	/* Unlike the ASN.1 object read code, we've read the object information 
+	   directly into the queryInfo so there's no need to copy additional 
+	   information from the basicQueryInfo across */
 
 	return( CRYPT_OK );
 	}
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 
 /****************************************************************************
 *																			*
@@ -769,12 +784,12 @@ C_RET cryptQueryObject( C_IN void C_PTR objectData,
 		}
 	else
 		{
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 		status = queryPgpObject( &stream, &queryInfo, 
 								 QUERYOBJECT_UNKNOWN );
 #else
 		status = CRYPT_ERROR_BADDATA;
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 		}
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )

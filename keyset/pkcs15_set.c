@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					   cryptlib PKCS #15 Set-item Routines					*
-*						Copyright Peter Gutmann 1996-2011					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -397,15 +397,16 @@ static int setItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 			if( status != OK_SPECIAL )
 				return( status );
 			
-			/* In theory we can't add anything, however since we've been 
-			   given a certificate chain there may be new certificates 
-			   present that we can try and add opportunistically */
+			/* At this point we know that we've got a certificate chain, in 
+			   theory we can't add anything however there may be new 
+			   certificates present that we can try and add 
+			   opportunistically */
 			status = krnlSendMessage( cryptHandle, IMESSAGE_SETATTRIBUTE,
 									  MESSAGE_VALUE_TRUE,
 									  CRYPT_IATTRIBUTE_LOCKED );
 			if( cryptStatusError( status ) )
 				return( status );
-			status = pkcs15AddCertChain( pkcs15infoPtr, noPkcs15objects, 
+			status = pkcs15AddCertChain( pkcs15info, noPkcs15objects, 
 										 cryptHandle, KEYSET_ERRINFO );
 			( void ) krnlSendMessage( cryptHandle, IMESSAGE_SETATTRIBUTE,
 									  MESSAGE_VALUE_FALSE, 
@@ -561,6 +562,8 @@ static int setSpecialItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 #if defined( USE_HARDWARE ) || defined( USE_TPM )
 	if( dataType == CRYPT_IATTRIBUTE_HWDEVICE )
 		{
+		REQUIRES( dataLength == sizeof( CRYPT_HANDLE ) );
+		
 		keysetInfoPtr->keysetFile->iHardwareDevice = \
 										*( ( CRYPT_HANDLE * ) data );
 		return( CRYPT_OK );

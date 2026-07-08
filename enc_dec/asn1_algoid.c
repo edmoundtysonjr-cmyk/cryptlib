@@ -934,7 +934,11 @@ int readContextAlgoID( INOUT_PTR STREAM *stream,
 								  &queryInfoPtr->hashParam, 
 								  CRYPT_CTXINFO_BLOCKSIZE );
 		if( cryptStatusError( status ) )
+			{
+			krnlSendNotifier( createInfo.cryptHandle, 
+							  IMESSAGE_DECREFCOUNT );
 			return( sSetError( stream, status ) );
+			}
 		}
 	if( !isConvAlgo( queryInfoPtr->cryptAlgo ) )
 		{

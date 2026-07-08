@@ -95,6 +95,8 @@ BOOLEAN pointerBoundsCheck( IN_PTR_OPT const void *data,
    overflows and similar because it doesn't matter if a few bits get lost, 
    as long as the results are consistent */
 
+#ifndef CONFIG_CONSERVE_MEMORY_EXTRA
+
 CFI_CHECK_TYPE cfiCheckSequence3( const CFI_CHECK_TYPE initValue, 
 								  const CFI_CHECK_TYPE label1Value,
 								  const CFI_CHECK_TYPE label2Value, 
@@ -160,6 +162,7 @@ CFI_CHECK_TYPE cfiCheckSequence9( const CFI_CHECK_TYPE initValue,
 
 	return( cfiCheckValue );
 	}
+#endif /* CONFIG_CONSERVE_MEMORY_EXTRA */
 
 /* Copy a string attribute to external storage, with various range checks
    to follow the cryptlib semantics (these will already have been done by
@@ -382,7 +385,7 @@ int mapValue( IN_INT_SHORT_Z const int srcValue,
 
 	REQUIRES( isShortIntegerRange( srcValue ) );
 	REQUIRES( mapTblSize > 0 && mapTblSize < 100 );
-	REQUIRES( mapTbl[ mapTblSize ].source == CRYPT_ERROR );
+	REQUIRES( mapTbl[ mapTblSize - 1 ].source == CRYPT_ERROR );
 
 	/* Clear return value */
 	*destValue = 0;

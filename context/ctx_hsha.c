@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						cryptlib HMAC-SHA Hash Routines						*
-*						Copyright Peter Gutmann 1997-2005					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -129,7 +129,7 @@ static int selfTest( void )
 									 FAILSAFE_ARRAYSIZE( hmacValues, \
 														 HMAC_TESTINFO ) - 1 ) );
 
-		status = testMAC( capabilityInfo, macStatePtr, hmacValues[ i ].key, 
+		status = testMAC( capabilityInfo, 0, macStatePtr, hmacValues[ i ].key, 
 						  hmacValues[ i ].keyLength, hmacValues[ i ].data, 
 						  hmacValues[ i ].length, hmacValues[ i ].digest );
 		if( cryptStatusError( status ) )

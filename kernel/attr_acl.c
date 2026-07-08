@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							Object Attribute ACLs							*
-*						Copyright Peter Gutmann 1997-2024					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -370,18 +370,37 @@ static const ATTRIBUTE_ACL optionACL[] = {
 		MKPERM( RWx_RWx ),
 		ROUTE( OBJECT_TYPE_USER ),
 		RANGE( CRYPT_ALGO_FIRST_PKC, CRYPT_ALGO_LAST_PKC ) ),
+#if defined( USE_ECDH ) || defined( USE_ECDSA ) || defined( USE_X25519 ) || \
+	defined( USE_ED25519 )
 	MKACL_N(	/* PKC key size */
 		CRYPT_OPTION_PKC_KEYSIZE,
 		ST_NONE, ST_NONE, ST_USER_ANY, 
 		MKPERM( RWx_RWx ),
 		ROUTE( OBJECT_TYPE_USER ),
-		RANGE( bitsToBytes( 512 ), CRYPT_MAX_PKCSIZE ) ),
+		RANGE( MIN_PKCSIZE_ECC, CRYPT_MAX_PKCSIZE ) ),
+#else
+	MKACL_N(	/* PKC key size */
+		CRYPT_OPTION_PKC_KEYSIZE,
+		ST_NONE, ST_NONE, ST_USER_ANY, 
+		MKPERM( RWx_RWx ),
+		ROUTE( OBJECT_TYPE_USER ),
+		RANGE( MIN_PKCSIZE, CRYPT_MAX_PKCSIZE ) ),
+#endif /* USE_ECDH || USE_ECDSA || USE_X25519 || USE_ED25519 */
+#if defined( USE_PSS ) || defined( USE_OAEP )
 	MKACL_N(	/* PKC format */
 		CRYPT_OPTION_PKC_FORMAT,
 		ST_NONE, ST_NONE, ST_USER_ANY, 
 		MKPERM( RWx_RWx ),
 		ROUTE( OBJECT_TYPE_USER ),
 		RANGE( CRYPT_PKCFORMAT_NONE + 1, CRYPT_PKCFORMAT_LAST - 1 ) ),
+#else
+	MKACL_N(	/* PKC format */
+		CRYPT_OPTION_PKC_FORMAT,
+		ST_NONE, ST_NONE, ST_USER_ANY, 
+		MKPERM( Rxx_Rxx ),
+		ROUTE( OBJECT_TYPE_USER ),
+		RANGE( CRYPT_PKCFORMAT_NONE + 1, CRYPT_PKCFORMAT_LAST - 1 ) ),
+#endif /* USE_PSS || USE_OAEP */
 	MKACL_SS(	/* Hash/MAC parameter */
 		CRYPT_OPTION_ENCR_HASHPARAM,
 		ST_NONE, ST_ENV_ENV, ST_USER_ANY, 
@@ -609,13 +628,13 @@ static const int allowedPKCKeysizes[] = {
 	};
 static const int allowedKeyingAlgos[] = {
 	/* Hash algos used for PGP */
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
   #ifdef USE_MD5
 	CRYPT_ALGO_MD5,
   #endif /* USE_MD5 */
 	CRYPT_ALGO_SHA1, 
 	CRYPT_ALGO_SHA2,
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 	/* MAC algos used for everything else */
 	CRYPT_ALGO_HMAC_SHA1, CRYPT_ALGO_HMAC_SHA2, CRYPT_ALGO_HMAC_SHAng, 
 	CRYPT_ERROR, CRYPT_ERROR
@@ -4172,10 +4191,12 @@ static const ATTRIBUTE_ACL internalACL[] = {
 		MKPERM_INT_SSH( Rxx_xWx ), ATTRIBUTE_FLAG_TRIGGER,
 		ROUTE( OBJECT_TYPE_CONTEXT ), RANGE( 16 + MIN_PKCSIZE_ECC, ( CRYPT_MAX_PKCSIZE * 4 ) + 20 ) ),
 	MKACL_S_EX(	/* Ctx: TLS-format public key */
+		/* The lower bound can be as small as 3 bytes, a byte for the 
+		   curveType specifier and a 16-bit namedCurve */
 		CRYPT_IATTRIBUTE_KEY_TLS,
 		ST_CTX_PKC, ST_NONE, ST_NONE, 
 		MKPERM_INT_TLS( Rxx_xWx ), ATTRIBUTE_FLAG_TRIGGER,
-		ROUTE( OBJECT_TYPE_CONTEXT ), RANGE( 1 + 2, ( CRYPT_MAX_PKCSIZE * 4 ) + 20 ) ),
+		ROUTE( OBJECT_TYPE_CONTEXT ), RANGE( 3, ( CRYPT_MAX_PKCSIZE * 4 ) + 20 ) ),
 	MKACL_S_EX(	/* Ctx: TLS-extended-format public key */
 		CRYPT_IATTRIBUTE_KEY_TLS_EXT,
 		ST_CTX_PKC, ST_NONE, ST_NONE, 

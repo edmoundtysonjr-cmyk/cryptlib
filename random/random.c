@@ -1397,7 +1397,6 @@ static void addStoredSeedData( INOUT_PTR RANDOM_INFO *randomInfo )
 		   which takes { data, length } parameters, since we've calling
 		   the low-level function sFileOpen() directly we have to null-
 		   terminate the string */
-		seedFilePath[ seedFilePathLen ] = '\0';
 		status = sFileOpen( &stream, seedFilePath, FILE_FLAG_READ );
 		}
 	if( cryptStatusError( status ) )

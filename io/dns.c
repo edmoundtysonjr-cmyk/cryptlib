@@ -332,7 +332,10 @@ static void SOCKET_API my_freeaddrinfo( INOUT_PTR struct addrinfo *ai )
 
 		ai = ai->ai_next;
 		if( addrInfoCursor->ai_addr != NULL )
+			{
 			clFree( "my_freeaddrinfo", addrInfoCursor->ai_addr );
+			addrInfoCursor->ai_addr = NULL;
+			}
 		clFree( "my_freeaddrinfo", addrInfoCursor );
 		}
 	ENSURES_V( LOOP_BOUND_OK );

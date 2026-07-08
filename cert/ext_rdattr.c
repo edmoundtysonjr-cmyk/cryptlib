@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					Certificate Attribute Data Read Routines				*
-*						Copyright Peter Gutmann 1996-2020					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -119,13 +119,16 @@ static int getFieldTag( INOUT_PTR STREAM *stream,
 			value = BER_ID_RESERVED;
 			}
 		}
-	if( value == FIELDTYPE_BLOB_BITSTRING || \
-		value == FIELDTYPE_BLOB_SEQUENCE )
+	else
 		{
-		/* This is a typed blob that's read as a blob but still has a type
-		   for type-checking purposes */
-		value = ( value == FIELDTYPE_BLOB_BITSTRING ) ? \
-				BER_BITSTRING : BER_SEQUENCE;
+		if( value == FIELDTYPE_BLOB_BITSTRING || \
+			value == FIELDTYPE_BLOB_SEQUENCE )
+			{
+			/* This is a typed blob that's read as a blob but still has a 
+			   type for type-checking purposes */
+			value = ( value == FIELDTYPE_BLOB_BITSTRING ) ? \
+					BER_BITSTRING : BER_SEQUENCE;
+			}
 		}
 
 	ENSURES( ( value == FIELDTYPE_ALGOID ) || \
@@ -268,6 +271,10 @@ static int addDefaultValue( INOUT_PTR DATAPTR_ATTRIBUTE *attributePtrPtr,
 	assert( isWritePtr( errorType, sizeof( CRYPT_ERRTYPE_TYPE ) ) );
 
 	REQUIRES( isFlagRangeZ( flags, ATTR ) );
+
+	/* Clear return values */
+	*errorLocus = CRYPT_ATTRIBUTE_NONE;
+	*errorType = CRYPT_ERRTYPE_NONE;
 
 	/* Add the default value for this attribute field.  The error message if
 	   this fails will be a bit misleading since we're not actually reading
@@ -417,7 +424,7 @@ static int processIdentifiedItem( INOUT_PTR STREAM *stream,
 								  INOUT_PTR DATAPTR_ATTRIBUTE *attributePtrPtr,
 								  IN_FLAGS( ATTR ) const int flags, 
 								  IN_PTR const SETOF_STACK *setofStack,
-								  IN_PTR \
+								  OUT_PTR_PTR \
 									const ATTRIBUTE_INFO **attributeInfoPtrPtr,
 								  INOUT_PTR ERROR_INFO *errorInfo,
 								  OUT_ENUM_OPT( CRYPT_ATTRIBUTE ) \

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					  cryptlib HTTP Keyset Mapping Routines					*
-*						Copyright Peter Gutmann 1998-2004					*
+*						Copyright Peter Gutmann 1998-2025					*
 *																			*
 ****************************************************************************/
 
@@ -206,10 +206,10 @@ static int getItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 		{
 #ifdef USE_ERRMSGS
 		char keyDataText[ CRYPT_MAX_TEXTSIZE + 8 ];
-#endif /* USE_ERRMSGS */
 
 		formatHexData( keyDataText, CRYPT_MAX_TEXTSIZE, keyData, 
 					   httpDataInfo.bytesAvail );
+#endif /* USE_ERRMSGS */
 		retExt( status,
 				( status, KEYSET_ERRINFO,
 				  "Object '%s' sent from server doesn't appear to be a "
@@ -231,15 +231,22 @@ static int getItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 					 "Couldn't import certificate provided by HTTP "
 					 "server" ) );
 		}
-	status = iCryptVerifyID( createInfo.cryptHandle, keyIDtype, keyID, 
-							 keyIDlength );
-	if( cryptStatusError( status ) )
+	if( hasExplicitKeyID )
 		{
-		krnlSendNotifier( createInfo.cryptHandle, IMESSAGE_DECREFCOUNT );
-		retExt( status, 
-				( status, KEYSET_ERRINFO, 
-				  "Certificate fetched for given %s doesn't actually "
-				  "correspond to that ID", getKeyIDName( keyIDtype ) ) );
+		/* If we've got an explicit ID present, make sure that we got back 
+		   what we asked for */
+		status = iCryptVerifyID( createInfo.cryptHandle, keyIDtype, keyID, 
+								 keyIDlength );
+		if( cryptStatusError( status ) )
+			{
+			krnlSendNotifier( createInfo.cryptHandle, 
+							  IMESSAGE_DECREFCOUNT );
+			retExt( status, 
+					( status, KEYSET_ERRINFO, 
+					  "Certificate fetched for given %s doesn't actually "
+					  "correspond to that ID", 
+					  getKeyIDName( keyIDtype ) ) );
+			}
 		}
 	*iCryptHandle = createInfo.cryptHandle;
 

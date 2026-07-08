@@ -590,8 +590,8 @@ int pnpPkiSession( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	CRYPT_CONTEXT iPrivateKey2;
 #endif /* USE_CMP */
 	CRYPT_CERTIFICATE iCertReq, iCACert DUMMY_INIT;
-	const ATTRIBUTE_LIST *attributeListPtr;
-	const ATTRIBUTE_LIST *passwordPtr = \
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr;
+	const SESSION_ATTRIBUTE_LIST *passwordPtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_PASSWORD );
 	const KEY_TYPE keyType = ( sessionInfoPtr->type == CRYPT_SESSION_CMP ) ? \
 							 KEY_TYPE_SIGNATURE : KEY_TYPE_BOTH;

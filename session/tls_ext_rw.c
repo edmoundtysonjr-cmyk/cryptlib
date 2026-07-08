@@ -56,7 +56,7 @@ static const EXT_CHECK_INFO extCheckInfoTbl[] = {
 			uint16	nameLen
 			byte[]	name */
 	{ TLS_EXT_SNI, DESCRIPTION( "server name indication" ) 
-	  1 + UINT16_SIZE + MIN_DNS_SIZE, 0, MAX_EXTENSION_SIZE },
+	  UINT16_SIZE + 1 + UINT16_SIZE + MIN_DNS_SIZE, 0, MAX_EXTENSION_SIZE },
 
 #ifndef CONFIG_CONSERVE_MEMORY
 	/* Maximum fragment length, RFC 4366/RFC 6066:
@@ -680,7 +680,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int writeSNI( INOUT_PTR STREAM *stream,
 			  const SESSION_INFO *sessionInfoPtr )
 	{
-	const ATTRIBUTE_LIST *serverNamePtr = \
+	const SESSION_ATTRIBUTE_LIST *serverNamePtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_SERVER_NAME );
 	URL_INFO urlInfo;
 	int status;
@@ -763,6 +763,12 @@ int readSupportedVersions( INOUT_PTR STREAM *stream,
 			return( CRYPT_ERROR_BADDATA );
 		REQUIRES( !checkOverflowDiv( value, UINT16_SIZE ) );
 		noVersionEntries = value / UINT16_SIZE;
+		}
+	else
+		{
+		/* The server should be sending a single version value */
+		if( extLength != UINT16_SIZE )
+			return( CRYPT_ERROR_BADDATA );
 		}
 	LOOP_SMALL( i = 0, i < noVersionEntries, i++ )
 		{
@@ -1206,7 +1212,8 @@ int readSignatureAlgos( INOUT_PTR STREAM *stream,
 															SIG_HASH_INFO ) - 1 ) );
 
 			if( sigHashInfo[ sigHashInfoIndex ].tlsSigHashID == value && \
-				( sigHashInfo[ sigHashInfoIndex ].tlsSigHashID & 0xFF ) != 0xFF )
+				( sigHashInfo[ sigHashInfoIndex ].tlsSigHashID & \
+							MK_SIGHASHID( 0, 255 ) ) != MK_SIGHASHID( 0, 255 ) )
 				{
 				sigHashInfoPtr = &sigHashInfo[ sigHashInfoIndex ];
 				break;
@@ -1400,7 +1407,8 @@ int writeSignatureAlgos( STREAM *stream )
 			}
 
 		/* If the hash algorithm isn't enabled, skip this entry */
-		if( ( sigHashInfo[ i ].tlsSigHashID & 0xFF ) == 0xFF || \
+		if( ( sigHashInfo[ i ].tlsSigHashID & \
+					MK_SIGHASHID( 0, 255 ) ) == MK_SIGHASHID( 0, 255 ) || \
 			!algoAvailable( sigHashInfo[ i ].hashAlgo ) )
 			continue;
 

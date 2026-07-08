@@ -3543,6 +3543,7 @@ static int getCapabilities( DEVICE_INFO *deviceInfo )
 								 sizeof( CAPABILITY_INFO_LIST ) ) ) == NULL )
 			{
 			clFree( "getCapabilities", newCapability );
+			newCapability = NULL;
 			continue;
 			}
 		DATAPTR_SET( newCapabilityList->info, newCapability );

@@ -61,7 +61,7 @@ static BOOLEAN formatErrorString( OUT_ALWAYS ERROR_INFO *errorInfo,
 				vsprintf_s( errorInfo->errorString, MAX_ERRMSG_SIZE, 
 							format, argPtr ); 
 	if( errorInfo->errorStringLength <= 0 || \
-		errorInfo->errorStringLength >= MAX_ERRMSG_SIZE )
+		errorInfo->errorStringLength > MAX_ERRMSG_SIZE )
 		{
 		DEBUG_DIAG(( "Invalid error string data" ));
 		assert( DEBUG_WARN );
@@ -105,7 +105,7 @@ static void appendErrorString( INOUT_PTR ERROR_INFO *errorInfo,
 	if( checkOverflowAdd( errorInfo->errorStringLength, 
 						  secondStringLength ) || \
 		errorInfo->errorStringLength + \
-							secondStringLength >= MAX_ERRMSG_SIZE - 8 )
+							secondStringLength > MAX_ERRMSG_SIZE - 8 )
 		{
 		/* If there's nothing much to be added by appending the second 
 		   string then don't do anything */

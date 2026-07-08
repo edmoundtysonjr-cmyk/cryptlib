@@ -705,7 +705,7 @@ static int processCompareMessage( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				return( CRYPT_OK );
 			break;
 
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 		case MESSAGE_COMPARE_KEYID_PGP:
 			REQUIRES( contextInfoPtr->type == CONTEXT_PKC );
 
@@ -731,7 +731,7 @@ static int processCompareMessage( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 						 PGP_KEYID_SIZE ) )
 				return( CRYPT_OK );
 			break;
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */
 
 		default:
 			retIntError();

@@ -4,3 +4,16 @@ src:crypt/sha2.c
 # The Bignum self-test code tests overlaying of different BIGNUM structures,
 # which looks like an out-of-bounds access
 fun:selfTestBignumFields
+
+# zlib's send_code() -> send_bits() -> put_short() casts from 32/64-bit int to
+# unsigned short without masking bits above 16-bits.
+src:zlib/trees.c
+
+# The GCM code relies on an increment of the 8-bit value 0xFF wrapping around
+# to 0.
+fun:gcm_crypt_data
+
+# Some weird constant-time abs() computation in crypt/curve25519.c that relies
+# on truncation via casting to uint8_t.
+fun:table_select
+

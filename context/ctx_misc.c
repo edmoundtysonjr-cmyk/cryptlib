@@ -274,10 +274,10 @@ BOOLEAN sanityCheckCapability( const CAPABILITY_INFO *capabilityInfoPtr )
 		}
 	if( isConvAlgo( cryptAlgo ) )
 		{
-		if( ( capabilityInfoPtr->blockSize < bitsToBytes( 8 ) || \
-        	  capabilityInfoPtr->blockSize > CRYPT_MAX_IVSIZE ) || \
-			( capabilityInfoPtr->minKeySize < MIN_KEYSIZE || \
-			  capabilityInfoPtr->maxKeySize > CRYPT_MAX_KEYSIZE ) )
+		if( capabilityInfoPtr->blockSize < bitsToBytes( 8 ) || \
+        	capabilityInfoPtr->blockSize > CRYPT_MAX_IVSIZE || \
+			capabilityInfoPtr->minKeySize < MIN_KEYSIZE || \
+			capabilityInfoPtr->maxKeySize > CRYPT_MAX_KEYSIZE )
 			{
 			DEBUG_PUTS(( "sanityCheckCapability: Conv. block size" ));
 			return( FALSE );
@@ -323,8 +323,8 @@ BOOLEAN sanityCheckCapability( const CAPABILITY_INFO *capabilityInfoPtr )
 							   1536 : CRYPT_MAX_PKCSIZE;
 
 		if( capabilityInfoPtr->blockSize != 0 || \
-			( capabilityInfoPtr->minKeySize < minKeySize || \
-			  capabilityInfoPtr->maxKeySize > maxKeySize ) )
+			capabilityInfoPtr->minKeySize < minKeySize || \
+			capabilityInfoPtr->maxKeySize > maxKeySize )
 			{
 			DEBUG_PUTS(( "sanityCheckCapability: PKC key size" ));
 			return( FALSE );
@@ -340,11 +340,11 @@ BOOLEAN sanityCheckCapability( const CAPABILITY_INFO *capabilityInfoPtr )
 		}
 	if( isHashAlgo( cryptAlgo ) )
 		{
-		if( ( capabilityInfoPtr->blockSize < MIN_HASHSIZE || \
-			  capabilityInfoPtr->blockSize > CRYPT_MAX_HASHSIZE ) || \
-			( capabilityInfoPtr->minKeySize != 0 || \
-			  capabilityInfoPtr->keySize != 0 || \
-			  capabilityInfoPtr->maxKeySize != 0 ) )
+		if( capabilityInfoPtr->blockSize < MIN_HASHSIZE || \
+			capabilityInfoPtr->blockSize > CRYPT_MAX_HASHSIZE || \
+			capabilityInfoPtr->minKeySize != 0 || \
+			capabilityInfoPtr->keySize != 0 || \
+			capabilityInfoPtr->maxKeySize != 0 )
 			{
 			DEBUG_PUTS(( "sanityCheckCapability: Hash block size" ));
 			return( FALSE );
@@ -354,10 +354,10 @@ BOOLEAN sanityCheckCapability( const CAPABILITY_INFO *capabilityInfoPtr )
 		}
 	if( isMacAlgo( cryptAlgo ) )
 		{
-		if( ( capabilityInfoPtr->blockSize < MIN_HASHSIZE || \
-			  capabilityInfoPtr->blockSize > CRYPT_MAX_HASHSIZE ) || \
-			( capabilityInfoPtr->minKeySize < MIN_KEYSIZE || \
-			  capabilityInfoPtr->maxKeySize > CRYPT_MAX_KEYSIZE ) )
+		if( capabilityInfoPtr->blockSize < MIN_HASHSIZE || \
+			capabilityInfoPtr->blockSize > CRYPT_MAX_HASHSIZE || \
+			capabilityInfoPtr->minKeySize < MIN_KEYSIZE || \
+			capabilityInfoPtr->maxKeySize > CRYPT_MAX_KEYSIZE )
 			{
 			DEBUG_PUTS(( "sanityCheckCapability: MAC key size" ));
 			return( FALSE );
@@ -1031,7 +1031,7 @@ int testHash( IN_PTR const CAPABILITY_INFO *capabilityInfo,
 		DEBUG_DIAG(( "%s context init failed", capabilityInfo->algoName ));
 		return( status );
 		}
-	if( hashSize != 0 )
+	if( capabilityInfo->initParamsFunction != NULL && hashSize != 0 )
 		{
 		status = capabilityInfo->initParamsFunction( &contextInfo, 
 													 KEYPARAM_BLOCKSIZE, NULL,
@@ -1064,8 +1064,9 @@ int testHash( IN_PTR const CAPABILITY_INFO *capabilityInfo,
 	return( status );
 	}
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 5, 7 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 4, 6, 8 ) ) \
 int testMAC( IN_PTR const CAPABILITY_INFO *capabilityInfo, 
+			 IN_LENGTH_HASH_Z const int macSize,
 			 IN_PTR const void *macDataStorage,
 			 IN_BUFFER( keySize ) const void *key, 
 			 IN_LENGTH_SHORT_MIN( MIN_KEYSIZE ) const int keySize, 
@@ -1083,6 +1084,8 @@ int testMAC( IN_PTR const CAPABILITY_INFO *capabilityInfo,
 	assert( isReadPtrDynamic( data, dataLength ) );
 	assert( isReadPtrDynamic( hashValue, capabilityInfo->blockSize ) );
 
+	REQUIRES( macSize == 0 || \
+			  ( macSize >= MIN_HASHSIZE && macSize <= CRYPT_MAX_HASHSIZE ) );
 	REQUIRES( isShortIntegerRangeMin( keySize, 4 ) );
 	REQUIRES( isShortIntegerRangeMin( dataLength, 8 ) );
 
@@ -1094,7 +1097,16 @@ int testMAC( IN_PTR const CAPABILITY_INFO *capabilityInfo,
 		DEBUG_DIAG(( "%s context init failed", capabilityInfo->algoName ));
 		return( status );
 		}
-	status = capabilityInfo->initKeyFunction( &contextInfo, key, keySize );
+	if( capabilityInfo->initParamsFunction != NULL && macSize != 0 )
+		{
+		status = capabilityInfo->initParamsFunction( &contextInfo, 
+										KEYPARAM_BLOCKSIZE, NULL, macSize );
+		}
+	if( cryptStatusOK( status ) )
+		{
+		status = capabilityInfo->initKeyFunction( &contextInfo, key, 
+												  keySize );
+		}
 	if( cryptStatusOK( status ) )
 		{
 		status = capabilityInfo->encryptFunction( &contextInfo, 
@@ -1130,6 +1142,7 @@ int testMAC( IN_PTR const CAPABILITY_INFO *capabilityInfo,
 typedef struct HI {
 	const CRYPT_ALGO_TYPE cryptAlgo;
 	const int hashSize;
+	const int hashBlockSize;
 	const HASH_FUNCTION function;
 	} HASHFUNCTION_INFO;
 
@@ -1143,22 +1156,26 @@ STDC_NONNULL_ARG( ( 3 ) ) \
 void getHashParameters( IN_ALGO const CRYPT_ALGO_TYPE hashAlgorithm,
 						IN_LENGTH_HASH_Z const int hashParam,
 						OUT_PTR_PTR HASH_FUNCTION *hashFunction, 
-						OUT_OPT_LENGTH_SHORT_Z int *hashOutputSize )
+						OUT_OPT_LENGTH_SHORT_Z int *hashOutputSize,
+						OUT_OPT_LENGTH_SHORT_Z int *hashBlockSize )
 	{
 	static const HASHFUNCTION_INFO hashFunctions[] = {
 #ifdef USE_MD5
-		{ CRYPT_ALGO_MD5, MD5_DIGEST_LENGTH, md5HashBuffer },
+		{ CRYPT_ALGO_MD5, MD5_DIGEST_LENGTH, MD5_CBLOCK, md5HashBuffer },
 #endif /* USE_MD5 */
-		{ CRYPT_ALGO_SHA1, SHA_DIGEST_LENGTH, shaHashBuffer },
-		{ CRYPT_ALGO_SHA2, SHA256_DIGEST_SIZE, sha2HashBuffer },
+		{ CRYPT_ALGO_SHA1, SHA_DIGEST_LENGTH, SHA_CBLOCK, shaHashBuffer },
+		{ CRYPT_ALGO_SHA2, SHA256_DIGEST_SIZE, SHA256_BLOCK_SIZE, 
+		  sha2HashBuffer },
   #ifdef USE_SHA2_EXT
 		/* The extended SHA2 variants are only available on systems with 64-
 		   bit data type support */
-		{ CRYPT_ALGO_SHA2, SHA384_DIGEST_SIZE, sha2_ExtHashBuffer },
-		{ CRYPT_ALGO_SHA2, SHA512_DIGEST_SIZE, sha2_ExtHashBuffer },
+		{ CRYPT_ALGO_SHA2, SHA384_DIGEST_SIZE, SHA512_BLOCK_SIZE, 
+		  sha2_ExtHashBuffer },
+		{ CRYPT_ALGO_SHA2, SHA512_DIGEST_SIZE, SHA512_BLOCK_SIZE, 
+		  sha2_ExtHashBuffer },
   #endif /* USE_SHA2_EXT */
-		{ CRYPT_ALGO_NONE, SHA_DIGEST_LENGTH, shaHashBuffer },
-			{ CRYPT_ALGO_NONE, SHA_DIGEST_LENGTH, shaHashBuffer }
+		{ CRYPT_ALGO_NONE, SHA_DIGEST_LENGTH, SHA_CBLOCK, shaHashBuffer },
+			{ CRYPT_ALGO_NONE, SHA_DIGEST_LENGTH, SHA_CBLOCK, shaHashBuffer }
 		};
 	LOOP_INDEX i;
 
@@ -1171,6 +1188,8 @@ void getHashParameters( IN_ALGO const CRYPT_ALGO_TYPE hashAlgorithm,
 	assert( isWritePtr( hashFunction, sizeof( HASH_FUNCTION ) ) );
 	assert( ( hashOutputSize == NULL ) || \
 			isWritePtr( hashOutputSize, sizeof( int ) ) );
+	assert( ( hashBlockSize == NULL ) || \
+			isWritePtr( hashBlockSize, sizeof( int ) ) );
 
 	/* Make sure that we always get some sort of hash function rather than 
 	   just dying.  This code always works because the internal self-test 
@@ -1178,7 +1197,9 @@ void getHashParameters( IN_ALGO const CRYPT_ALGO_TYPE hashAlgorithm,
 	*hashFunction = shaHashBuffer;
 	if( hashOutputSize != NULL )
 		*hashOutputSize = SHA_DIGEST_LENGTH;
-
+	if( hashBlockSize != NULL )
+		*hashBlockSize = SHA_CBLOCK;
+		
 	/* Fast-path for SHA-1, which is almost always the one that we're being 
 	   asked for since it's used everywhere for ID generation */
 	if( hashAlgorithm == CRYPT_ALGO_SHA1 )
@@ -1214,6 +1235,8 @@ void getHashParameters( IN_ALGO const CRYPT_ALGO_TYPE hashAlgorithm,
 	*hashFunction = hashFunctions[ i ].function;
 	if( hashOutputSize != NULL )
 		*hashOutputSize = hashFunctions[ i ].hashSize;
+	if( hashBlockSize != NULL )
+		*hashBlockSize = hashFunctions[ i ].hashBlockSize;
 	}
 
 STDC_NONNULL_ARG( ( 3 ) ) \

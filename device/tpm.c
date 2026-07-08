@@ -464,6 +464,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int createCryptlibTPMObjects( INOUT_PTR TPM_INFO *tpmInfo,
 									 INOUT_PTR FAPI_CONTEXT *fapiContext )
 	{
+	TSS2_RC tssResult;
+
 	assert( isWritePtr( tpmInfo, sizeof( TPM_INFO ) ) );
 	assert( isReadPtr( fapiContext, sizeof( FAPI_CONTEXT * ) ) );
 
@@ -697,6 +699,7 @@ static void shutdownFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr )
 		deviceInfoPtr->contextHandle = NULL;
 		CLEAR_FLAG( deviceInfoPtr->flags, DEVICE_FLAG_ACTIVE | \
 										  DEVICE_FLAG_LOGGEDIN );
+		return;
 		}
 
 	REQUIRES_V( fapiContext != NULL );

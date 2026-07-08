@@ -1269,7 +1269,8 @@ typedef enum {
 	HASH_FUNCTION hashFunction;
 	HASHINFO hashInfo;
 
-	getHashParameters( CRYPT_ALGO_SHA2, 32, &hashFunction, NULL );
+	getHashParameters( CRYPT_ALGO_SHA2, bitsToBytes( 256 ), &hashFunction, 
+					   NULL, NULL );
 	hashFunction( hashInfo, NULL, 0, part1, part1len, HASH_STATE_START );
 	hashFunction( hashInfo, NULL, 0, part2, part2len, HASH_STATE_CONTINUE );
 	hashFunction( hashInfo, hashValue, CRYPT_MAX_HASHSIZE, 
@@ -1309,7 +1310,8 @@ STDC_NONNULL_ARG( ( 3 ) ) \
 void getHashParameters( IN_ALGO const CRYPT_ALGO_TYPE hashAlgorithm,
 						IN_LENGTH_HASH_Z const int hashParam,
 						OUT_PTR_PTR HASH_FUNCTION *hashFunction, 
-						OUT_OPT_LENGTH_SHORT_Z int *hashOutputSize );
+						OUT_OPT_LENGTH_SHORT_Z int *hashOutputSize,
+						OUT_OPT_LENGTH_SHORT_Z int *hashBlockSize );
 STDC_NONNULL_ARG( ( 3 ) ) \
 void getHashAtomicParameters( IN_ALGO const CRYPT_ALGO_TYPE hashAlgorithm,
 							  IN_LENGTH_HASH_Z const int hashParam,
@@ -1735,7 +1737,7 @@ int createRawSignature( OUT_BUFFER( sigMaxLength, *signatureLength ) \
 						INOUT_PTR ERROR_INFO *errorInfo );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 5 ) ) \
 int checkRawSignature( IN_BUFFER( signatureLength ) const void *signature, 
-					   IN_LENGTH_SHORT const int signatureLength,
+					   IN_LENGTH_SHORT_MIN( 40 ) const int signatureLength,
 					   IN_HANDLE const CRYPT_CONTEXT iSigCheckContext,
 					   IN_HANDLE const CRYPT_CONTEXT iHashContext,
 					   INOUT_PTR ERROR_INFO *errorInfo );

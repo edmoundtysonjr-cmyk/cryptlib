@@ -1,6 +1,6 @@
 /****************************************************************************
 *																			*
-*				Miscellaneous (Non-ASN.1) Read/Write Routines				*
+*							PGP Read/Write Routines							*
 *						Copyright Peter Gutmann 1992-2025					*
 *																			*
 ****************************************************************************/
@@ -101,12 +101,12 @@ static int readOpenPGPLength( INOUT_PTR STREAM *stream,
 		   
 		   Fortunately the standard also specifies an upper bound, 2^30, 
 		   which keeps us away from problems with 32-bit integers */
-		*indefiniteLength = TRUE;
 		if( shiftAmount < 2 || shiftAmount > 30 )
 			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 		localLength = 1 << shiftAmount;
 		if( !isIntegerRangeNZ( localLength ) )
 			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
+		*indefiniteLength = TRUE;
 		*length = localLength;
 
 		return( CRYPT_OK );

@@ -514,7 +514,9 @@ typedef struct {
 
 #ifdef USE_CERTVAL
 
-/* The structure to hold a validity information entry */
+/* The structure to hold a validity information entry.  The CERT_VAL_INFO 
+   stores the overall information, containing a list of VALIDITY_INFO 
+   entries for individual validity entries */
 
 typedef struct VI {
 	/* Certificate ID information */
@@ -559,7 +561,9 @@ typedef struct {
 #ifdef USE_CERTREV
 
 /* The structure to hold a revocation information entry, either a CRL entry
-   or OCSP request/response information */
+   or OCSP request/response information.  The CERT_REV_INFO stores the 
+   overall information, containing a list of REVOCATION_INFO entries for 
+   individual revocation entries */
 
 typedef struct RI {
 	/* Certificate ID information, either a serial number (for CRLs) or a

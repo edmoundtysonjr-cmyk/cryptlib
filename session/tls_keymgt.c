@@ -573,7 +573,7 @@ int createSharedPremasterSecret( OUT_BUFFER( premasterSecretMaxLength, \
 		REQUIRES( isShortIntegerRangeNZ( valueLength ) ); 
 		zeroise( decodedValue, valueLength );
 		}
-	if( cryptStatusOK( status ) )
+	if( cryptStatusError( status ) )
 		{
 		sMemDisconnect( &stream );
 		return( status );

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *								Mechanism ACLs								*
-*						Copyright Peter Gutmann 1997-2019					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -601,22 +601,40 @@ int initMechanismACL( void )
 	/* Perform a consistency check on the various message ACLs */
 	if( !mechanismAclConsistent( mechanismWrapACL, 
 				FAILSAFE_ARRAYSIZE( mechanismWrapACL, MECHANISM_ACL ) ) )
-		return( FALSE );
+		{
+		DEBUG_DIAG(( "Wrap mechanism ACL inconsistent" ));
+		retIntError();
+		}
 	if( !mechanismAclConsistent( mechanismUnwrapACL, 
 				FAILSAFE_ARRAYSIZE( mechanismUnwrapACL, MECHANISM_ACL ) ) )
-		return( FALSE );
+		{
+		DEBUG_DIAG(( "Unwrap mechanism ACL inconsistent" ));
+		retIntError();
+		}
 	if( !mechanismAclConsistent( mechanismSignACL, 
 				FAILSAFE_ARRAYSIZE( mechanismSignACL, MECHANISM_ACL ) ) )
-		return( FALSE );
+		{
+		DEBUG_DIAG(( "Sign mechanism ACL inconsistent" ));
+		retIntError();
+		}
 	if( !mechanismAclConsistent( mechanismSigCheckACL, 
 				FAILSAFE_ARRAYSIZE( mechanismSigCheckACL, MECHANISM_ACL ) ) )
-		return( FALSE );
+		{
+		DEBUG_DIAG(( "Sig-check mechanism ACL inconsistent" ));
+		retIntError();
+		}
 	if( !mechanismAclConsistent( mechanismDeriveACL, 
 				FAILSAFE_ARRAYSIZE( mechanismDeriveACL, MECHANISM_ACL ) ) )
-		return( FALSE );
+		{
+		DEBUG_DIAG(( "Derive mechanism ACL inconsistent" ));
+		retIntError();
+		}
 	if( !mechanismAclConsistent( mechanismKDFACL, 
 				FAILSAFE_ARRAYSIZE( mechanismKDFACL, MECHANISM_ACL ) ) )
-		return( FALSE );
+		{
+		DEBUG_DIAG(( "KDF mechanism ACL inconsistent" ));
+		retIntError();
+		}
 
 	return( CRYPT_OK );
 	}
@@ -859,7 +877,7 @@ int preDispatchCheckMechanismSignAccess( IN_HANDLE const int objectHandle,
 	LOOP_INDEX i;
 	int contextHandle, status;
 
-	assert( isReadPtr( messageDataPtr, sizeof( MECHANISM_WRAP_INFO ) ) );
+	assert( isReadPtr( messageDataPtr, sizeof( MECHANISM_SIGN_INFO ) ) );
 
 	/* Precondition */
 	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_OBJECT_TABLE ) );
@@ -990,7 +1008,7 @@ int preDispatchCheckMechanismDeriveAccess( IN_HANDLE const int objectHandle,
 	const MECHANISM_ACL *mechanismACL = mechanismDeriveACL;
 	LOOP_INDEX i;
 
-	assert( isReadPtr( messageDataPtr, sizeof( MECHANISM_WRAP_INFO ) ) );
+	assert( isReadPtr( messageDataPtr, sizeof( MECHANISM_DERIVE_INFO ) ) );
 
 	/* Precondition */
 	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_OBJECT_TABLE ) );
@@ -1081,7 +1099,7 @@ int preDispatchCheckMechanismKDFAccess( IN_HANDLE const int objectHandle,
 							getSystemStorage( SYSTEM_STORAGE_OBJECT_TABLE );
 	LOOP_INDEX i;
 
-	assert( isReadPtr( messageDataPtr, sizeof( MECHANISM_WRAP_INFO ) ) );
+	assert( isReadPtr( messageDataPtr, sizeof( MECHANISM_KDF_INFO ) ) );
 
 	/* Precondition */
 	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_OBJECT_TABLE ) );

@@ -90,9 +90,16 @@ CFLAGS			= -c -D__UNIX__ -DNDEBUG -I. $(XCFLAGS)
 CFLAGS_DEBUG	= -c -D__UNIX__ -I. -g -Og $(XCFLAGS)
 CFLAGS_DEBUGGCC	= -c -D__UNIX__ -I. $(DEBUG_FLAGS) $(XCFLAGS)
 
-# Analysis flags.  ASAN = ASan + UBSan.  The explicit mention of certain
-# check groups is because they're not included by default in the 'undefined'
-# group.
+# Analysis flags.  We can't combine ASan and MSan because ASan adds red
+# zones to every variable and allocation which using roughly 1/8 of the
+# total address space while MSan needs to double or triple the amount of
+# memory used to track the origins and shadow of each memory block,
+# including ASan's red zones if they're present.
+#
+# ASan and UBsan are a different case, some sources say you shouldn't
+# combine them and others say it's fine, to be safe we keep them separate.
+# The explicit mention of certain check groups for UBSan is because they're
+# not included by default in the 'undefined' group.
 #
 # We can't use the following sanitisers:
 #
@@ -107,18 +114,21 @@ CFLAGS_DEBUGGCC	= -c -D__UNIX__ -I. $(DEBUG_FLAGS) $(XCFLAGS)
 # first detected problem, this requires also setting the environment variable
 # ASAN_OPTIONS=halt_on_error=0
 
-ASAN_FLAGS		= -fsanitize=address,undefined,local-bounds,nullability,implicit-signed-integer-truncation,pointer-overflow,shift,signed-integer-overflow -fno-sanitize=function -fsanitize-recover=all
-MSAN_FLAGS		= -fsanitize=memory
+ASAN_FLAGS		= -fsanitize=address -fsanitize-recover=all
+MSAN_FLAGS		= -fsanitize=memory -fsanitize-recover=all
+UBSAN_FLAGS		= -fsanitize=undefined,local-bounds,nullability,implicit-signed-integer-truncation,pointer-overflow,shift,signed-integer-overflow -fno-sanitize=function -fsanitize-recover=all
 
 CFLAGS_ANALYSE	= -c -D__UNIX__ -I.
 CFLAGS_COVERAGE	= -c -D__UNIX__ -I. $(DEBUG_FLAGS) --coverage -fprofile-arcs -ftest-coverage
-CFLAGS_ASAN		= -c -D__UNIX__ -I. $(DEBUG_FLAGS) -funwind-tables $(ASAN_FLAGS) -fsanitize-blacklist=ubsan_blacklist.txt
-CFLAGS_MSAN		= -c -D__UNIX__ -I. $(DEBUG_FLAGS) -funwind-tables $(MSAN_FLAGS)
+CFLAGS_ASAN		= -c -D__UNIX__ -I. $(DEBUG_FLAGS) -funwind-tables $(ASAN_FLAGS)
+CFLAGS_MSAN		= -c -D__UNIX__ -I. $(DEBUG_FLAGS) -funwind-tables $(MSAN_FLAGS) -fsanitize-blacklist=msan_blacklist.txt
+CFLAGS_UBSAN	= -c -D__UNIX__ -I. $(DEBUG_FLAGS) -funwind-tables $(UBSAN_FLAGS) -fsanitize-blacklist=ubsan_blacklist.txt
 CFLAGS_VALGRIND	= -c -D__UNIX__ -I. $(DEBUG_FLAGS) -fPIC
 
 # Fuzzing flags
 
 CFLAGS_FUZZ		= -c -D__UNIX__ -I. -ggdb3 -fno-omit-frame-pointer -funwind-tables -fsanitize=address -O1 -DCONFIG_FUZZ
+CFLAGS_FUZZ_BUG	= -c -D__UNIX__ -I. -ggdb3 -fno-omit-frame-pointer -funwind-tables -O1 -DCONFIG_FUZZ
 CFLAGS_FUZZ_GCC	= -c -D__UNIX__ -I. -ggdb3 -fno-omit-frame-pointer -funwind-tables -O1 -DCONFIG_FUZZ
 CFLAGS_HONGGFUZZ = -c -D__UNIX__ -I. -g -fno-omit-frame-pointer -O1 -DCONFIG_FUZZ -DCONFIG_LIBFUZZER
 CFLAGS_LIBFUZZER = -c -D__UNIX__ -I. -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined -O1 -DCONFIG_FUZZ -DCONFIG_LIBFUZZER
@@ -485,6 +495,15 @@ fuzz:
 		OSNAME=$(OSNAME)
 	@mv ./testlib ./fuzz-clib
 
+fuzz-bug:
+	@$(MAKE) check-clang
+	@$(MAKE) common-tasks
+	@./tools/buildall.sh special $(MAKE) ~/AFL/afl-clang-lto \
+		$(OSNAME) $(CFLAGS_FUZZ_BUG)
+	@rm -f $(LINKFILE)
+	make testlib-special LD=~/AFL/afl-clang-lto OSNAME=$(OSNAME)
+	@mv ./testlib ./fuzz-clib
+
 fuzz-old:
 	@$(MAKE) check-clang
 	@$(MAKE) common-tasks
@@ -537,19 +556,30 @@ valgrind:
 	@echo "binding thread has been waited on to recover its TLS."
 	@echo ""
 
-msan:
-	@$(MAKE) check-clang
-	@$(MAKE) common-tasks
-	@./tools/buildall.sh special $(MAKE) clang $(OSNAME) $(CFLAGS_MSAN)
-	@rm -f $(LINKFILE)
-	make testlib-special LD=clang LDFLAGS="$(MSAN_FLAGS)" OSNAME=$(OSNAME)
-
 asan:
 	@$(MAKE) check-clang
 	@$(MAKE) common-tasks
 	@./tools/buildall.sh special $(MAKE) clang $(OSNAME) $(CFLAGS_ASAN)
 	@rm -f $(LINKFILE)
 	make testlib-special LD=clang LDFLAGS="$(ASAN_FLAGS)" OSNAME=$(OSNAME)
+
+msan:
+	@echo "" >&2
+	@echo "Use with MSan isn't possible due to endless false positives." >&2
+	@echo "" >&2
+	@exit 1
+	@$(MAKE) check-clang
+	@$(MAKE) common-tasks
+	@./tools/buildall.sh special $(MAKE) clang $(OSNAME) $(CFLAGS_MSAN)
+	@rm -f $(LINKFILE)
+	make testlib-special LD=clang LDFLAGS="$(MSAN_FLAGS)" OSNAME=$(OSNAME)
+
+ubsan:
+	@$(MAKE) check-clang
+	@$(MAKE) common-tasks
+	@./tools/buildall.sh special $(MAKE) clang $(OSNAME) $(CFLAGS_UBSAN)
+	@rm -f $(LINKFILE)
+	make testlib-special LD=clang LDFLAGS="$(UBSAN_FLAGS)" OSNAME=$(OSNAME)
 
 # Tasks involved in the build process.  The "touch" target is used to
 # correct file timestamps when they've come from a system in a different
@@ -3571,6 +3601,9 @@ clean:
 		rm ./infer-out/.inf* ; \
 		rm -r ./infer-out/* ; \
 		rmdir infer-out ; \
+	fi
+	@if [ -f ./nohup.out ] ; then \
+		rm ./nohup.out ; \
 	fi
 	@if [ `uname -s` = 'AIX' ] && [ "$(ls *.lst 2> /dev/null | wc -l)" != "0" ] ; then rm *.lst ; fi
 	@if [ `uname -s` = 'CYGWIN_NT-5.0' ] ; then rm -f *.exe ; fi

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						Certificate Attribute Copy Routines					*
-*						Copyright Peter Gutmann 1996-2015					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -580,6 +580,7 @@ int copyAttributes( INOUT_PTR DATAPTR_ATTRIBUTE *destHeadPtr,
 				return( status );
 			insertDoubleListElement( destHeadPtr, insertPoint, 
 									 newAttribute, ATTRIBUTE_LIST );
+			insertPoint = newAttribute;
 			}
 		ENSURES( LOOP_BOUND_OK );
 		}

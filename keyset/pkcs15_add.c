@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						cryptlib PKCS #15 Key Add Interface					*
-*						Copyright Peter Gutmann 1996-2007					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -255,6 +255,7 @@ int addConfigData( IN_ARRAY( noPkcs15objects ) PKCS15_INFO *pkcs15info,
 						  newData ); 
 			zeroise( pkcs15infoPtr->dataData, pkcs15infoPtr->dataDataSize );
 			clFree( "addConfigData", pkcs15infoPtr->dataData );
+			pkcs15infoPtr->dataData = NULL;
 			}
 		}
 	else
@@ -276,7 +277,8 @@ int addConfigData( IN_ARRAY( noPkcs15objects ) PKCS15_INFO *pkcs15info,
 	return( CRYPT_OK );
 	}
 
-/* Add a secret key to a PKCS #15 collection */
+/* Add a secret key to a PKCS #15 collection.  This functionality is 
+   currently unused so returns an error after the initial checks */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int addSecretKey( IN_ARRAY( noPkcs15objects ) PKCS15_INFO *pkcs15info, 
@@ -288,7 +290,7 @@ int addSecretKey( IN_ARRAY( noPkcs15objects ) PKCS15_INFO *pkcs15info,
 	char label[ CRYPT_MAX_TEXTSIZE + 8 ];
 	int status;
 
-	assert( isWritePtrDynamic( pkcs15infoPtr, \
+	assert( isWritePtrDynamic( pkcs15info, \
 							   sizeof( PKCS15_INFO ) * noPkcs15objects ) );
 
 	REQUIRES( isShortIntegerRangeNZ( noPkcs15objects ) );
@@ -317,8 +319,6 @@ int addSecretKey( IN_ARRAY( noPkcs15objects ) PKCS15_INFO *pkcs15info,
 	pkcs15infoPtr = findFreeEntry( pkcs15info, noPkcs15objects, NULL );
 	if( pkcs15infoPtr == NULL )
 		return( CRYPT_ERROR_OVERFLOW );
-
-	pkcs15infoPtr->type = PKCS15_SUBTYPE_SECRETKEY;
 
 	/* This functionality is currently unused */
 	retIntError();

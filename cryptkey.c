@@ -351,7 +351,8 @@ static int initKeysetUpdate( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 
 			/* We've processed the wrapper, write our own known-good version
 			   and then hash that and the iAndS payload */
-			getHashParameters( CRYPT_ALGO_SHA1, 0, &hashFunction, &hashSize );
+			getHashParameters( CRYPT_ALGO_SHA1, 0, &hashFunction, &hashSize,
+							   NULL );
 			sMemOpen( &stream, buffer, 8 );
 			status = writeSequence( &stream, length );
 			ENSURES_SC( cryptStatusOK( status ) );
@@ -552,7 +553,7 @@ static int getKeysetType( INOUT_PTR STREAM *stream,
 
 		return( CRYPT_OK );
 		}
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS
 	value = pgpGetPacketType( value );
 	if( value == PGP_PACKET_PUBKEY || value == PGP_PACKET_SECKEY )
 		{
@@ -587,7 +588,7 @@ static int getKeysetType( INOUT_PTR STREAM *stream,
 
 		return( CRYPT_OK );
 		}
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 	/* "It doesn't look like anything from here" */
 	return( CRYPT_ERROR_BADDATA );
@@ -607,6 +608,7 @@ static int openKeysetStream( INOUT_PTR STREAM *stream,
 								KEYSET_SUBTYPE_TYPE *keysetSubType )
 	{
 	KEYSET_SUBTYPE_TYPE subType = KEYSET_SUBTYPE_PKCS15;
+	const char *namePtr = name;
 	char nameBuffer[ MAX_ATTRIBUTE_SIZE + 1 + 8 ];
 	const int suffixPos = nameLength - 4;
 	int openMode, status;
@@ -624,28 +626,34 @@ static int openKeysetStream( INOUT_PTR STREAM *stream,
 	*isReadOnly = FALSE;
 	*keysetSubType = KEYSET_SUBTYPE_NONE;
 
-	/* Convert the keyset name into a null-terminated string */
-	REQUIRES( rangeCheck( nameLength, 1, MAX_ATTRIBUTE_SIZE ) );
-	memcpy( nameBuffer, name, nameLength );
-	nameBuffer[ nameLength ] = '\0';
+	/* Convert the keyset name into a null-terminated string if required.  
+	   Internal names from fileBuildCryptlibPath() will already be null-
+	   terminated while external ones won't */
+	if( name[ nameLength - 1 ] != '\0' )
+		{
+		REQUIRES( rangeCheck( nameLength, 1, MAX_ATTRIBUTE_SIZE ) );
+		memcpy( nameBuffer, name, nameLength );
+		nameBuffer[ nameLength ] = '\0';
+		namePtr = nameBuffer;
+		}
 
 	/* Get the expected subtype based on the keyset name.  The default is
 	   PKCS #15 if no contraindication is found in the file suffix */
-	if( suffixPos > 0 && nameBuffer[ suffixPos ] == '.' )
+	if( suffixPos > 0 && namePtr[ suffixPos ] == '.' )
 		{
-		if( !strCompare( nameBuffer + suffixPos + 1, "pgp", 3 ) || \
-			!strCompare( nameBuffer + suffixPos + 1, "gpg", 3 ) || \
-			!strCompare( nameBuffer + suffixPos + 1, "pkr", 3 ) )
+		if( !strCompare( namePtr + suffixPos + 1, "pgp", 3 ) || \
+			!strCompare( namePtr + suffixPos + 1, "gpg", 3 ) || \
+			!strCompare( namePtr + suffixPos + 1, "pkr", 3 ) )
 			subType = KEYSET_SUBTYPE_PGP_PUBLIC;
-		if( !strCompare( nameBuffer + suffixPos + 1, "skr", 3 ) )
+		if( !strCompare( namePtr + suffixPos + 1, "skr", 3 ) )
 			subType = KEYSET_SUBTYPE_PGP_PRIVATE;
-		if( !strCompare( nameBuffer + suffixPos + 1, "pfx", 3 ) || \
-			!strCompare( nameBuffer + suffixPos + 1, "p12", 3 ) )
+		if( !strCompare( namePtr + suffixPos + 1, "pfx", 3 ) || \
+			!strCompare( namePtr + suffixPos + 1, "p12", 3 ) )
 			subType = KEYSET_SUBTYPE_PKCS12;
 		}
 
 	/* If the file is read-only, put the keyset into read-only mode */
-	if( fileReadonly( nameBuffer ) )
+	if( fileReadonly( namePtr ) )
 		{
 		/* If we want to create a new file we can't do it if we don't have
 		   write permission */
@@ -700,7 +708,7 @@ static int openKeysetStream( INOUT_PTR STREAM *stream,
 	/* Pre-open the file containing the keyset.  This initially opens it in
 	   read-only mode for auto-detection of the file type so we can check for
 	   various problems */
-	status = sFileOpen( stream, nameBuffer, FILE_FLAG_READ );
+	status = sFileOpen( stream, namePtr, FILE_FLAG_READ );
 	if( cryptStatusError( status ) )
 		{
 		/* The file can't be opened, if the create-new-file flag isn't set 
@@ -712,7 +720,7 @@ static int openKeysetStream( INOUT_PTR STREAM *stream,
 			return( CRYPT_ERROR_NOTAVAIL );
 
 		/* Try and create a new file */
-		status = sFileOpen( stream, nameBuffer, openMode );
+		status = sFileOpen( stream, namePtr, openMode );
 		if( cryptStatusError( status ) )
 			{
 			/* The file isn't open at this point so we have to exit 
@@ -758,7 +766,7 @@ static int openKeysetStream( INOUT_PTR STREAM *stream,
 			if( openMode != FILE_FLAG_READ )
 				{
 				sFileClose( stream );
-				status = sFileOpen( stream, nameBuffer, openMode );
+				status = sFileOpen( stream, namePtr, openMode );
 				if( cryptStatusError( status ) )
 					return( status );	/* Exit with file closed */
 				}
@@ -832,7 +840,6 @@ static BOOLEAN isFileKeysetAccessPermitted( INOUT_PTR KEYSET_INFO *keysetInfoPtr
 			if( accessType == KEYMGMT_ITEM_PRIVATEKEY || \
 				accessType == KEYMGMT_ITEM_PUBLICKEY || \
 				accessType == KEYMGMT_ITEM_SECRETKEY || \
-				accessType == KEYMGMT_ITEM_DATA || \
 				accessType == KEYMGMT_ITEM_KEYMETADATA )
 				return( TRUE );
 			return( FALSE );
@@ -1358,8 +1365,7 @@ static int keysetMessageFunction( INOUT_PTR TYPECAST( KEYSET_INFO * ) \
 				  keyIDinfo.keyIDlength < MAX_ATTRIBUTE_SIZE );
 		REQUIRES( messageValue != KEYMGMT_ITEM_PRIVATEKEY || \
 				  keysetInfoPtr->type == KEYSET_FILE );
-		REQUIRES( ( messageValue != KEYMGMT_ITEM_SECRETKEY && \
-					messageValue != KEYMGMT_ITEM_DATA ) || \
+		REQUIRES( messageValue != KEYMGMT_ITEM_SECRETKEY || \
 				  ( keysetInfoPtr->type == KEYSET_FILE && \
 					keysetInfoPtr->subType == KEYSET_SUBTYPE_PKCS15 ) );
 		REQUIRES( ( messageValue != KEYMGMT_ITEM_REQUEST && \
@@ -1410,7 +1416,6 @@ static int keysetMessageFunction( INOUT_PTR TYPECAST( KEYSET_INFO * ) \
 					  keysetInfoPtr->subType == KEYSET_SUBTYPE_PKCS15 || \
 					  keysetInfoPtr->subType == KEYSET_SUBTYPE_PKCS12 ) ) );
 		REQUIRES( ( messageValue != KEYMGMT_ITEM_SECRETKEY && \
-					messageValue != KEYMGMT_ITEM_DATA && \
 					messageValue != KEYMGMT_ITEM_KEYMETADATA ) || \
 				  ( keysetInfoPtr->type == KEYSET_FILE && \
 					keysetInfoPtr->subType == KEYSET_SUBTYPE_PKCS15 ) );
@@ -1732,10 +1737,10 @@ static int openKeyset( OUT_HANDLE_OPT CRYPT_KEYSET *iCryptKeyset,
 		if( keysetSubType == KEYSET_SUBTYPE_PKCS12 )
 			subType = SUBTYPE_KEYSET_FILE_PARTIAL;
 #endif /* USE_PKCS12 */
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS
 		if( keysetSubType == KEYSET_SUBTYPE_PGP_PUBLIC )
 			subType = SUBTYPE_KEYSET_FILE_PARTIAL;
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 		/* Make sure that the open-mode that's been specified is compatible
 		   with the object subtype */

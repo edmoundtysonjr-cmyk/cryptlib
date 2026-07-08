@@ -24,7 +24,7 @@
    resumes.
 
    Note that changing the follow requires an equivalent change in 
-   test/ssl.c */
+   test/tls.c */
 
 #if defined( _MSC_VER ) && \
 	( ( _MSC_VER == 1500 ) || \
@@ -1004,8 +1004,8 @@ static int createClientKeyex( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							  IN_LENGTH_PKC_Z const int keyexPublicValueLen,
 							  IN_BOOL const BOOLEAN isPSK )
 	{
-	const ATTRIBUTE_LIST *userNamePtr DUMMY_INIT_PTR;
-	const ATTRIBUTE_LIST *passwordPtr DUMMY_INIT_PTR;
+	const SESSION_ATTRIBUTE_LIST *userNamePtr DUMMY_INIT_PTR;
+	const SESSION_ATTRIBUTE_LIST *passwordPtr DUMMY_INIT_PTR;
 #ifdef USE_RSA_SUITES
 	BYTE wrappedKey[ CRYPT_MAX_PKCSIZE + 8 ];
 	int wrappedKeyLength;
@@ -1152,7 +1152,7 @@ static int beginClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								 INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo )
 	{
 #ifndef NO_SESSION_CACHE
-	const ATTRIBUTE_LIST *attributeListPtr;
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 #endif /* NO_SESSION_CACHE */
 	STREAM *stream = &handshakeInfo->stream;
 	SCOREBOARD_ENTRY_INFO scoreboardEntryInfo = { 0 };
@@ -1397,7 +1397,7 @@ static int beginClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   SHA2-256 at this point due to the LTS/TLS 1.3 cipher suite 
 		   negotiation so we hardcode that into the hashing */
 		getHashParameters( CRYPT_ALGO_SHA2, bitsToBytes( 256 ), &hashFunction, 
-						   &hashSize );
+						   &hashSize, NULL );
 		hashFunction( hashInfo, NULL, 0, 
 					  sessionInfoPtr->sendBuffer + TLS_HEADER_SIZE, 
 					  clientHelloLength, HASH_STATE_START );
@@ -1436,9 +1436,16 @@ static int beginClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		sMemDisconnect( stream );
 
 		/* We're resuming a previous session, if extended TLS facilities 
-		   were in use then make sure that the resumed session uses the same 
-		   facilities */
-		if( resumedFlags < originalFlags )
+		   were in use (EtM, EMS, LTS) then make sure that the resumed 
+		   session uses at least those same facilities.  This check prevents 
+		   downgrade attacks where additional security features are disabled 
+		   by a MITM 
+			   
+		   Note the "at least" check, it's possible to legitimately go from 
+		   fewer to more facilities in the resume, for example if resuming a 
+		   TLS 1.1 session, which doesn't do LTS, with a TLS 1.2 session, 
+		   which does */
+		if( ( resumedFlags & originalFlags ) != originalFlags )
 			{
 			retExt( CRYPT_ERROR_INVALID,
 					( CRYPT_ERROR_INVALID, SESSION_ERRINFO, 
@@ -1617,14 +1624,19 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{
 		/* If it's a pure PSK mechanism then there may be a pointless server 
 		   keyex containing an identity hint whose purpose is never 
-		   explained (more specifically the RFC makes it a SHOULD NOT, and
-		   clients MUST ignore it), in which case we have to process the 
+		   explained (more specifically, RFC 4279 makes it a SHOULD NOT and
+		   clients MUST ignore it) in which case we have to process the 
 		   packet to get rid of the identity hint */
 		if( handshakeInfo->authAlgo == CRYPT_ALGO_NONE )
 			{
 			status = refreshHSStream( sessionInfoPtr, handshakeInfo );
 			if( cryptStatusError( status ) )
 				return( status );
+#if 0	/* 8/6/26 This code was present from 3.4.3 in 2016 until 3.4.9 in
+				  2026 without ever being triggered (it incorrectly checked 
+				  for it as supplemental data, see below, due to a cut&paste 
+				  error so would have resulted in a handshake failure if
+				  encountered) so it's unlikely to be needed */
 			if( sPeek( stream ) == TLS_HAND_SUPPLEMENTAL_DATA )
 				{
 				status = checkHSPacketHeader( sessionInfoPtr, stream, &length,
@@ -1640,6 +1652,7 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							  "Invalid PSK identity hint" ) );
 					}
 				}
+#endif /* 0 */
 			}
 
 #ifdef CONFIG_FUZZ

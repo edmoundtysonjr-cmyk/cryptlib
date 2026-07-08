@@ -458,15 +458,15 @@ void updatePrivKeyAttributes( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
 							  IN_LENGTH_SHORT const int privKeyInfoSize, 
 							  IN_TAG const int keyTypeTag );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-int calculatePrivkeyStorage( OUT_BUFFER_ALLOC_OPT( *newPrivKeyDataSize ) \
-								void **newPrivKeyDataPtr, 
-							 OUT_LENGTH_SHORT_Z int *newPrivKeyDataSize, 
-							 IN_BUFFER_OPT( origPrivKeyDataSize ) \
-								const void *origPrivKeyData,
-							 IN_LENGTH_SHORT_Z const int origPrivKeyDataSize,
-							 IN_LENGTH_SHORT const int privKeySize,
-							 IN_LENGTH_SHORT const int privKeyAttributeSize,
-							 IN_LENGTH_SHORT_Z const int extraDataSize );
+int assignPrivkeyStorage( OUT_BUFFER_ALLOC_OPT( *newPrivKeyDataSize ) \
+							void **newPrivKeyDataPtr, 
+						  OUT_LENGTH_SHORT_Z int *newPrivKeyDataSize, 
+						  IN_BUFFER_OPT( origPrivKeyDataSize ) \
+							const void *origPrivKeyData,
+						  IN_LENGTH_SHORT_Z const int origPrivKeyDataSize,
+						  IN_LENGTH_SHORT const int privKeySize,
+						  IN_LENGTH_SHORT const int privKeyAttributeSize,
+						  IN_LENGTH_SHORT_Z const int extraDataSize );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 6, 11 ) ) \
 int pkcs15AddPrivateKey( INOUT_PTR PKCS15_INFO *pkcs15infoPtr, 
 						 IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,

@@ -864,6 +864,7 @@ static int certificateMessageFunction( INOUT_PTR TYPECAST( CERT_INFO * ) \
 			REQUIRES( isIntegerRangeNZ( certInfoPtr->certificateSize ) ); 
 			zeroise( certInfoPtr->certificate, certInfoPtr->certificateSize );
 			clFree( "certificateMessageFunction", certInfoPtr->certificate );
+			certInfoPtr->certificate = NULL;
 			}
 		if( certInfoPtr->type == CRYPT_CERTTYPE_CERTIFICATE || \
 			certInfoPtr->type == CRYPT_CERTTYPE_ATTRIBUTE_CERT || \
@@ -875,6 +876,7 @@ static int certificateMessageFunction( INOUT_PTR TYPECAST( CERT_INFO * ) \
 				{
 				clFree( "certificateMessageFunction", 
 						certInfoPtr->cCertCert->serialNumber );
+				certInfoPtr->cCertCert->serialNumber = NULL;
 				}
 			}
 #ifdef USE_CERTREQ
@@ -886,6 +888,7 @@ static int certificateMessageFunction( INOUT_PTR TYPECAST( CERT_INFO * ) \
 				{
 				clFree( "certificateMessageFunction", 
 						certInfoPtr->cCertReq->serialNumber );
+				certInfoPtr->cCertReq->serialNumber = NULL;
 				}
 			}
 #endif /* USE_CERTREQ */
@@ -896,20 +899,34 @@ static int certificateMessageFunction( INOUT_PTR TYPECAST( CERT_INFO * ) \
 				{
 				clFree( "certificateMessageFunction", 
 						certInfoPtr->cCertCert->subjectUniqueID );
+				certInfoPtr->cCertCert->subjectUniqueID = NULL;
 				}
 			if( certInfoPtr->cCertCert->issuerUniqueID != NULL )
 				{
 				clFree( "certificateMessageFunction", 
 						certInfoPtr->cCertCert->issuerUniqueID );
+				certInfoPtr->cCertCert->issuerUniqueID = NULL;
 				}
 			}
 #endif /* USE_CERT_OBSOLETE */
 		if( certInfoPtr->publicKeyData != NULL )
-			clFree( "certificateMessageFunction", certInfoPtr->publicKeyData  );
+			{
+			clFree( "certificateMessageFunction", 
+					certInfoPtr->publicKeyData );
+			certInfoPtr->publicKeyData = NULL;
+			}
 		if( certInfoPtr->subjectDNdata != NULL )
-			clFree( "certificateMessageFunction", certInfoPtr->subjectDNdata );
+			{
+			clFree( "certificateMessageFunction", 
+					certInfoPtr->subjectDNdata );
+			certInfoPtr->subjectDNdata = NULL;
+			}
 		if( certInfoPtr->issuerDNdata != NULL )
-			clFree( "certificateMessageFunction", certInfoPtr->issuerDNdata );
+			{
+			clFree( "certificateMessageFunction", 
+					certInfoPtr->issuerDNdata );
+			certInfoPtr->issuerDNdata = NULL;
+			}
 #ifdef USE_CERTREV
 		if( certInfoPtr->type == CRYPT_CERTTYPE_CRL || \
 			certInfoPtr->type == CRYPT_CERTTYPE_OCSP_REQUEST || \
@@ -919,6 +936,7 @@ static int certificateMessageFunction( INOUT_PTR TYPECAST( CERT_INFO * ) \
 				{
 				clFree( "certificateMessageFunction", 
 						certInfoPtr->cCertRev->responderUrl );
+				certInfoPtr->cCertRev->responderUrl = NULL;
 				}
 			}
 #endif /* USE_CERTREV */
@@ -930,6 +948,7 @@ static int certificateMessageFunction( INOUT_PTR TYPECAST( CERT_INFO * ) \
 				{
 				clFree( "certificateMessageFunction", 
 						certInfoPtr->cCertVal->responderUrl );
+				certInfoPtr->cCertVal->responderUrl = NULL;
 				}
 			}
 #endif /* USE_CERTVAL */
@@ -1848,6 +1867,7 @@ static int certificateMessageFunction( INOUT_PTR TYPECAST( CERT_INFO * ) \
 			REQUIRES( isIntegerRangeNZ( certInfoPtr->certificateSize ) ); 
 			zeroise( certInfoPtr->certificate, certInfoPtr->certificateSize );
 			clFree( "certificateMessageFunction", certInfoPtr->certificate );
+			certInfoPtr->certificate = NULL;
 			}
 
 		return( CRYPT_OK );

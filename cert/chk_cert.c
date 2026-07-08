@@ -378,6 +378,8 @@ static BOOLEAN wildcardMatch( IN_DATAPTR const DATAPTR constrainedAttribute,
 								  &constrainedStringLength );
 	if( cryptStatusError( status ) )
 		return( FALSE );
+	if( constrainingStringLength < 1 || constrainedStringLength < 1 )
+		return( FALSE );
 	isWildcardMatch = ( *constrainingString == '.' ) ? TRUE : FALSE;
 
 	/* Determine the start position of the constraining string within the
@@ -474,6 +476,10 @@ static BOOLEAN wildcardMatch( IN_DATAPTR const DATAPTR constrainedAttribute,
 		}
 	ENSURES_B( boundsCheckZ( startPos, constrainingStringLength, \
 							 constrainedStringLength ) );
+			   /* This check is slightly weaker for the MATCH_URI case since
+			      startPos is now relative to urlInfo.hostLen, but it checks
+			      the overall condition without making it an over-complex
+			      matchType-dependent check */
 
 	/* Check whether the constraining string is a suffix of the constrained
 	   string.  For DNS name constraints the rule for RFC 3280 became 
@@ -928,7 +934,8 @@ int checkPolicyConstraints( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 
 	/* If there's no requirement for a policy and there's none set, we're 
 	   done */
-	if( policyType == POLICY_NONE && \
+	if( ( policyType == POLICY_NONE || \
+		  policyType == POLICY_NONE_SPECIFIC ) && \
 		DATAPTR_ISNULL( constrainedAttributePtr ) )
 		return( CRYPT_OK );
 
@@ -1006,7 +1013,7 @@ int checkPolicyConstraints( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 		LOOP_INDEX_PTR DATAPTR_ATTRIBUTE constrainingAttributeCursor;
 
 		LOOP_LARGE( constrainingAttributeCursor = constrainingAttributePtr, 
-					!DATAPTR_ISNULL( constrainingAttributeCursor ), 
+					DATAPTR_ISSET( constrainingAttributeCursor ), 
 					constrainingAttributeCursor = \
 						findNextFieldInstance( constrainingAttributeCursor ) )
 			{
@@ -1361,10 +1368,10 @@ static int checkCrlConsistency( INOUT_PTR CERT_INFO *crlInfoPtr,
 	CRYPT_ERRTYPE_TYPE *errorType;
 #ifdef CONFIG_CUSTOM_1
 	DATAPTR_ATTRIBUTE attributePtr;
-	const void *deltaCRLindicator DUMMY_INIT_PTR;
-	int deltaCRLindicatorLen DUMMY_INIT, status = CRYPT_OK;
+	const void *baseCRLnumber DUMMY_INIT_PTR;
+	int baseCRLnumberLen DUMMY_INIT, status = CRYPT_OK;
 #else
-	int deltaCRLindicator, status;
+	int baseCRLnumber, status;
 #endif /* CONFIG_CUSTOM_1 */
 
 	assert( isWritePtr( crlInfoPtr, sizeof( CERT_INFO ) ) );
@@ -1379,7 +1386,28 @@ static int checkCrlConsistency( INOUT_PTR CERT_INFO *crlInfoPtr,
 	errorType = &crlInfoPtr->errorType;
 
 	/* If it's a delta CRL make sure that the CRL numbers make sense, i.e.
-	   that the delta CRL was issued after the full CRL */
+	   that the base CRL number given in the delta CRL indicator is lower
+	   than the (delta CRL's own) CRL number (RFC 3280 section 5.2.4).  So 
+	   if the base CRL contains a CRL number b and the delta CRL contains a 
+	   CRL number d and delta CRL indicator d_b == b then we must have 
+	   d_b < d in the delta CRL.  
+	   
+	   The spec (RFC 3280 section 5.2.4) states that "If a delta CRL and a 
+	   complete CRL that cover the same scope are issued at the same time, 
+	   they MUST have the same CRL number and provide the same revocation 
+	   information" which would imply that the CRL number and delta CRL 
+	   indicator containing the base CRL's CRL number would have the same 
+	   value.  This doesn't make any sense so we enforce the d_b < d 
+	   requirement.
+	   
+	   There are also a pile of additional conditions (RFC 3280 section 
+	   5.2.4 again) required to combine the base with the delta CRL, but 
+	   that's for the caller to check since we only have the delta CRL 
+	   available here.
+	   
+	   All of which are probably moot because delta CRLs, along with large
+	   amounts of other PKI folderol, are essentially if not actually 
+	   nonexistent */
 #ifdef CONFIG_CUSTOM_1
 	attributePtr = findAttributeField( crlInfoPtr->attributes,
 									   CRYPT_CERTINFO_DELTACRLINDICATOR, 
@@ -1387,8 +1415,8 @@ static int checkCrlConsistency( INOUT_PTR CERT_INFO *crlInfoPtr,
 	if( DATAPTR_ISSET( attributePtr ) )
 		{
 		status = getAttributeDataPtr( attributePtr, 
-									  ( void ** ) &deltaCRLindicator, 
-									  &deltaCRLindicatorLen );
+									  ( void ** ) &baseCRLnumber, 
+									  &baseCRLnumberLen );
 		}
 	else
 		status = CRYPT_ERROR;
@@ -1409,8 +1437,9 @@ static int checkCrlConsistency( INOUT_PTR CERT_INFO *crlInfoPtr,
 		else
 			status = CRYPT_ERROR;
 		if( cryptStatusOK( status ) && \
-			( crlNumberLen > deltaCRLindicatorLen || \
-			  memcmp( crlNumber, deltaCRLindicator, crlNumberLen ) >= 0 ) )
+			( crlNumberLen < baseCRLnumberLen || \
+			  ( crlNumberLen == baseCRLnumberLen && \
+				memcmp( crlNumber, baseCRLnumber, crlNumberLen ) <= 0 ) ) )
 			{
 			setErrorValues( CRYPT_CERTINFO_DELTACRLINDICATOR,
 							CRYPT_ERRTYPE_CONSTRAINT );
@@ -1424,7 +1453,7 @@ static int checkCrlConsistency( INOUT_PTR CERT_INFO *crlInfoPtr,
 	status = getAttributeFieldValue( crlInfoPtr->attributes,
 									 CRYPT_CERTINFO_DELTACRLINDICATOR, 
 									 CRYPT_ATTRIBUTE_NONE, 
-									 &deltaCRLindicator );
+									 &baseCRLnumber );
 	if( cryptStatusOK( status ) )
 		{
 		int crlNumber;
@@ -1432,14 +1461,15 @@ static int checkCrlConsistency( INOUT_PTR CERT_INFO *crlInfoPtr,
 		status = getAttributeFieldValue( crlInfoPtr->attributes,
 										 CRYPT_CERTINFO_CRLNUMBER, 
 										 CRYPT_ATTRIBUTE_NONE, &crlNumber );
-		if( cryptStatusOK( status ) && crlNumber >= deltaCRLindicator )
+		if( cryptStatusOK( status ) && crlNumber <= baseCRLnumber )
 			{
 			setErrorValues( CRYPT_CERTINFO_DELTACRLINDICATOR,
 							CRYPT_ERRTYPE_CONSTRAINT );
 			retExt( CRYPT_ERROR_INVALID,
 					( CRYPT_ERROR_INVALID, CRL_ERRINFO,
-					  "%s contains an invalid delta CRL indicator",
-					  getCertTypeNameLC( crlInfoPtr->type ) ) );
+					  "%s base CRL number %d is greater than delta CRL "
+					  "number %d", getCertTypeNameLC( crlInfoPtr->type ),
+					  baseCRLnumber, crlNumber ) );
 			}
 		}
 #endif /* CONFIG_CUSTOM_1 */

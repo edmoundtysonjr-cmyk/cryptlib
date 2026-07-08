@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							cryptlib TPM PKC Routines						*
-*						Copyright Peter Gutmann 2020-2022					*
+*						Copyright Peter Gutmann 2020-2025					*
 *																			*
 ****************************************************************************/
 
@@ -190,7 +190,8 @@ static int decryptFunction( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	assert( isWritePtrDynamic( buffer, noBytes ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( isShortIntegerRangeNZ( noBytes ) );
+	REQUIRES( isShortIntegerRangeNZ( noBytes ) && \
+			  noBytes >= keySize );
 
 	/* Get the FAPI context for the encryption context */
 	status = getFapiContext( contextInfoPtr, &fapiContext );
@@ -321,7 +322,8 @@ static int sign( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	assert( isWritePtrDynamic( buffer, noBytes ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( isShortIntegerRangeNZ( noBytes ) );
+	REQUIRES( isShortIntegerRangeNZ( noBytes ) && \
+			  noBytes >= keySize );
 
 	/* Undo the PKCS #1 padding to get the raw hash value */
 	LOOP_MAX( i = 2, i < keySize, i++ )
@@ -545,13 +547,16 @@ static int generateKeyFunction( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   function to get what we actually need */
 	tssResult = Fapi_GetTpmBlobs( fapiContext, objectPath, &keyBlob, 
 								  &keyBlobSize, NULL, NULL, NULL );
-	if( tssResult == TSS2_RC_SUCCESS )
-		{
-		tssResult = Tss2_MU_TPM2B_PUBLIC_Unmarshal( keyBlob, keyBlobSize, 
-													&dummy, &tpm2BPubkey );
-		}
 	if( tssResult != TSS2_RC_SUCCESS )
 		{
+		( void ) Fapi_Delete( fapiContext, objectPath );
+		return( tpmMapError( tssResult, CRYPT_ERROR_WRITE ) );
+		}
+	tssResult = Tss2_MU_TPM2B_PUBLIC_Unmarshal( keyBlob, keyBlobSize, 
+												&dummy, &tpm2BPubkey );
+	if( tssResult != TSS2_RC_SUCCESS )
+		{
+		Fapi_Free( keyBlob );
 		( void ) Fapi_Delete( fapiContext, objectPath );
 		return( tpmMapError( tssResult, CRYPT_ERROR_WRITE ) );
 		}

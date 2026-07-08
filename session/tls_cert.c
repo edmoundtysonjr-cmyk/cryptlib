@@ -349,7 +349,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int checkTLSCertificateInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
 	const CRYPT_CERTIFICATE iCryptCert = sessionInfoPtr->iKeyexAuthContext;
-	const ATTRIBUTE_LIST *serverNamePtr = \
+	const SESSION_ATTRIBUTE_LIST *serverNamePtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_SERVER_NAME );
 	const int verifyFlags = \
 				GET_FLAGS( sessionInfoPtr->protocolFlags,

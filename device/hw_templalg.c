@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *				cryptlib Crypto HAL Algorithm Template Routines				*
-*					  Copyright Peter Gutmann 1998-2020						*
+*					  Copyright Peter Gutmann 1998-2025						*
 *																			*
 ****************************************************************************/
 
@@ -50,7 +50,10 @@
 ****************************************************************************/
 
 /* Functions used to convert from the dummy hardware-internal bignum format 
-   (big-endian 32-or 64-bit words) to the generic external format */
+   (big-endian 32-or 64-bit words) to the generic external format.  Note 
+   that the data reads are word-quantised so will over-read slightly for 
+   non-word-sized data quantities (RSA e = 65537, P521), but all this means 
+   is that they'll read a few extra zero padding bytes into the value */
 
 static void valueToBytes( BYTE *memPtr, const long value )
 	{
@@ -971,12 +974,12 @@ static int ecdsaSign( CONTEXT_INFO *contextInfoPtr, BYTE *buffer,
 	sputc( &stream, BER_INTEGER );
 	sputc( &stream, bignumDataLength );
 	swrite( &stream, 
-			"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+			"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
 			bignumDataLength );
 	sputc( &stream, BER_INTEGER );
 	sputc( &stream, bignumDataLength );
 	status = swrite( &stream, 
-			"sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
+			"sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
 			bignumDataLength );
 	if( cryptStatusOK( status ) )
 		eccParams->outLen = stell( &stream );
@@ -1177,6 +1180,8 @@ static int hmacSha2InitKey( CONTEXT_INFO *contextInfoPtr, const void *key,
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isReadPtrDynamic( key, keyLength ) );
 
+	REQUIRES( keyLength >= 1 && keyLength <= CRYPT_MAX_KEYSIZE );
+
 	/* Find a free personality slot to store the key */
 	status = findFreePersonality( &keyHandle );
 	if( cryptStatusError( status ) )
@@ -1358,13 +1363,13 @@ static int initHardwareParams( CONTEXT_INFO *contextInfoPtr,
 				sha2SelfTest, sha2GetInfo, NULL, NULL, NULL, NULL, sha2Hash, sha2Hash
 				};
 		static const CAPABILITY_INFO capabilityInfoHMACSHA384 = {
-				CRYPT_ALGO_SHA2, bitsToBytes( 384 ), "HMAC-SHA384", 11,
+				CRYPT_ALGO_HMAC_SHA2, bitsToBytes( 384 ), "HMAC-SHA384", 11,
 				bitsToBytes( 64 ), bitsToBytes( 128 ), CRYPT_MAX_KEYSIZE,
 				hmacSha2SelfTest, hmacSha2GetInfo, NULL, NULL, hmacSha2InitKey, NULL, 
 					hmacSha2Hash, hmacSha2Hash
 				};
 		static const CAPABILITY_INFO capabilityInfoHMACSHA512 = {
-				CRYPT_ALGO_SHA2, bitsToBytes( 512 ), "HMAC-SHA512", 11,
+				CRYPT_ALGO_HMAC_SHA2, bitsToBytes( 512 ), "HMAC-SHA512", 11,
 				bitsToBytes( 64 ), bitsToBytes( 128 ), CRYPT_MAX_KEYSIZE,
 				hmacSha2SelfTest, hmacSha2GetInfo, NULL, NULL, hmacSha2InitKey, NULL, 
 					hmacSha2Hash, hmacSha2Hash

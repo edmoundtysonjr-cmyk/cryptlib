@@ -133,6 +133,7 @@ int createX509signature( OUT_BUFFER( signedObjectMaxLength, \
 
 	/* Create the signature and calculate the overall length of the payload, 
 	   optional signature wrapper, and signature data */
+#ifdef USE_ED25519
 	if( isBernsteinAlgo( signAlgo ) )
 		{
 		setSigDataInfoMessage( &sigDataInfo, object, objectLength );
@@ -141,6 +142,7 @@ int createX509signature( OUT_BUFFER( signedObjectMaxLength, \
 								  &sigDataInfo, SIGNATURE_X509, errorInfo );
 		}
 	else
+#endif /* USE_ED25519 */
 		{
 		setSigDataInfoHashEx( &sigDataInfo, iHashContext, hashAlgo, 
 							  hashParam );
@@ -272,7 +274,7 @@ int checkX509signature( IN_BUFFER( signedObjectLength ) const void *signedObject
 	sMemConnect( &stream, signedObject, signedObjectLength );
 	readLongSequence( &stream, NULL );						/* SignedObject */
 	status = getLongStreamObjectLength( &stream, &length );	/* Object */
-	if( cryptStatusOK( status ) && !isShortIntegerRangeNZ( length ) )
+	if( cryptStatusOK( status ) && !isBufsizeRangeNZ( length ) )
 		status = CRYPT_ERROR_BADDATA;
 	if( cryptStatusOK( status ) )
 		status = sMemGetDataBlock( &stream, &objectPtr, length );
@@ -308,6 +310,14 @@ int checkX509signature( IN_BUFFER( signedObjectLength ) const void *signedObject
 
 	/* Remember the location and size of the signature data */
 	status = sMemGetDataBlockRemaining( &stream, &sigPtr, &sigLength );
+	if( cryptStatusOK( status ) && !isShortIntegerRangeNZ( sigLength ) )
+		{
+		/* Just the signature portion of the message both should never be 
+		   this big and if it is will fail the input-length check in 
+		   checkSignature(), so we check for it here and return a more
+		   meaningful error code */
+		status = CRYPT_ERROR_OVERFLOW;
+		}
 	if( cryptStatusError( status ) )
 		{
 		sMemDisconnect( &stream );
@@ -339,8 +349,16 @@ int checkX509signature( IN_BUFFER( signedObjectLength ) const void *signedObject
 
 	/* If it's a special-snowflake algorithm then we verify the raw data 
 	   rather than a hash */
+#ifdef USE_ED25519
 	if( isBernsteinAlgo( signAlgo ) )
 		{
+		/* The Bernstein special-snowflake signatures want to verify the raw 
+		   data rather than a hash and that only allows a maximum short-
+		   integer length.  This should be fine because mega-CRLs went out of
+		   fashion long before the special-snowflake signature algorithms 
+		   were invented */
+		if( !isShortIntegerRangeNZ( length ) )
+			return( CRYPT_ERROR_OVERFLOW );
 		setSigDataInfoMessage( &sigDataInfo, objectPtr, length );
 		status = checkSignature( sigPtr, sigLength, iSigCheckContext,
 								 &sigDataInfo, SIGNATURE_X509, errorInfo );
@@ -353,6 +371,7 @@ int checkX509signature( IN_BUFFER( signedObjectLength ) const void *signedObject
 									   "checkSignature" ) );
 		return( CRYPT_OK );
 		}
+#endif /* USE_ED25519 */
 
 	/* Create a hash context from the algorithm identifier of the
 	   signature */
@@ -465,7 +484,7 @@ int createRawSignature( OUT_BUFFER( sigMaxLength, *signatureLength ) \
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 5 ) ) \
 int checkRawSignature( IN_BUFFER( signatureLength ) const void *signature, 
-					   IN_LENGTH_SHORT const int signatureLength,
+					   IN_LENGTH_SHORT_MIN( 40 ) const int signatureLength,
 					   IN_HANDLE const CRYPT_CONTEXT iSigCheckContext,
 					   IN_HANDLE const CRYPT_CONTEXT iHashContext,
 					   INOUT_PTR ERROR_INFO *errorInfo )
@@ -477,7 +496,7 @@ int checkRawSignature( IN_BUFFER( signatureLength ) const void *signature,
 	assert( isReadPtrDynamic( signature, signatureLength ) );
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
 
-	REQUIRES( isShortIntegerRangeNZ( signatureLength ) );
+	REQUIRES( isShortIntegerRangeMin( signatureLength, 40 ) );
 	REQUIRES( isHandleRangeValid( iSigCheckContext ) );
 	REQUIRES( isHandleRangeValid( iHashContext ) );
 

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					cryptlib DBMS CA Certificate Add Interface				*
-*						Copyright Peter Gutmann 1996-2007					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -86,10 +86,11 @@ BOOLEAN checkRequest( IN_HANDLE const CRYPT_CERTIFICATE iCertRequest,
 			if( cryptStatusOK( status ) && !isSelfSigned )
 				{
 				/* It's an unsigned CRMF request, make sure that it really 
-				   is an encryption-only key */
+				   is an encryption-only key, indicated by having a keyUsage
+				   attribute present with no signing usages */
 				status = krnlSendMessage( iCertRequest, IMESSAGE_GETATTRIBUTE,
 										  &value, CRYPT_CERTINFO_KEYUSAGE );
-				if( cryptStatusOK( status ) && ( value & KEYUSAGE_SIGN ) )
+				if( cryptStatusError( status ) || ( value & KEYUSAGE_SIGN ) )
 					return( FALSE );
 				break;
 				}

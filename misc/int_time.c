@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						cryptlib Internal Time/Timer API					*
-*						Copyright Peter Gutmann 1992-2020					*
+*						Copyright Peter Gutmann 1992-2025					*
 *																			*
 ****************************************************************************/
 
@@ -53,9 +53,8 @@ static time_t returnTime( const time_t theTime,
 
 	/* If no useful time is available, return either an error value or an 
 	   approximation of the time */
-	if( ( theTime == ( time_t ) -1 ) || \
-		( theTime <= MIN_TIME_VALUE ) || \
-		( theTime >= MAX_TIME_VALUE ) )
+	if( theTime == ( time_t ) -1 || \
+		theTime <= MIN_TIME_VALUE || theTime >= MAX_TIME_VALUE )
 		{
 		DEBUG_DIAG(( "No time source available" ));
 		assert( DEBUG_WARN );
@@ -319,8 +318,7 @@ static BOOLEAN correctMonoTimer( INOUT_PTR MONOTIMER_INFO *timerInfo,
 		}
 	timerInfo->endTime = currentTime + timerInfo->timeRemaining;
 	if( timerInfo->endTime < currentTime || \
-		timerInfo->endTime < currentTime + max( timerInfo->timeRemaining,
-												timerInfo->origTimeout ) )
+		timerInfo->endTime < timerInfo->timeRemaining )
 		{
 		/* There's a problem with the time calculations, handle the overflow
 		   condition and tell the caller not to try anything further */
@@ -698,9 +696,9 @@ static void randomDelay( IN_RANGE( 0, 10 ) const int baseDelaySeconds,
 	int delayTime = getRandomInteger();
 
 	REQUIRES_V( baseDelaySeconds >= 0 && baseDelaySeconds <= 10 );
-	ENSURES_V( maxDelayMS >= 100 && maxDelayMS <= 5000 );
+	REQUIRES_V( maxDelayMS >= 100 && maxDelayMS <= 5000 );
 
-	/* Use a delay from 0.01s to maxDelayMS.  getRandomInteger() can return 
+	/* Use a delay from 5ms to maxDelayMS.  getRandomInteger() can return 
 	   zero for a shouldn't-occur error condition, this is converted into a 
 	   small nonzero wait alongside an actual zero value */
 	delayTime %= ( maxDelayMS + 1 );
@@ -901,6 +899,26 @@ BOOLEAN testIntTime( void )
 	if( checkMonoTimerExpiryImminent( &timerInfo, 0 ) || \
 		checkMonoTimerExpiryImminent( &timerInfo, 9 ) || \
 		!checkMonoTimerExpiryImminent( &timerInfo, 10 ) )
+		return( FALSE );
+
+	/* Check the clock going backwards again, this time advancing the clock
+	   a few times before setting it back */
+	setTestTime( 1000 );
+	status = setMonoTimer( &timerInfo, 10 );
+	if( cryptStatusError( status ) )
+		return( FALSE );
+	setTestTime( 1001 );
+	if( checkMonoTimerExpiryImminent( &timerInfo, 8 ) || \
+		!checkMonoTimerExpiryImminent( &timerInfo, 9 ) )
+		return( FALSE );
+	setTestTime( 1002 );
+	if( checkMonoTimerExpiryImminent( &timerInfo, 7 ) || \
+		!checkMonoTimerExpiryImminent( &timerInfo, 8 ) )
+		return( FALSE );
+	setTestTime( 999 );
+	if( checkMonoTimerExpiryImminent( &timerInfo, 0 ) || \
+		checkMonoTimerExpiryImminent( &timerInfo, 7 ) || \
+		!checkMonoTimerExpiryImminent( &timerInfo, 8 ) )
 		return( FALSE );
 
 	/* Check clock going forwards too far.  This recovers from a time jump 

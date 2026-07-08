@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						Certificate Attribute Definitions					*
-*						Copyright Peter Gutmann 1996-2021					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -4495,7 +4495,7 @@ static int checkURLString( IN_BUFFER( urlLength ) const char *url,
 				/* It's a URL, not a DNS name */
 				return( CRYPT_ERRTYPE_ATTR_VALUE );
 				}
-			if( ( isDigit( url[ 0 ] && isDigit( url[ 1 ] ) ) ) || \
+			if( ( isDigit( url[ 0 ] ) && isDigit( url[ 1 ] ) ) || \
 				( url[ 0 ] == '[' && \
 				  ( url[ 1 ] == ':' || isDigit( url[ 1 ] ) ) ) )
 				{

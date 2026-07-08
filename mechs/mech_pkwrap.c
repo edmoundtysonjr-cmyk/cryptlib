@@ -452,8 +452,14 @@ static int pkcWrapData( INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo,
 						
 				/* Since we've moved the data that the samplePtr is pointing 
 				   to we also need to move that to point to its new 
-				   location */
-				samplePtr -= delta;
+				   location, making sure that we don't move before the start
+				   of the data.  This can't actually happen in practice 
+				   because we never strip enough leading zeroes for it to be
+				   a problem, the check below is purely for hygiene reasons */
+				if( delta <= inputLength / 2 )
+					samplePtr -= delta;
+				else
+					samplePtr = mechanismInfo->wrappedData;
 				}
 			mechanismInfo->wrappedDataLength = dataLength;
 			CFI_CHECK_UPDATE( "IMESSAGE_CTX_ENCRYPT" );
@@ -1229,7 +1235,7 @@ static int getOaepHash( OUT_BUFFER_OPT( lHashMaxLen, *lHashLen ) \
 	REQUIRES( ( lHash == NULL && lHashMaxLen == 0 ) || \
 			  ( lHash != NULL && \
 				isShortIntegerRangeMin( lHashMaxLen, \
-										CRYPT_MAX_HASHSIZE ) ) );
+										MIN_HASHSIZE ) ) );
 	REQUIRES( isHashAlgo( hashAlgo ) );
 	REQUIRES( hashParam == 0 || \
 			  ( hashParam >= MIN_HASHSIZE && \
@@ -1494,7 +1500,7 @@ static int recoverOaepDataBlock( OUT_BUFFER( messageMaxLen, *messageLen ) \
 	REQUIRES( !checkOverflowSub( dataLen, 1 + seedLen ) );
 	dbLen = dataLen - ( 1 + seedLen );
 
-	ENSURES( dbLen >= 16 && 1 + seedLen + dbLen <= dataLen );
+	ENSURES( dbLen >= 20 && 1 + seedLen + dbLen <= dataLen );
 
 	/* seedMask = MGF1( maskedDB, seedLen ) */
 	status = mgf1( seedMask, seedLen, db, dbLen, hashAlgo, hashParam );

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						Certificate Validity (RTCS) Routines				*
-*						Copyright Peter Gutmann 1996-2016					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -860,7 +860,7 @@ static int sizeofRtcsResponseEntry( INOUT_PTR VALIDITY_INFO *rtcsEntry,
 
 	return( sizeofShortObject( sizeofShortObject( KEYID_SIZE ) + \
 							   sizeofEnumerated( 1 ) + \
-							   ( ( rtcsEntry->attributeSize ) ? \
+							   ( ( rtcsEntry->attributeSize > 0 ) ? \
 								 sizeofShortObject( rtcsEntry->attributeSize ) : 0 ) ) );
 	}
 
@@ -928,7 +928,9 @@ static int writeRtcsResponseEntry( INOUT_PTR STREAM *stream,
 										   MAP_TABLE ) );
 	ENSURES( cryptStatusOK( status ) );
 	writeSequence( stream, sizeofShortObject( KEYID_SIZE ) + \
-						   sizeofEnumerated( 1 ) );
+						   sizeofEnumerated( 1 ) + \
+						   ( rtcsEntry->attributeSize > 0 ) ? \
+							 sizeofShortObject( rtcsEntry->attributeSize ) : 0 );
 	writeOctetString( stream, rtcsEntry->data, KEYID_SIZE, DEFAULT_TAG );
 	status = writeEnumerated( stream, value, DEFAULT_TAG );
 	if( cryptStatusError( status ) || rtcsEntry->attributeSize <= 0 )

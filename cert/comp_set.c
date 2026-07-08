@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							Set Certificate Components						*
-*						Copyright Peter Gutmann 1997-2016					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -608,13 +608,10 @@ int addCertComponent( INOUT_PTR CERT_INFO *certInfoPtr,
 				{
 				setObjectErrorInfo( certInfoPtr, CRYPT_CERTINFO_CA,
 									CRYPT_ERRTYPE_ATTR_ABSENT );
-				if( cryptStatusError( status ) )
-					{
-					retExt( CRYPT_ARGERROR_NUM1,
-							( CRYPT_ARGERROR_NUM1, CERTIFICATE_ERRINFO,
-							  "Implicit trust can only be set for CA "
-							  "certificates" ) );
-					}
+				retExt( CRYPT_ARGERROR_NUM1,
+						( CRYPT_ARGERROR_NUM1, CERTIFICATE_ERRINFO,
+						  "Implicit trust can only be set for CA "
+						  "certificates" ) );
 				}
 			return( krnlSendMessage( certInfoPtr->ownerHandle,
 									 IMESSAGE_USER_TRUSTMGMT,
@@ -1079,7 +1076,7 @@ int addCertComponentString( INOUT_PTR CERT_INFO *certInfoPtr,
 						( CRYPT_ERROR_INITED, CERTIFICATE_ERRINFO,
 						  "%s already contains a %s date",
 						  getCertTypeName( certInfoPtr->type ),
-						  ( certInfoType == CRYPT_CERTINFO_VALIDFROM ) ? \
+						  ( certInfoType == CRYPT_CERTINFO_VALIDTO ) ? \
 							"end" : "next-update" ) );
 				}
 			if( certInfoPtr->startTime > 0 && \

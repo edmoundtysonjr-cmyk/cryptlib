@@ -9,7 +9,7 @@
 
 #define _CRYPTLIB_DEFINED
 
-/* The current cryptlib version: 3.4.9.2 */
+/* The current cryptlib version: 3.4.9.3 */
 
 #define CRYPTLIB_VERSION	349
 

@@ -168,6 +168,8 @@ static void updateConfig( void )
 	const char *driverPath = "c:/program files/eracom/cprov runtime/cryptoki.dll";	/* Eracom (new, doesn't work) */
 	const char *driverPath = "sadaptor.dll";		/* Eutron */
 	const char *driverPath = "ngp11v211.dll";		/* Feitian Technology */
+	const char *driverPath = "/home/fuzzer/FREEHSM/libfreehsm-fips.so";		/* FreeHSM (from source) */
+	const char *driverPath = "/home/fuzzer/FREEHSM/lib/libfreehsm-fips.so";	/* FreeHSM (prebuilt) */
 	const char *driverPath = "pk2priv.dll";			/* Gemplus */
 	const char *driverPath = "c:/program files/gemplus/gclib.dll";	/* Gemplus */
 	const char *driverPath = "cryptoki.dll";		/* IBM */
@@ -192,7 +194,11 @@ static void updateConfig( void )
 	const char *driverPath = "smartp11.dll";		/* SmartTrust */
 	const char *driverPath = "SpyPK11.dll";			/* Spyrus */
 #endif /* 0 */
+#ifdef __WINDOWS__
 	const char *driverPath = "c:/program files (x86)/eracom/cprov sw/cryptoki.dll";	/* Eracom (old, OK) */
+#else
+	const char *driverPath = "/home/fuzzer/FREEHSM/libfreehsm-fips.so";	/* FreeHSM */
+#endif /* Windows/Unix */
 	int status;
 
 	printf( "Updating cryptlib configuration to load PKCS #11 driver\n  "

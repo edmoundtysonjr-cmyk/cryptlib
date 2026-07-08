@@ -588,108 +588,6 @@ int readRADIUSMessage( INOUT_PTR STREAM *stream,
 	return( CRYPT_OK );
 	}
 
-/* Read an RFC 5997 RADIUS ping response, which is just an empty message:
-
-	byte		type = RADIUS_ACCESS_ACCEPT / RADIUS_ACCESS_REJECT
-	byte		counter
-	uint16		length = 20
-	byte[16]	nonce */
-
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-int readRADIUSPingResponse( INOUT_PTR STREAM *stream,
-							INOUT_PTR EAP_INFO *eapInfo )
-	{
-	NET_STREAM_INFO *netStream = DATAPTR_GET( stream->netStream );
-	STM_TRANSPORTREAD_FUNCTION transportReadFunction;
-	STREAM radiusStream;
-	BYTE nonce[ RADIUS_NONCE_SIZE + 8 ];
-	int type, counter, bytesRead, totalLength, status;
-
-	assert( isWritePtr( stream, sizeof( STREAM ) ) );
-	assert( isWritePtr( eapInfo, sizeof( EAP_INFO ) ) );
-
-	REQUIRES( netStream != NULL && sanityCheckNetStreamEAP( netStream ) );
-
-	/* Set up the function pointers.  We have to do this after the netStream
-	   check otherwise we'd potentially be dereferencing a NULL pointer */
-	transportReadFunction = ( STM_TRANSPORTREAD_FUNCTION ) \
-							FNPTR_GET( netStream->transportReadFunction );
-	REQUIRES( transportReadFunction != NULL );
-
-	/* Read the RADIUS ping response */
-	status = transportReadFunction( netStream, stream->buffer, 
-									RADIUS_MAX_PACKET_SIZE, &bytesRead, 
-									TRANSPORT_FLAG_NONE );
-	if( cryptStatusError( status ) )
-		return( status );
-	if( bytesRead <= 0 && netStream->timeout <= 0 )
-		{
-		/* If this was a nonblocking read and no data was read, this isn't
-		   an error */
-		return( OK_SPECIAL );
-		}
-	if( bytesRead < RADIUS_HEADER_SIZE )
-		{
-		retExt( CRYPT_ERROR_TIMEOUT,
-				( CRYPT_ERROR_TIMEOUT, NETSTREAM_ERRINFO, 
-				  "Timed out reading RADIUS packet header, only got %d of "
-				  "%d bytes", bytesRead, RADIUS_HEADER_SIZE ) );
-		}
-
-	/* Decode the packet, which is an empty RADIUS message */
-	sMemConnect( &radiusStream, stream->buffer, RADIUS_HEADER_SIZE );
-	type = sgetc( &radiusStream );
-	counter = sgetc( &radiusStream );
-	totalLength = readUint16( &radiusStream );
-	REQUIRES( rangeCheck( RADIUS_NONCE_SIZE, 1, RADIUS_NONCE_SIZE ) );
-	status = sread( &radiusStream, nonce, RADIUS_NONCE_SIZE );
-	sMemDisconnect( &radiusStream );
-	if( cryptStatusError( status ) )
-		return( status );
-	if( type <= RADIUS_TYPE_NONE || type >= RADIUS_TYPE_LAST )
-		{
-		retExt( CRYPT_ERROR_BADDATA,
-				( CRYPT_ERROR_BADDATA, NETSTREAM_ERRINFO, 
-				  "Invalid RADIUS packet type %d", type ) );
-		}
-	if( totalLength < RADIUS_MIN_PACKET_SIZE || \
-		totalLength > RADIUS_MAX_PACKET_SIZE )
-		{
-		/* First a general check that the packet length is valid */
-		retExt( CRYPT_ERROR_BADDATA,
-				( CRYPT_ERROR_BADDATA, NETSTREAM_ERRINFO, 
-				  "Invalid RADIUS packet length %d for packet type %s (%d), "
-				  "should be %d...%d", totalLength, 
-				  getRADIUSPacketName( type ), type, RADIUS_MIN_PACKET_SIZE, 
-				  RADIUS_MAX_PACKET_SIZE ) );
-		}
-	if( totalLength != bytesRead )
-		{
-		/* Now a more specific check that the packet size corresponds to the 
-		   data that was read */
-		retExt( CRYPT_ERROR_BADDATA,
-				( CRYPT_ERROR_BADDATA, NETSTREAM_ERRINFO, 
-				  "Invalid RADIUS packet length %d for packet type %s (%d), "
-				  "should have been %d", totalLength, 
-				  getRADIUSPacketName( type ), type, bytesRead ) );
-		}
-	eapInfo->radiusType = type;
-
-	DEBUG_PRINT_BEGIN();
-	DEBUG_PRINT(( "Read %s (%d) RADIUS packet, length %d, packet ID %d.\n", 
-				  getRADIUSPacketName( eapInfo->radiusType ), 
-				  eapInfo->radiusType, totalLength, counter ));
-#ifdef DEBUG_TRACE_RADIUS
-	DEBUG_DUMP_DATA( stream->buffer, totalLength );
-#endif /* DEBUG_TRACE_RADIUS */
-	DEBUG_PRINT_END();
-
-	/* If the server returns an Access Accept then everything is OK, 
-	   otherwise we can't continue */
-	return( ( eapInfo->radiusType == RADIUS_TYPE_ACCEPT ) ? \
-			CRYPT_OK : CRYPT_ERROR_PERMISSION );
-	}
-
 /* Process a RADIUS message consisting of RADIUS TLV packets:
 
 	byte		type
@@ -913,8 +811,11 @@ int processRADIUSTLVs( INOUT_PTR STREAM *stream,
 			}
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( noPackets >= MAX_RADIUS_TLV_FRAGMENTS )
+	if( noPackets >= MAX_RADIUS_TLV_FRAGMENTS && \
+		stell( stream ) < eapInfo->radiusLength && !partialRead )
 		{
+		/* We exited the read loop due to an exceeded packet count, this is
+		   an error */
 		retExt( CRYPT_ERROR_OVERFLOW,
 				( CRYPT_ERROR_OVERFLOW, errorInfo, 
 				  "Encountered more than %d RADIUS TLV entries",
@@ -937,7 +838,7 @@ int processRADIUSTLVs( INOUT_PTR STREAM *stream,
 	byte		type
 	byte		counter		-- Incremented for every req/resp pair
 	uint16		length		-- Including type, counter, length
-	byte		subtype
+  [	byte		subtype		-- For request/response packets ]
   [	byte			flags		-- For EAP-TLS/TTLS/PEAP ]
   [ byte[]			opt_data	-- For EAP-TLS/TTLS/PEAP ]
 	byte[]		data
@@ -974,8 +875,10 @@ static int readRADIUSEAP( INOUT_PTR STREAM *stream,
 	*bytesProcessed = 0;
 
 	/* Make sure that there's at least enough data present to read the
-	   header */
-	if( radiusEncapsLength < 1 + 1 + UINT16_SIZE + 1 )
+	   header.  This can have an optional subtype value present for
+	   some packet types but we don't know which until we've read the
+	   packet type so we just check for the always-present fields  */
+	if( radiusEncapsLength < 1 + 1 + UINT16_SIZE )
 		return( CRYPT_ERROR_BADDATA );
 
 	/* Read the EAP packet header and optional subtype information */
@@ -985,6 +888,10 @@ static int readRADIUSEAP( INOUT_PTR STREAM *stream,
 	if( !cryptStatusError( status ) && \
 		( type == EAP_TYPE_REQUEST || type == EAP_TYPE_RESPONSE ) )
 		{
+		/* There should be a subtype present as well, make sure there's
+		   enough data available to hold it */
+		if( radiusEncapsLength < 1 + 1 + UINT16_SIZE + 1 )
+			return( CRYPT_ERROR_BADDATA );
 		isReqResp = TRUE;
 		status = subType = sgetc( stream );
 		}
@@ -1344,8 +1251,11 @@ static int readFunction( INOUT_PTR STREAM *stream,
 			}
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( noPackets >= MAX_RADIUS_EAP_FRAGMENTS )
+	if( noPackets >= MAX_RADIUS_EAP_FRAGMENTS && \
+		( continueRead || bufSize > 0 ) )
 		{
+		/* We exited the read loop due to an exceeded packet count, this is
+		   an error */
 		retExt( CRYPT_ERROR_OVERFLOW,
 				( CRYPT_ERROR_OVERFLOW, NETSTREAM_ERRINFO, 
 				  "Encountered more than %d RADIUS packets to communicate "

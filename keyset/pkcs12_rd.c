@@ -1071,9 +1071,8 @@ static int importDataOnlyCertificate( const PKCS12_INFO *pkcs12infoPtr,
 		   certificate data */
 		if( certDataSize > 2048 )
 			{
-			if( certDataSize >= MAX_INTLENGTH_SHORT )
-				return( CRYPT_ERROR_OVERFLOW );
-			REQUIRES( isShortIntegerRangeNZ( certDataSize ) );
+			REQUIRES( isShortIntegerRangeMin( certDataSize, MIN_CERTSIZE ) );
+					  /* Already checked earlier */
 			if( ( certData = clAlloc( "importDataOnlyCertificate", \
 									  certDataSize ) ) == NULL )
 				return( CRYPT_ERROR_MEMORY );
@@ -1092,7 +1091,10 @@ static int importDataOnlyCertificate( const PKCS12_INFO *pkcs12infoPtr,
 		REQUIRES( isShortIntegerRangeNZ( certDataSize ) ); 
 		zeroise( certData, certDataSize );
 		if( certData != certDataBuffer )
+			{
 			clFree( "importDataOnlyCertificate", certData );
+			certData = NULL;
+			}
 		}
 	if( cryptStatusError( status ) )
 		{

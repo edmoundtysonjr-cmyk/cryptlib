@@ -904,7 +904,7 @@ static int readKey( INOUT_PTR STREAM *stream,
 	packetHeader[ 2 ] = intToByte( 1 + 4 + length );
 
 	/* Hash the data needed to generate the OpenPGP keyID */
-	getHashParameters( CRYPT_ALGO_SHA1, 0, &hashFunction, &hashSize );
+	getHashParameters( CRYPT_ALGO_SHA1, 0, &hashFunction, &hashSize, NULL );
 	hashFunction( hashInfo, NULL, 0, packetHeader, 1 + 2 + 1 + 4, 
 				  HASH_STATE_START );
 	hashFunction( hashInfo, hash, CRYPT_MAX_HASHSIZE, 

@@ -15,6 +15,7 @@
 /* #define CONFIG_PROFILE_PGP */
 /* #define CONFIG_PROFILE_TLS */
 /* #define CONFIG_PROFILE_SSH */
+/* #define CONFIG_TEST_3 */
 /* #define CONFIG_CUSTOM_1 */
 
 /* #define CONFIG_FAULTS */

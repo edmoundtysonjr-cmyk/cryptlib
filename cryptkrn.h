@@ -1259,7 +1259,6 @@ typedef enum {
 	KEYMGMT_ITEM_PKIUSER,		/* Access PKI user info */
 	KEYMGMT_ITEM_REVOCATIONINFO,/* Access revocation info/CRL */
 	KEYMGMT_ITEM_KEYMETADATA,	/* Access key metadata for dummy ctx.*/
-	KEYMGMT_ITEM_DATA,			/* Other data (for PKCS #15 tokens) */
 	KEYMGMT_ITEM_LAST			/* Last possible item type */
 	} KEYMGMT_ITEM_TYPE;
 

@@ -438,8 +438,10 @@ int persistContextMetadata( INOUT_PTR TYPECAST( CONTEXT_INFO * ) \
 							  IMESSAGE_KEY_SETKEY, &setkeyInfo,
 							  KEYMGMT_ITEM_KEYMETADATA );
 	krnlReleaseObject( iCryptDevice );
+	if( cryptStatusError( status ) )
+		return( status );
 	SET_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_PERSISTENT );
 
-	return( status );
+	return( CRYPT_OK );
 	}
 #endif /* USE_HARDWARE || USE_TPM */

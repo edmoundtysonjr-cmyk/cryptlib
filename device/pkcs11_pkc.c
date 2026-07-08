@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						cryptlib PKCS #11 PKC Routines						*
-*						Copyright Peter Gutmann 1998-2011					*
+*						Copyright Peter Gutmann 1998-2025					*
 *																			*
 ****************************************************************************/
 
@@ -47,11 +47,14 @@
    two-phase read is necessary for buggy implementations that fail if the 
    given size isn't exactly the same as the data size */
 
-static int readAttributeValue( PKCS11_INFO *pkcs11Info,
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 4, 6 ) ) \
+static int readAttributeValue( INOUT_PTR PKCS11_INFO *pkcs11Info,
 							   const CK_OBJECT_HANDLE hObject,
 							   const CK_ATTRIBUTE_TYPE attrType, 
-							   void *buffer, const int bufMaxLen,
-							   int *length )
+							   OUT_BUFFER( bufMaxLen, *length ) \
+									void *buffer, 
+							   IN_LENGTH_SHORT const int bufMaxLen,
+							   OUT_INT_Z int *length )
 	{
 	CK_ATTRIBUTE attrTemplate = { attrType, NULL_PTR, bufMaxLen };
 	CK_RV status;
@@ -61,15 +64,25 @@ static int readAttributeValue( PKCS11_INFO *pkcs11Info,
 	assert( isWritePtrDynamic( buffer, bufMaxLen ) );
 	assert( isWritePtr( length, sizeof( int ) ) );
 
-	/* Clear return value */
+	REQUIRES( isShortIntegerRangeNZ( bufMaxLen ) );
+
+	/* Clear return values */
 	REQUIRES( isShortIntegerRangeNZ( bufMaxLen ) ); 
 	memset( buffer, 0, min( 16, bufMaxLen ) );
-	*length = CRYPT_ERROR;
+	*length = 0;
 
 	status = C_GetAttributeValue( pkcs11Info->hSession, hObject, 
 								  &attrTemplate, 1 );
 	if( status == CKR_OK )
 		{
+		/* Because of the two-phase read, the driver can potentially update 
+		   the length to something that's greater than the originally 
+		   requested value, so we check for this before we try the actual
+		   data read.  After this point we know that the length matches the
+		   actual data length and is within range for the buffer */
+		if( attrTemplate.ulValueLen > bufMaxLen )
+			return( CRYPT_ERROR_OVERFLOW );
+
 		attrTemplate.pValue = buffer;
 		status = C_GetAttributeValue( pkcs11Info->hSession, hObject, 
 									  &attrTemplate, 1 );
@@ -89,8 +102,9 @@ static int readAttributeValue( PKCS11_INFO *pkcs11Info,
 						  FAILSAFE_ARRAYSIZE( template, CK_ATTRIBUTE ), \
 						  attribute, value, length )
 
+STDC_NONNULL_ARG( ( 1, 4 ) ) \
 static void setTemplateEntry( INOUT_ARRAY( templateSize ) \
-								CK_ATTRIBUTE *template, 
+									CK_ATTRIBUTE *template, 
 							  IN_LENGTH_SHORT const int templateSize, 
 							  const CK_ATTRIBUTE_TYPE attribute, 
 							  IN_BUFFER( length ) const void *value, 
@@ -140,6 +154,7 @@ static void setTemplateEntry( INOUT_ARRAY( templateSize ) \
 		templateEntryCount( template, \
 						    FAILSAFE_ARRAYSIZE( template, CK_ATTRIBUTE ) )
 
+STDC_NONNULL_ARG( ( 1 ) ) \
 static int templateEntryCount( IN_ARRAY( templateSize ) \
 									const CK_ATTRIBUTE *template, 
 							   IN_LENGTH_SHORT const int templateSize )
@@ -169,6 +184,7 @@ static int templateEntryCount( IN_ARRAY( templateSize ) \
    attributes that are set for the newly-created device object and update 
    the object's action flags to reflect this */
 
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int updateActionFlags( INOUT_PTR PKCS11_INFO *pkcs11Info,
 							  IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 							  const CK_OBJECT_HANDLE hObject,
@@ -205,11 +221,14 @@ static int updateActionFlags( INOUT_PTR PKCS11_INFO *pkcs11Info,
    xxxRecover variants because there's no need to use Recover, and because
    many implementations don't do Recover */
 
-static int genericSign( PKCS11_INFO *pkcs11Info, 
-						CONTEXT_INFO *contextInfoPtr,
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4, 6 ) ) \
+static int genericSign( INOUT_PTR PKCS11_INFO *pkcs11Info, 
+						INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 						const CK_MECHANISM *pMechanism, 
-						const void *inBuffer, const int inLength, 
-						void *outBuffer, const int outLength )
+						IN_BUFFER( inLength ) const void *inBuffer, 
+						IN_LENGTH_SHORT const int inLength, 
+						OUT_BUFFER_FIXED( outLength ) void *outBuffer, 
+						IN_LENGTH_SHORT const int outLength )
 	{
 	CK_ULONG resultLen = outLength;
 	CK_RV status;
@@ -284,10 +303,13 @@ static int genericVerify( PKCS11_INFO *pkcs11Info,
 
 /* Encrypt, decrypt */
 
-static int genericEncrypt( PKCS11_INFO *pkcs11Info, 
-						   CONTEXT_INFO *contextInfoPtr,
-						   const CK_MECHANISM *pMechanism, void *buffer,
-						   const int length, const int outLength )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4 ) ) \
+static int genericEncrypt( INOUT_PTR PKCS11_INFO *pkcs11Info, 
+						   INOUT_PTR CONTEXT_INFO *contextInfoPtr,
+						   const CK_MECHANISM *pMechanism, 
+						   INOUT_BUFFER_FIXED( length ) void *buffer, 
+						   IN_LENGTH_SHORT const int length, 
+						   IN_LENGTH_SHORT const int outLength )
 	{
 	CK_ULONG resultLen = outLength;
 	CK_RV status;
@@ -331,10 +353,13 @@ static int genericEncrypt( PKCS11_INFO *pkcs11Info,
 	return( CRYPT_OK );
 	}
 
-static int genericDecrypt( PKCS11_INFO *pkcs11Info, 
-						   CONTEXT_INFO *contextInfoPtr,
-						   const CK_MECHANISM *pMechanism, void *buffer,
-						   const int length, int *resultLength )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4, 6 ) ) \
+static int genericDecrypt( INOUT_PTR PKCS11_INFO *pkcs11Info, 
+						   INOUT_PTR CONTEXT_INFO *contextInfoPtr,
+						   const CK_MECHANISM *pMechanism, 
+						   INOUT_BUFFER( length, *resultLength ) void *buffer,
+						   IN_LENGTH_SHORT const int length, 
+						   OUT_LENGTH_SHORT_Z int *resultLength )
 	{
 	CK_ULONG resultLen = length;
 	CK_RV status;
@@ -346,6 +371,9 @@ static int genericDecrypt( PKCS11_INFO *pkcs11Info,
 	assert( isWritePtr( resultLength, sizeof( int ) ) );
 
 	REQUIRES( isShortIntegerRangeNZ( length ) );
+	
+	/* Clear return value */
+	*resultLength = 0;
 
 	status = C_DecryptInit( pkcs11Info->hSession,
 							( CK_MECHANISM_PTR ) pMechanism,
@@ -419,8 +447,8 @@ static int genericDecrypt( PKCS11_INFO *pkcs11Info,
 
 	/* Some mechanisms change the data length, in which case we need to tell
 	   the caller how much was actually returned */
-	if( resultLength != NULL )
-		*resultLength = ( int ) resultLen;
+	*resultLength = ( int ) resultLen;
+
 	return( CRYPT_OK );
 	}
 
@@ -446,10 +474,12 @@ static int genericDecrypt( PKCS11_INFO *pkcs11Info,
 
 	DH phase 2:  derive using private key, y' = mechanism parameters */
 
-int dhSetPublicComponents( PKCS11_INFO *pkcs11Info,
-						   const CRYPT_CONTEXT iCryptContext,
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 4 ) ) \
+int dhSetPublicComponents( INOUT_PTR PKCS11_INFO *pkcs11Info,
+						   IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 						   const CK_OBJECT_HANDLE hDhKey,
-						   const void *q, const int qLen )
+						   IN_BUFFER( qLen  ) const void *q, 
+						   IN_LENGTH_PKC const int qLen )
 	{
 	BYTE p[ CRYPT_MAX_PKCSIZE + 8 ], g[ CRYPT_MAX_PKCSIZE + 8 ];
 	BYTE y[ CRYPT_MAX_PKCSIZE + 8 ];
@@ -504,8 +534,10 @@ int dhSetPublicComponents( PKCS11_INFO *pkcs11Info,
 	return( cryptStatus );
 	}
 
-static int dhInitKey( CONTEXT_INFO *contextInfoPtr, const void *key, 
-					  const int keyLength )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int dhInitKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+					  IN_BUFFER( keyLength ) const void *key, 
+					  IN_LENGTH_SHORT const int keyLength )
 	{
 	static const CK_MECHANISM mechanism = { CKM_DH_PKCS_KEY_PAIR_GEN, NULL_PTR, 0 };
 	static const CK_BBOOL bTrue = CK_TRUE;
@@ -587,7 +619,9 @@ static int dhInitKey( CONTEXT_INFO *contextInfoPtr, const void *key,
 	return( cryptStatus );
 	}
 
-static int dhGenerateKey( CONTEXT_INFO *contextInfoPtr, const int keysizeBits )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+static int dhGenerateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+						  IN_LENGTH_SHORT const int keysizeBits )
 	{
 	CRYPT_PKCINFO_DLP dhKey;
 	MESSAGE_CREATEOBJECT_INFO createInfo;
@@ -671,7 +705,10 @@ static int dhGenerateKey( CONTEXT_INFO *contextInfoPtr, const int keysizeBits )
 	return( dhInitKey( contextInfoPtr, &dhKey, sizeof( CRYPT_PKCINFO_DLP  ) ) );
 	}
 
-static int dhEncrypt( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int dhEncrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+					  INOUT_BUFFER_FIXED( length ) BYTE *buffer, 
+					  IN_LENGTH_SHORT int length )
 	{
 	CRYPT_DEVICE iCryptDevice;
 	PKCS11_INFO *pkcs11Info;
@@ -699,7 +736,10 @@ static int dhEncrypt( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
 	return( cryptStatus );
 	}
 
-static int dhDecrypt( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int dhDecrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+					  INOUT_BUFFER_FIXED( length ) BYTE *buffer, 
+					  IN_LENGTH_SHORT int length )
 	{
 	static const CK_OBJECT_CLASS secretKeyClass = CKO_SECRET_KEY;
 	static const CK_KEY_TYPE secretKeyType = CKK_GENERIC_SECRET;
@@ -828,8 +868,9 @@ int rsaSetPublicComponents( INOUT_PTR PKCS11_INFO *pkcs11Info,
 	return( cryptStatus );
 	}
 
-static int rsaSetKeyInfo( PKCS11_INFO *pkcs11Info,
-						  CONTEXT_INFO *contextInfoPtr, 
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int rsaSetKeyInfo( INOUT_PTR PKCS11_INFO *pkcs11Info,
+						  INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
 						  const CK_OBJECT_HANDLE hPrivateKey,
 						  const CK_OBJECT_HANDLE hPublicKey,
 						  IN_LENGTH_PKC const int keySize )
@@ -884,8 +925,10 @@ static int rsaSetKeyInfo( PKCS11_INFO *pkcs11Info,
 	return( cryptStatus );
 	}
 
-static int rsaInitKey( CONTEXT_INFO *contextInfoPtr, const void *key, 
-					   const int keyLength )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int rsaInitKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+					   IN_BUFFER( keyLength ) const void *key, 
+					   IN_LENGTH_SHORT const int keyLength )
 	{
 	static const CK_OBJECT_CLASS privKeyClass = CKO_PRIVATE_KEY;
 	static const CK_OBJECT_CLASS pubKeyClass = CKO_PUBLIC_KEY;
@@ -1027,7 +1070,9 @@ static int rsaInitKey( CONTEXT_INFO *contextInfoPtr, const void *key,
 	return( cryptStatus );
 	}
 
-static int rsaGenerateKey( CONTEXT_INFO *contextInfoPtr, const int keysizeBits )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+static int rsaGenerateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+						   IN_LENGTH_SHORT const int keysizeBits )
 	{
 	static const CK_MECHANISM mechanism = { CKM_RSA_PKCS_KEY_PAIR_GEN, NULL_PTR, 0 };
 	static const CK_BBOOL bTrue = CK_TRUE;
@@ -1119,7 +1164,10 @@ static int rsaGenerateKey( CONTEXT_INFO *contextInfoPtr, const int keysizeBits )
 	return( cryptStatus );
 	}
 
-static int rsaSign( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int rsaSign( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+					INOUT_BUFFER_FIXED( length ) BYTE *buffer, 
+					IN_LENGTH_PKC int length )
 	{
 	static const CK_MECHANISM mechanism = { CKM_RSA_PKCS, NULL_PTR, 0 };
 	CRYPT_DEVICE iCryptDevice;
@@ -1159,7 +1207,10 @@ static int rsaSign( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
 	return( cryptStatus );
 	}
 
-static int rsaVerify( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int rsaVerify( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+					  INOUT_BUFFER_FIXED( length ) BYTE *buffer, 
+					  IN_LENGTH_PKC int length )
 	{
 #if 0
 	static const CK_MECHANISM mechanism = { CKM_RSA_X_509, NULL_PTR, 0 };
@@ -1197,7 +1248,10 @@ static int rsaVerify( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
 	retIntError();
 	}
 
-static int rsaEncrypt( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int rsaEncrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+					   INOUT_BUFFER_FIXED( length ) BYTE *buffer, 
+					   IN_LENGTH_PKC int length )
 	{
 	static const CK_MECHANISM mechanism = { CKM_RSA_PKCS, NULL_PTR, 0 };
 	CRYPT_DEVICE iCryptDevice;
@@ -1245,7 +1299,10 @@ static int rsaEncrypt( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
 	return( cryptStatus );
 	}
 
-static int rsaDecrypt( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int rsaDecrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+					   INOUT_BUFFER_FIXED( length ) BYTE *buffer, 
+					   IN_LENGTH_PKC int length )
 	{
 	static const CK_MECHANISM mechanism = { CKM_RSA_PKCS, NULL_PTR, 0 };
 	CRYPT_DEVICE iCryptDevice;
@@ -1335,14 +1392,19 @@ static int rsaDecrypt( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
 
 /* DSA algorithm-specific mapping functions */
 
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 5, 7, 9, 11 ) ) \
 static int dsaSetKeyInfo( PKCS11_INFO *pkcs11Info, 
-						  const CRYPT_CONTEXT iCryptContext,
+						  IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 						  const CK_OBJECT_HANDLE hPrivateKey,
 						  const CK_OBJECT_HANDLE hPublicKey,
-						  const void *p, const int pLen,
-						  const void *q, const int qLen,
-						  const void *g, const int gLen,
-						  const void *y, const int yLen,
+						  IN_BUFFER( pLen ) const void *p, 
+						  IN_LENGTH_PKC const int pLen,
+						  IN_BUFFER( qLen ) const void *q, 
+						  IN_LENGTH_SHORT const int qLen,
+						  IN_BUFFER( gLen ) const void *g, 
+						  IN_LENGTH_PKC const int gLen,
+						  IN_BUFFER( yLen ) const void *y, 
+						  IN_LENGTH_PKC const int yLen,
 						  IN_BOOL const BOOLEAN nativeContext )
 	{
 	MESSAGE_DATA msgData;
@@ -1357,6 +1419,10 @@ static int dsaSetKeyInfo( PKCS11_INFO *pkcs11Info,
 	assert( isReadPtrDynamic( y, yLen ) );
 
 	REQUIRES( isHandleRangeValid( iCryptContext ) );
+	REQUIRES( pLen >= MIN_PKCSIZE && pLen <= CRYPT_MAX_PKCSIZE );
+	REQUIRES( qLen >= 16 && qLen <= CRYPT_MAX_PKCSIZE );
+	REQUIRES( gLen >= MIN_PKCSIZE && gLen <= CRYPT_MAX_PKCSIZE );
+	REQUIRES( yLen >= MIN_PKCSIZE && yLen <= CRYPT_MAX_PKCSIZE );
 	REQUIRES( isBooleanValue( nativeContext ) );
 
 	/* Send the public key data to the context.  We send the keying 
@@ -1366,7 +1432,7 @@ static int dsaSetKeyInfo( PKCS11_INFO *pkcs11Info,
 	   in the middle of processing a message that does this on completion, 
 	   all that we're doing here is sending in encoded public key data for 
 	   use by objects such as certificates */
-	cryptStatus = writeFlatPublicKey( keyDataBuffer, CRYPT_MAX_PKCSIZE * 3,
+	cryptStatus = writeFlatPublicKey( keyDataBuffer, CRYPT_MAX_PKCSIZE * 4,
 									  &keyDataSize, CRYPT_ALGO_DSA, 0,
 									  p, pLen, q, qLen, g, gLen, y, yLen );
 	if( cryptStatusError( cryptStatus ) )
@@ -1458,8 +1524,10 @@ int dsaSetPublicComponents( INOUT_PTR PKCS11_INFO *pkcs11Info,
 						   p, pLen, q, qLen, g, gLen, y, yLen, nativeContext ) );
 	}
 
-static int dsaInitKey( CONTEXT_INFO *contextInfoPtr, const void *key, 
-					   const int keyLength )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int dsaInitKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+					   IN_BUFFER( keyLength ) const void *key, 
+					   IN_LENGTH_SHORT const int keyLength )
 	{
 	static const CK_OBJECT_CLASS privKeyClass = CKO_PRIVATE_KEY;
 	static const CK_OBJECT_CLASS pubKeyClass = CKO_PUBLIC_KEY;
@@ -1676,7 +1744,9 @@ static int dsaInitKey( CONTEXT_INFO *contextInfoPtr, const void *key,
 	return( cryptStatus );
 	}
 
-static int dsaGenerateKey( CONTEXT_INFO *contextInfoPtr, const int keysizeBits )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+static int dsaGenerateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+						   IN_LENGTH_SHORT const int keysizeBits )
 	{
 	static const CK_MECHANISM mechanism = { CKM_DSA_KEY_PAIR_GEN, NULL_PTR, 0 };
 	static const CK_BBOOL bTrue = CK_TRUE;
@@ -1850,7 +1920,10 @@ static int dsaGenerateKey( CONTEXT_INFO *contextInfoPtr, const int keysizeBits )
 	return( cryptStatus );
 	}
 
-static int dsaSign( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int dsaSign( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+					INOUT_BUFFER_FIXED( length ) BYTE *buffer, 
+					IN_LENGTH_SHORT int length )
 	{
 	static const CK_MECHANISM mechanism = { CKM_DSA, NULL_PTR, 0 };
 	CRYPT_DEVICE iCryptDevice;
@@ -1919,7 +1992,10 @@ static int dsaSign( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
 	return( cryptStatus );
 	}
 
-static int dsaVerify( CONTEXT_INFO *contextInfoPtr, BYTE *buffer, int length )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int dsaVerify( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
+					  INOUT_BUFFER_FIXED( length ) BYTE *buffer, 
+					  IN_LENGTH_SHORT int length )
 	{
 /*	static const CK_MECHANISM mechanism = { CKM_DSA, NULL_PTR, 0 }; */
 /*	CRYPT_DEVICE iCryptDevice; */
@@ -2415,7 +2491,6 @@ static int ecdsaGenerateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	cryptStatus = ecdsaSetPublicComponents( pkcs11Info, 
 											contextInfoPtr->objectHandle,
 											hPublicKey, FALSE );
-// Returns CKR_ATTRIBUTE_TYPE_INVALID on CKA_EC_PARAMS read.
 	if( cryptStatusOK( cryptStatus ) )
 		{
 		cryptStatus = updateActionFlags( pkcs11Info, 

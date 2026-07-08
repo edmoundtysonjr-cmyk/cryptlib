@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							Certificate DN Routines							*
-*						Copyright Peter Gutmann 1996-2023					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -226,12 +226,10 @@ static BOOLEAN checkCountryCode( IN_BUFFER_C( 2 ) const BYTE *countryCode )
 	assert( isReadPtr( countryCode, 2 ) );
 
 	/* Check that the country code is present in the table of valid ISO 3166
-	   codes.  Note the explicit declaration of the one-bit as '1L', this is
-	   required because the shift amount can be greater than the word size on
-	   16-bit systems */
+	   codes */
 	if( cc0 < 0 || cc0 > 25 || cc1 < 0 || cc1 > 25 )
 		return( FALSE );
-	return( ( countryCodes[ cc0 ] & ( 1L << cc1 ) ) ? TRUE : FALSE );
+	return( ( countryCodes[ cc0 ] & ( 1 << cc1 ) ) ? TRUE : FALSE );
 	}
 
 /* Determine the sort priority for DN components */
@@ -250,8 +248,15 @@ static int dnSortOrder( IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE type )
 		};
 	int status, value;
 
-	REQUIRES( type >= CRYPT_CERTINFO_FIRST_DN && \
-			  type <= CRYPT_CERTINFO_LAST_DN );
+	REQUIRES( ( type >= CRYPT_CERTINFO_FIRST_DN && \
+				type <= CRYPT_CERTINFO_LAST_DN ) || \
+			  ( type > 0 && type < 50 ) );
+
+	/* For values identified by their index value, there's no defined sort 
+	   order so we return a maximum-order value that ensures they always
+	   sort after the known components */
+	if( type > 0 && type < 50 )
+		return( 10 );
 
 	/* The type is in the range CRYPT_CERTINFO_FIRST_DN ... 
 	   CRYPT_CERTINFO_LAST_DN which corresponds to all of the entries in the 
@@ -282,7 +287,7 @@ BOOLEAN sanityCheckDNComponent( IN_PTR const DN_COMPONENT *dnComponent )
 
 	/* Check general DN component data */
 	if( dnComponent->type < 1 || \
-		( dnComponent->type > 50 && \
+		( dnComponent->type >= 50 && \
 		  dnComponent->type < CRYPT_CERTINFO_FIRST_DN ) || \
 		dnComponent->type > CRYPT_CERTINFO_LAST_DN || \
 		dnComponent->typeInfo == NULL )
@@ -642,7 +647,7 @@ int insertDNstring( INOUT_PTR DATAPTR_DN *dnListHeadPtr,
 						CRYPT_ERRTYPE_TYPE *errorType )
 	{
 	const DN_COMPONENT_INFO *dnComponentInfo = NULL;
-	DATAPTR_ATTRIBUTE listHead = *dnListHeadPtr;
+	DATAPTR_DN listHead = *dnListHeadPtr;
 	const DN_COMPONENT *listHeadPtr;
 	DN_COMPONENT *newElement, *insertPoint;
 	BYTE countryCode[ 8 + 8 ];
@@ -892,7 +897,8 @@ int deleteDNComponent( INOUT_PTR DATAPTR_DN *dnPtr,
 			/* We may be doing the delete purely by type */
 
 	REQUIRES( DATAPTR_ISVALID( dn ) );
-	REQUIRES( type > CRYPT_CERTINFO_FIRST && type < CRYPT_CERTINFO_LAST );
+	REQUIRES( type >= CRYPT_CERTINFO_FIRST_DN && \
+			  type <= CRYPT_CERTINFO_LAST_DN );
 	REQUIRES( ( value == NULL && valueLength == 0 ) || \
 			  ( value != NULL && \
 				isShortIntegerRangeNZ( valueLength ) ) );
@@ -1181,7 +1187,8 @@ int copyDN( OUT_DATAPTR DATAPTR_DN *dnDestPtr,
 				clAlloc( "copyDN", \
 						 sizeofVarStruct( srcCursor, DN_COMPONENT ) ) ) == NULL )
 			{
-			deleteDN( dnDestPtr );
+			if( DATAPTR_ISSET_PTR( dnDestPtr ) )
+				deleteDN( dnDestPtr );
 
 			return( CRYPT_ERROR_MEMORY );
 			}
@@ -1334,8 +1341,9 @@ int convertEmail( INOUT_PTR CERT_INFO *certInfoPtr,
 	REQUIRES( altNameType == CRYPT_CERTINFO_SUBJECTALTNAME || \
 			  altNameType == CRYPT_CERTINFO_ISSUERALTNAME );
 
-	/* If there's no PKCS #9 email address present, try for an RFC 1274 one.
-	   If that's not present either, exit */
+	/* If there's no PKCS #9 email address present, try for an RFC 1274 one
+	   (the latter is extremely unlikely but it's just one extra check so we
+	   may as well do it).  If that's not present either, exit */
 	if( DATAPTR_ISNULL( dn ) )
 		{
 		/* If there's an empty subject/issuer DN present, there's nothing to 
@@ -1347,7 +1355,7 @@ int convertEmail( INOUT_PTR CERT_INFO *certInfoPtr,
 	if( emailComponent == NULL )
 		{
 		emailComponent = findDNComponentByOID( dn,
-			MKOID( "\x06\x09\x09\x92\x26\x89\x93\xF2\x2C\x01\x03" ), 11 );
+			MKOID( "\x06\x0A\x09\x92\x26\x89\x93\xF2\x2C\x64\x01\x03" ), 12 );
 		}
 	if( emailComponent == NULL )
 		return( CRYPT_OK );

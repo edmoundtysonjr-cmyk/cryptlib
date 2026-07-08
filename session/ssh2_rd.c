@@ -99,7 +99,8 @@ const char *getSSHPacketName( IN_RANGE( 0, SSH_MSG_SPECIAL_LAST ) \
 			{ SSH_MSG_NONE, "<Unknown type>" }
 		};
 
-	REQUIRES_EXT( ( packetType >= 0 && packetType <= SSH_MSG_SPECIAL_LAST ),
+	REQUIRES_EXT( ( packetType >= SSH_MSG_NONE && \
+					packetType < SSH_MSG_SPECIAL_LAST ),
 				  "Internal error" );
 
 	return( getObjectName( packetNameInfo,
@@ -270,6 +271,9 @@ static int checkPacketValid( IN_BYTE const int packetType,
 		/* Dual-use messages */
 		SSH_MSG_CHANNEL_OPEN, SSH_MSG_CHANNEL_OPEN_CONFIRMATION, 
 		SSH_MSG_CHANNEL_OPEN_FAILURE,
+#ifdef USE_SSH_EXTENDED
+		SSH_MSG_EXT_INFO,
+#endif /* USE_SSH_EXTENDED */
 		/* Data-only messages that can be seen during the auth phase from 
 		   some servers */
 		SSH_MSG_GLOBAL_REQUEST, SSH_MSG_CHANNEL_WINDOW_ADJUST,
@@ -430,16 +434,17 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	const BOOLEAN isSecureRead = \
 			TEST_FLAG( sessionInfoPtr->flags, \
 					   SESSION_FLAG_ISSECURE_READ ) ? TRUE : FALSE;
-	const BOOLEAN useETM = \
+	const BOOLEAN useETM = isSecureRead && \
 			TEST_FLAG( sessionInfoPtr->protocolFlags, SSH_PFLAG_ETM ) ? \
 			TRUE : FALSE;
-	const int headerByteCount = isSecureRead && useETM ? \
+	const int headerByteCount = useETM ? \
 			LENGTH_SIZE + SSH_MIN_PACKET_SIZE : SSH_MIN_PACKET_SIZE;
 	int length, extraLength = 0, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( packetLength, sizeof( int ) ) );
 	assert( isWritePtr( packetExtraLength, sizeof( int ) ) );
+	assert( isWritePtr( payloadBytesRead, sizeof( int ) ) );
 	assert( isWritePtr( sshInfo, sizeof( SSH_INFO ) ) );
 	assert( isWritePtr( readInfo, sizeof( READSTATE_INFO ) ) );
 
@@ -466,12 +471,13 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   read ahead for the minimum packet size and decrypt that in order to 
 	   figure out what to do:
 
-		uint32		length (excluding MAC size)
-		byte		padLen
-		byte		type
-		byte[]		data 
-		byte[]		pad
-		byte[]		MAC*/
+										  Encr	Encr - EtM
+		uint32		length (excluding MAC)	#
+		byte		padLen					#		%
+		byte		type					#		%
+		byte[]		data					#		%
+		byte[]		pad						#		%
+		byte[]		MAC	(if isSecureRead set, len = extraLength) */
 	if( isHandshake )
 		{
 		/* Processing handshake data can run into a number of special-case
@@ -551,13 +557,13 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* Process the packet header.  The dual minimum-length checks actually
 	   simplify to the following:
 
-		Non-secure mode: length < SSH2_HEADER_REMAINDER_SIZE (extraLength = 0).
+		Non-secure mode: length < SSH_HEADER_REMAINDER_SIZE (extraLength = 0).
 			In this case there's no MAC being used, so all that we need to
 			guarantee is that the packet is at least as long as the
 			(remaining) data that we've already read.
 
 		Secure mode: length < ID_SIZE + PADLENGTH_SIZE + \
-			SSH2_MIN_PADLENGTH_SIZE.  In this case there's an (implicit) MAC
+			SSH_MIN_PADLENGTH_SIZE.  In this case there's an (implicit) MAC
 			present so the packet (length + extraLength) will always be
 			larger than the (remaining) data that we've already read.  For
 			this case we need to check that the data payload is at least as
@@ -571,7 +577,7 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		!isBufsizeRangeMin( length, ID_SIZE + PADLENGTH_SIZE + \
 									SSH2_MIN_PADLENGTH_SIZE ) || \
 		checkOverflowAdd( length, extraLength ) || \
-		length + extraLength < SSH_HEADER_REMAINDER_SIZE || \
+		length < SSH_HEADER_REMAINDER_SIZE || \
 		length + extraLength >= sessionInfoPtr->receiveBufSize )
 		{
 		sMemDisconnect( &stream );
@@ -598,7 +604,7 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
 				  "Invalid packet length %d, should be %d...%d", 
 				  cryptStatusError( length ) ? 0 : length,
-				  ID_SIZE + PADLENGTH_SIZE + SSH2_MIN_PADLENGTH_SIZE,
+				  SSH_HEADER_REMAINDER_SIZE,
 				  sessionInfoPtr->receiveBufSize - extraLength ) );
 		}
 	if( isSecureRead )
@@ -624,8 +630,8 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   from the stream above but have to manually extract it here */
 	static_assert( LENGTH_SIZE + 1 + ID_SIZE <= SSH_MIN_PACKET_SIZE,
 				   "Header length calculation" );
-	sshInfo->padLength = sshInfo->headerBuffer[ LENGTH_SIZE ];
-	sshInfo->packetType = sshInfo->headerBuffer[ LENGTH_SIZE + 1 ];
+	sshInfo->padLength = byteToInt( sshInfo->headerBuffer[ LENGTH_SIZE ] );
+	sshInfo->packetType = byteToInt( sshInfo->headerBuffer[ LENGTH_SIZE + 1 ] );
 	if( sshInfo->padLength < SSH2_MIN_PADLENGTH_SIZE || \
 		sshInfo->padLength > 255 ) 
 		{
@@ -724,7 +730,7 @@ static int readHSPacket( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	const BOOLEAN isSecureRead = \
 			TEST_FLAG( sessionInfoPtr->flags, \
 					   SESSION_FLAG_ISSECURE_READ ) ? TRUE : FALSE;
-	const BOOLEAN useETM = \
+	const BOOLEAN useETM = isSecureRead && \
 			TEST_FLAG( sessionInfoPtr->protocolFlags, SSH_PFLAG_ETM ) ? \
 			TRUE : FALSE;
 	int length DUMMY_INIT, minPacketLength = minPacketSize;
@@ -855,7 +861,8 @@ static int readHSPacket( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					status = checkMacSSHIncremental( sessionInfoPtr->iAuthInContext,
 										0, sessionInfoPtr->receiveBuffer + \
 												payloadLengthRead, 
-										sessionInfoPtr->receiveBufSize,
+										sessionInfoPtr->receiveBufSize - \
+												payloadLengthRead,
 										encryptedPayloadLength, 0, 
 										MAC_END, extraLength );
 					}
@@ -1178,6 +1185,12 @@ static int readHSPacket( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	return( length );
 	}
 
+/* The following functions are just wrappers for readHSPacket() that pass in
+   the appropriate protocol state value and handle error returns.  There's 
+   no easy way to roll them into a single wrapper function because by the 
+   time we add in the protocol state value we've got 95% of the function's
+   code already present */
+
 CHECK_RETVAL_LENGTH_SHORT STDC_NONNULL_ARG( ( 1 ) ) \
 int readHSPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr, 
 					  IN_RANGE( SSH_MSG_DISCONNECT, \
@@ -1190,7 +1203,7 @@ int readHSPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	status = readHSPacket( sessionInfoPtr, expectedType, minPacketSize,
 						   &readInfo, SSH_PROTOSTATE_HANDSHAKE );
-	if( cryptStatusOK( status ) && readInfo == READINFO_FATAL_CRYPTO )
+	if( cryptStatusError( status ) && readInfo == READINFO_FATAL_CRYPTO )
 		{
 		/* We have to explicitly handle crypto failures at this point 
 		   because we're not being called from the higher-level session
@@ -1212,7 +1225,7 @@ int readPostHSPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	status = readHSPacket( sessionInfoPtr, expectedType, minPacketSize,
 						   &readInfo, SSH_PROTOSTATE_POSTHANDSHAKE );
-	if( cryptStatusOK( status ) && readInfo == READINFO_FATAL_CRYPTO )
+	if( cryptStatusError( status ) && readInfo == READINFO_FATAL_CRYPTO )
 		{
 		/* We have to explicitly handle crypto failures at this point 
 		   because we're not being called from the higher-level session
@@ -1234,7 +1247,7 @@ int readAuthPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	status = readHSPacket( sessionInfoPtr, expectedType, minPacketSize,
 						   &readInfo, SSH_PROTOSTATE_AUTH );
-	if( cryptStatusOK( status ) && readInfo == READINFO_FATAL_CRYPTO )
+	if( cryptStatusError( status ) && readInfo == READINFO_FATAL_CRYPTO )
 		{
 		/* We have to explicitly handle crypto failures at this point 
 		   because we're not being called from the higher-level session

@@ -909,7 +909,10 @@
    there's a problem).  Since -fno-delete-null-pointer-checks doesn't
    necessarily apply to STDC_NONNULL_ARG, it's not safe to rely on it, and
    in any case we want the compiler to warn of erroneous use, not knowingly
-   generate code that segfaults when it's encountered.
+   generate code that segfaults when it's encountered.  Even dropping down
+   to -O0 still won't fix this since gcc will still remove the null pointer
+   check even though it's been told to disable optimisations, see "Undefined 
+   Behavior: What Happened to My Code?" further down.
 
    For both of these issues the gcc maintainers' response was "not our 
    problem/it's behaving as intended".
@@ -945,10 +948,13 @@
    one of these is triggered, the compiler can do literally anything, 
    see "A Guide to Undefined Behavior in C and C++", 
    https://blog.regehr.org/archives/213, including time-travelling, see 
-   https://llvm.org/docs/UndefinedBehavior.html#time-travel.
+   https://llvm.org/docs/UndefinedBehavior.html#time-travel.  As "Silent 
+   Bugs Matter" (discussed further down) points out, "it is impractical for 
+   compiler users to remember and follow all these rules.  Even given the 
+   full list of UB, these rules can be easily misunderstood or ignored".
    
-   Other comments from the John Regehr's "Embedded in Academia" blog
-   referenced above:
+   Other comments from John Regehr's "Embedded in Academia" blog referenced 
+   above:
    
    https://blog.regehr.org/archives/761
 
@@ -957,18 +963,29 @@
 
    https://blog.regehr.org/archives/1520
 
-   Goal 1: Every UB (all ~200 of them) must either be documented as having 
-   some defined behavior, be diagnosed with a fatal compiler error, or else 
-   - as a last resort - have a sanitizer that detects that UB at runtime.
+	"Goal 1: Every UB (all ~200 of them) must either be documented as 
+	 having some defined behavior, be diagnosed with a fatal compiler error, 
+	 or else - as a last resort - have a sanitizer that detects that UB at 
+	 runtime".
 
    https://blog.regehr.org/archives/1559
 
-   By summer 2010 my student Peng Li (now at Baidu USA) had a modified 
-   version of Clang that emitted dynamic checks for integer overflow, divide 
-   by zero, value-losing typecasts, shifts past bitwidth, and that kind of 
-   thing into a compiled C or C++ program.  We used this to test open source 
-   software and it turned out that basically all programs were executing a 
-   constant stream of undefined behavior.
+	"By summer 2010 my student Peng Li (now at Baidu USA) had a modified 
+	 version of Clang that emitted dynamic checks for integer overflow, 
+	 divide by zero, value-losing typecasts, shifts past bitwidth, and that 
+	 kind of thing into a compiled C or C++ program.  We used this to test 
+	 open source software and it turned out that basically all programs were 
+	 executing a constant stream of undefined behavior".
+
+   Another data point comes from "Undefined Behaviour in C and C++: An 
+   Experiment with Desktop Use Cases" by Jukka Ruohonen and Krzysztof 
+   Sierszecki, which, using only the things that UBSan can detect, a subset
+   of actual UB ("Silent Bugs Matter", see further down, reports that -Wall
+   and UBSan miss around 70% of all UB cases), found nearly 11,000 unique 
+   instances of UB while performing common desktop tasks (open and close an 
+   app, open and close a document from an app, view an image, etc): "Merely 
+   logging into the GNOME desktop environment generated over 500 unique 
+   warnings".
 
    The ACM Queue article then gives an example of a short program:
 
@@ -997,6 +1014,88 @@
    by taking advantage of the fact that signed integer overflow is UB.  In 
    other words it silently emits code that instantly segfaults when run 
    (clang does the same thing).
+   
+   Another example is in "Undefined Behavior: What Happened to My Code?",
+   Xi Wang et al, APSys'12:
+
+	groups_per_flex = 1 << sbi->s_log_groups_per_flex;
+	// There are some situations, after shift the
+	// value of ’groups_per_flex’ can become zero
+	// and division with 0 will result in fixpoint
+	// divide exception 
+	if (groups_per_flex == 0)
+		return 1;
+	flex_group_count = ... / groups_per_flex;
+
+   clang assumed that the left-shift can never be zero because that would be
+   UB and silently removed the divide-by-zero check, helpfully reintroducing 
+   CVE 2009-4307 which the check was designed to fix.
+   
+   Yet another example from the same paper, in the opposite direction, is 
+   when strict-aliasing is disabled in order to prevent compiler-induced 
+   breakage.  The following SpecInt 2006 code when compiled with clang shows 
+   an 11% slowdown:
+
+	quantum_reg *reg;
+	...
+	// reg->size: int
+	// reg->node[i].state: unsigned long long
+	for (i = 0; i < reg->size; i++)
+		reg->node[i].state = ...;
+
+   The explanation for the slowdown is so bizarre that it requires quoting 
+   the paper: "With strict aliasing, the compiler is able to conclude that 
+   updating reg->node[i].state does not change reg->size, since they have 
+   different types, and thus moves the load of reg->size out of the loop. 
+   Without the optimization, however, the compiler has to generate code that 
+   reloads reg->size in each iteration" (!!!).  Since these are two separate
+   fields in the struct, there is no way that updating reg->node can affect
+   reg->size no matter what any aliasing rule might say, but the compiler
+   generates code that produces an 11% slowdown out of sheer 
+   bloodymindedness.
+
+   This compiler behaviour also has serious consequences for constant-time 
+   code that then gets broken by compilers, where carefully-written constant-
+   time code that's been formally verified to be free of side-channels has 
+   them helpfully reinserted by the compiler, see "Breaking Bad: How 
+   Compilers Break Constant-Time Implementations", Moritz Schneider et al, 
+   ASIA CCS'25.  As the paper points out, "state-of-the-art defensive 
+   programming techniques employed for side-channel resistance are still 
+   inadequate, incomplete, and bound to fail when paired with the 
+   optimizations that compilers continuously introduce".  In particular, 
+   many constant-time operations depend on tricks with bitmask arithmetic, 
+   something that LLVM is especially good at understanding and rewriting in 
+   its instcombine pass, which performs complex algebraic simplifications 
+   and replaces constant-time operations with secret-dependent branches or 
+   memory accesses.
+
+   (Having said that, given that attackers don't care about attacks that 
+   take advantage of this it's more something to annoy cryptographers than 
+   a real threat).
+   
+   However compilers have more serious security impacts than just 
+   inconsequential-in-practice breakage of constant-time-code.  One paper 
+   that looked at this in detail, "Silent Bugs Matter: A Study of Compiler-
+   Introduced Security Bugs", Jianhao Xu et al, Usenix Security'23, found 
+   that "Our study shows that compiler-introduced security bugs are common 
+   and may have serious security impacts.  It is unrealistic to expect 
+   compiler users to understand and comply with compiler assumptions.  For 
+   example, the 'no-undefined-behavior' assumption has become a nightmare 
+   for users and a major cause of CISB [...] CISB are common in the wild and 
+   have severe security impacts.  The widely adopted 'no-undefined-behavior' 
+   assumption for compiler optimizations has become a major cause of 
+   CISB", with just under 2/3 of programmers not knowing about UB-induced 
+   CISB and over half of them either taking more than two hours to sort out 
+   a UB bug or not being able to sort it out at all.
+
+   The icing on the cake is that all of this breakage produces little gain 
+   in performance, see "Exploiting Undefined Behavior in C/C++ Programs for
+   Optimization: A Study on the Performance Impact", Lucian Popescu and 
+   Nuno Lopes, PoPL'25, which found that "for the benchmarks and UB 
+   categories that we evaluated, the end-to-end performance gains are 
+   minimal.  Moreover, when performance regresses, it can often be recovered 
+   through small improvements to optimization algorithms or by using link-
+   time optimizations".
 
    The distinct double guard when using __has_attribute() below is 
    necessary here because gcc chokes if it sees the __has_attribute() on 

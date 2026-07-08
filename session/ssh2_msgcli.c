@@ -268,7 +268,9 @@ static int createOpenRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 #if 0	/* 17/9/04 This is a complex mechanism that requires the use of an
 				   interactive or scriptable tool to use, until someone 
-				   really needs this we don't implement it */
+				   really needs this we don't implement it.  Note that these
+				   are for older internal API functions and would need to be
+				   updated if they were ever enabled */
 	/* Request forwarding of a port from the remote system to the local one.  
 	   Once a connection arrives on the remote port it'll open a channel to 
 	   the local system of type "forwarded-tcpip".  Since this isn't a 

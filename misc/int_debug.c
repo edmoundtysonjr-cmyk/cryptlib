@@ -14,9 +14,9 @@
 #endif /* Compiler-specific includes */
 
 /* The following functions are intended purely for diagnostic purposes 
-   during development.  They perform minimal checking (for example using 
-   assertions rather than returning error codes, since the calling code 
-   can't hardwire in tests for their return status), and should only
+   during development.  They perform minimal checking, for example using 
+   assertions rather than returning error codes since the calling code 
+   can't hardwire in tests for their return status, and should only
    be used with a debugger */
 
 /****************************************************************************
@@ -35,7 +35,7 @@
 
 int remove( const char *pathname )
 	{
-	wchar_t wcBuffer[ _MAX_PATH + 1 ];
+	wchar_t wcBuffer[ _MAX_PATH + 1 + 8 ];
 
 	mbstowcs( wcBuffer, pathname, 
 			  strnlen_s( pathname, MAX_PATH_LENGTH ) + 1 );
@@ -117,7 +117,7 @@ int debugPrintfAtomic( IN_STRING const char *file,
 
 	assert( isReadPtr( file, 4 ) );
 	assert( isReadPtr( function, 4 ) );
-	assert( isReadPtr( function, 2 ) );
+	assert( isReadPtr( format, 2 ) );
 
 	va_start( argPtr, format );
 #if VC_GE_2005( _MSC_VER )
@@ -347,6 +347,7 @@ STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static void buildFilePath( IN_STRING const char *fileName,
 						   OUT_BUFFER_FIXED_C( 1024 ) char *filenameBuffer )
 	{
+	int fileNameLen;
 	LOOP_INDEX i;
 
 	assert( isReadPtr( fileName, 4 ) );
@@ -380,8 +381,8 @@ static void buildFilePath( IN_STRING const char *fileName,
 		strlcpy_s( filenameBuffer, 1024, fileName );
 
 	/* If it hasn't already got a suffix, append ".der" to the filename */
-	if( filenameBuffer[ strnlen_s( filenameBuffer, 
-								   MAX_PATH_LENGTH ) - 4 ] != '.' )
+	fileNameLen = strnlen_s( filenameBuffer, MAX_PATH_LENGTH );
+	if( fileNameLen < 4 || filenameBuffer[ fileNameLen - 4 ] != '.' )
 		strlcat_s( filenameBuffer, 1024, ".der" );
 	}
 
@@ -1125,7 +1126,7 @@ CHECK_RETVAL \
 static int getDeterministicRandomInt( void )
 	{
 	HASH_FUNCTION_ATOMIC hashFunction;
-	static BYTE hashBuffer[ CRYPT_MAX_HASHSIZE ] = { 0 };
+	static BYTE hashBuffer[ CRYPT_MAX_HASHSIZE + 8 ] = { 0 };
 	BYTE *hashBufPtr = hashBuffer;
 	int hashSize, retVal;
 
@@ -1136,13 +1137,13 @@ static int getDeterministicRandomInt( void )
 	hashFunction( hashBuffer, hashSize, hashBuffer, hashSize );
 	retVal = mget32( hashBufPtr );
 
-	return( retVal );
+	return( retVal & 0x7FFFFFFFL );	/* unsigned -> signed int */
 	}
 
 void injectMemoryFault( void )
 	{
 	const int value = getDeterministicRandomInt();
-	const BYTE bitMask = intToByte( 1 << ( value & 3 ) );
+	const BYTE bitMask = intToByte( 1 << ( value & 7 ) );
 	const int bytePos = value >> 3;
 	BYTE *dataPtr = ( BYTE * ) getSystemStorage( SYSTEM_STORAGE_KRNLDATA );
 	const int dataSize = getSystemStorageSize( SYSTEM_STORAGE_KRNLDATA );

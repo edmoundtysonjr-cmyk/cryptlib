@@ -636,11 +636,15 @@ static int readIntegerHeader( INOUT_PTR STREAM *stream,
 	   zeroes.  Specifically, we have to transform a read of the data on the
 	   left to the result on the right:
 
-		00			-> 00
-		00 00		-> 00
-		00 00 00	-> 00
-		00 xx		-> xx
-		xx			-> xx
+								noLeadingZeroes
+		00			-> 00			0
+		00 00		-> 00			1
+		00 00 00	-> 00			2
+		00 00 00 00 -> error		3
+		xx			-> xx			0
+		00 xx		-> xx			1
+		00 00 xx	-> xx			2
+		00 00 00 xx -> error		3
 
 	   with the stream position left either at the last zero or the first
 	   nonzero byte.
@@ -653,12 +657,14 @@ static int readIntegerHeader( INOUT_PTR STREAM *stream,
 		return( length );
 
 	/* There are one or more leading zeroes present, consume them stopping 
-	   at length-1 to make sure that there's always at least one byte of 
+	   at length - 1 to make sure that there's always at least one byte of 
 	   data present.  In other words we stop at the first nonzero byte or
-	   the last zero byte */
+	   the last zero byte.  Note that the leading zero count is bounded by
+	   <= rather than < so that we can detect the presence of too many 
+	   zeroes in the check that follows the loop */
 	LOOP_SMALL( noLeadingZeroes = 0, 
 				noLeadingZeroes < length - 1 && \
-					noLeadingZeroes < MAX_LEADING_ZEROES && \
+					noLeadingZeroes <= MAX_LEADING_ZEROES && \
 					sPeek( stream ) == 0,
 				noLeadingZeroes++ )
 		{
@@ -820,14 +826,27 @@ int checkBignumRead( INOUT_PTR STREAM *stream,
 	if( !cryptStatusError( status ) && !isShortIntegerRangeNZ( length ) )
 		status = CRYPT_ERROR_BADDATA;
 	if( cryptStatusError( status ) )
-		return( status );
+		return( sSetError( stream, status ) );
 	status = sMemGetDataBlock( stream, &bignumData, length );
 	if( cryptStatusOK( status ) )
 		status = sSkip( stream, length, MAX_INTLENGTH_SHORT );
 	if( cryptStatusError( status ) )
 		return( status );
-	return( verifyBignumImport( bignum, bignumData, length ) ? \
-			CRYPT_OK : CRYPT_ERROR_FAILED );
+	if( !verifyBignumImport( bignum, bignumData, length ) )
+		{
+		/* This presents a bit of an odd error code to set for a stream 
+		   since the read was OK but it doesn't match what was originally
+		   read, which isn't a stream error but we should really mark the
+		   stream as being in an error state to match the behaviour of all
+		   the other functions.  The least inappropriate status for this is
+		   CRYPT_ERROR_BADDATA, but this should never get used since the
+		   caller is expected to always check the return status for this
+		   function and will get the CRYPT_ERROR_FAILED instead */
+		sSetError( stream, CRYPT_ERROR_BADDATA );
+		return( CRYPT_ERROR_FAILED );
+		}
+	
+	return( CRYPT_OK );
 	}
 #endif /* USE_PKC */
 
@@ -1477,8 +1496,15 @@ static int readTimeData( INOUT_PTR STREAM *stream,
 		{
 		/* Some EDI certificates have ridiculous validity periods of 80 - 100 
 		   years, meaning that the certificate expiry date is in the 22nd
-		   century.  To deal with these, change the '20' below to '21' so 
-		   that dates of the form '21xx' are accepted as valid */
+		   century and by extension that the certificate is vouching for the
+		   fact that the key will still be valid and secure a hundred years 
+		   from now.
+		   
+		   To deal with these, change the '20' below to '21' in both the 
+		   strGetNumeric() and the ENSURES() so that dates of the form 
+		   '21xx' are accepted as valid.  Note that this will break on any 
+		   32-bit system, even one using a nonstandard unsigned time_t in 
+		   order to extend the time range */
 		status = strGetNumeric( bufPtr, 2, &value, 19, 20 );
 		if( cryptStatusError( status ) )
 			return( status );
@@ -1523,13 +1549,21 @@ static int readTimeData( INOUT_PTR STREAM *stream,
 	   values that others don't, however it's probably better to simply be 
 	   consistent with what the system does rather than to try and 
 	   second-guess the intent of the mktime() authors.
+	   
+	   We also have to be careful with how we check the results from 
+	   mktime() because, while in most cases time_t is signed and so an
+	   error result is indicated by a negative return value, some 32-bit
+	   systems make it unsigned in order to deal with Y2038 at which point
+	   an error return value is just another (large) actual time value.  To
+	   be safe we check for both an explicitly-cast -1 (signed + unsigned)
+	   and a more general negative (signed).
 
 		"The time is out of joint; o cursed spite,
 		 That ever I was born to set it right"	- Shakespeare, "Hamlet" */
 	if( isUTCTime && theTime.tm_year < 50 )
 		theTime.tm_year += 100;
 	utcTime = mktime( &theTime );
-	if( utcTime < 0 )
+	if( utcTime == ( time_t ) -1 || utcTime < 0 )
 		{
 		/* We've got something that either isn't valid or exceeds the 
 		   system's time_t range.  If it's the latter, clamp the time at
@@ -1541,8 +1575,8 @@ static int readTimeData( INOUT_PTR STREAM *stream,
 		   active use for *forty years*) but is slowly becoming more and
 		   more of a problem as we get closer to Y2038.  Most mainstream
 		   systems will never notice this because they went to 64-bit
-		   time_t's some time ago, but a lot of embedded still uses, and 
-		   will continue to use, 32-bit time_t for a long time to come.
+		   time_t's some time ago, but a lot of embedded stuff still uses, 
+		   and will continue to use, 32-bit time_t for a long time to come.
 		   
 		   To deal with this, we set the year to a time < Y2038 and retry
 		   the mktime() call, if it succeeds this time then the date is 
@@ -1552,16 +1586,18 @@ static int readTimeData( INOUT_PTR STREAM *stream,
 		   certificates or after Y2038 when the clamping produces times 
 		   before the current time, but it's the best that we can do.
 		   
-		   Another option would be to use long long internally for time 
-		   values and implement our own possibly-correct version of mktime() 
-		   and then try and guess the UTC time offset from sample gmtime() 
-		   probes, but this is both asking for trouble with subtle corner-
-		   case bugs and more importantly makes us incompatible with the 
-		   system's handling of time.  Specifically, what it means is that 
-		   if the user is expecting time handling to behave in a predictably 
-		   incorrect way then our handling of it in a possibly-correct but 
-		   unpredictable way is a bug, not a feature.  Or to put it more 
-		   directly, it's no good being right when everyone else is wrong.  
+		   Another option would be to explicitly use long long internally 
+		   for time values and implement our own possibly-correct version of 
+		   mktime() and then try and guess the UTC time offset from sample 
+		   gmtime() probes, but this is both asking for trouble with subtle 
+		   corner-case bugs and more importantly makes us incompatible with 
+		   the system's handling of time.  Specifically, what it means is 
+		   that if the user is expecting time handling to behave in a 
+		   predictably incorrect way then our handling of it in a possibly-
+		   correct but unpredictable way is a bug, not a feature.  Or to put 
+		   it more directly, it's no good being right when everyone else is 
+		   wrong.  
+		   
 		   Because of this we stick to doing what the system as a whole 
 		   does, which makes our behaviour match what the user is 
 		   expecting */
@@ -1570,7 +1606,7 @@ static int readTimeData( INOUT_PTR STREAM *stream,
 			{
 			theTime.tm_year = 136;		/* 2036 */
 			utcTime = mktime( &theTime );
-			if( utcTime >= 0 )
+			if( utcTime != ( time_t ) -1 && utcTime >= 0 )
 				{
 				*timePtr = MAX_TIME_VALUE - 1;
 				return( CRYPT_OK );
@@ -1594,7 +1630,7 @@ static int readTimeData( INOUT_PTR STREAM *stream,
 		/* It's an actual invalid date, fall through to the error-exit 
 		   below */
 		}
-	if( utcTime < MIN_STORED_TIME_VALUE )
+	if( utcTime == ( time_t ) -1 || utcTime < MIN_STORED_TIME_VALUE )
 		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 	if( utcTime >= MAX_TIME_VALUE )
 		{
@@ -1636,18 +1672,17 @@ static int readTimeData( INOUT_PTR STREAM *stream,
 		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 	gmTimeInfoPtr->tm_isdst = -1;		/* Force correct DST adjustment */
 	gmTime = mktime( gmTimeInfoPtr );
-	if( gmTime < MIN_STORED_TIME_VALUE )
+	if( gmTime == ( time_t ) -1 || gmTime < MIN_STORED_TIME_VALUE )
 		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 	if( utcTime < gmTime )
 		{
-		/* When time_t is signed, which seems to be universally the case
-		   despite the standard not saying anything about it, then this and 
-		   the expression in the "else" branch do the same thing since in 
-		   the following line if e.g. utcTime > gmTime then 
+		/* When time_t is signed, which is almost universally the case, then 
+		   this and the expression in the "else" branch do the same thing 
+		   since in the following line if e.g. utcTime > gmTime then 
 		   ( gmTime - utcTime ) is negative, so subtracting that means 
 		   adding it, the same as the "else" portion below.  However we 
-		   leave the two distinct for in case some system exists where 
-		   time_t is unsigned (VAX/VMS allegedly used an unsigned time_t) */
+		   leave the two distinct for the few cases where time_t is 
+		   unsigned */
 		*timePtr = utcTime - ( gmTime - utcTime );
 		}
 	else
@@ -2084,10 +2119,10 @@ int readGenericHoleExt( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( length == NULL || isWritePtr( length, sizeof( int ) ) );
 
-	ENSURES_S( ( tag == DEFAULT_TAG ) || isValidTag( tag ) );
-			   /* We use MAX_TAG rather than MAX_TAG_VALUE since we don't 
-			      know what form it has to be turned into when reading 
-				  the tag */
+	REQUIRES_S( ( tag == DEFAULT_TAG ) || isValidTag( tag ) );
+				/* We use MAX_TAG rather than MAX_TAG_VALUE since we don't 
+				   know what form it has to be turned into when reading 
+				   the tag */
 	REQUIRES_S( minLength >= ( ( lengthCheckType == LENGTH_CHECK_ZERO ) ? 0 : 1 ) && \
 				minLength < MAX_INTLENGTH_SHORT );
 				/* We allow a length of zero in order to deal with broken 
@@ -2152,10 +2187,10 @@ int readLongGenericHoleExt( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( length == NULL || isWritePtr( length, sizeof( int ) ) );
 
-	ENSURES_S( ( tag == DEFAULT_TAG ) || isValidTag( tag ) );
-			   /* We use MAX_TAG rather than MAX_TAG_VALUE since we don't
-			      know what form it has to be turned into when reading
-				  the tag */
+	REQUIRES_S( ( tag == DEFAULT_TAG ) || isValidTag( tag ) );
+				/* We use MAX_TAG rather than MAX_TAG_VALUE since we don't
+				   know what form it has to be turned into when reading
+				   the tag */
 	REQUIRES_S( isEnumRange( lengthCheckType, LENGTH_CHECK ) );
 
 	return( readLongObjectHeader( stream, length, 

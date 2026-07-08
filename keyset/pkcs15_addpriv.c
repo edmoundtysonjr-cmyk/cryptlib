@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					cryptlib PKCS #15 Private-key Add Interface				*
-*						Copyright Peter Gutmann 1996-2020					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -95,15 +95,15 @@ static void replacePrivkeyData( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
    attributes */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-int calculatePrivkeyStorage( OUT_BUFFER_ALLOC_OPT( *newPrivKeyDataSize ) \
-								void **newPrivKeyDataPtr, 
-							 OUT_LENGTH_SHORT_Z int *newPrivKeyDataSize, 
-							 IN_BUFFER_OPT( origPrivKeyDataSize ) \
-								const void *origPrivKeyData,
-							 IN_LENGTH_SHORT_Z const int origPrivKeyDataSize,
-							 IN_LENGTH_SHORT const int privKeySize,
-							 IN_LENGTH_SHORT const int privKeyAttributeSize,
-							 IN_LENGTH_SHORT_Z const int extraDataSize )
+int assignPrivkeyStorage( OUT_BUFFER_ALLOC_OPT( *newPrivKeyDataSize ) \
+							void **newPrivKeyDataPtr, 
+						  OUT_LENGTH_SHORT_Z int *newPrivKeyDataSize, 
+						  IN_BUFFER_OPT( origPrivKeyDataSize ) \
+							const void *origPrivKeyData,
+						  IN_LENGTH_SHORT_Z const int origPrivKeyDataSize,
+						  IN_LENGTH_SHORT const int privKeySize,
+						  IN_LENGTH_SHORT const int privKeyAttributeSize,
+						  IN_LENGTH_SHORT_Z const int extraDataSize )
 	{
 	void *newPrivKeyData;
 
@@ -141,7 +141,7 @@ int calculatePrivkeyStorage( OUT_BUFFER_ALLOC_OPT( *newPrivKeyDataSize ) \
 
 	/* Allocate storage for the new data */
 	REQUIRES( rangeCheck( *newPrivKeyDataSize, 1, MAX_BUFFER_SIZE ) );
-	newPrivKeyData = clAlloc( "calculatePrivkeyStorage", *newPrivKeyDataSize );
+	newPrivKeyData = clAlloc( "assignPrivkeyStorage", *newPrivKeyDataSize );
 	if( newPrivKeyData == NULL )
 		return( CRYPT_ERROR_MEMORY );
 	*newPrivKeyDataPtr = newPrivKeyData;
@@ -389,6 +389,7 @@ static int createContexts( OUT_HANDLE_OPT CRYPT_CONTEXT *iGenericSecret,
 	if( cryptStatusError( status ) )
 		{
 		krnlSendNotifier( *iGenericSecret, IMESSAGE_DECREFCOUNT );
+		*iGenericSecret = CRYPT_ERROR;
 		return( status );
 		}
 
@@ -400,6 +401,7 @@ static int createContexts( OUT_HANDLE_OPT CRYPT_CONTEXT *iGenericSecret,
 	if( cryptStatusError( status ) )
 		{
 		krnlSendNotifier( *iGenericSecret, IMESSAGE_DECREFCOUNT );
+		*iGenericSecret = CRYPT_ERROR;
 		return( status );
 		}
 	status = createStrongAlgorithmContext( iMacContext, iCryptOwner,
@@ -409,6 +411,7 @@ static int createContexts( OUT_HANDLE_OPT CRYPT_CONTEXT *iGenericSecret,
 		{
 		krnlSendNotifier( *iGenericSecret, IMESSAGE_DECREFCOUNT );
 		krnlSendNotifier( *iCryptContext, IMESSAGE_DECREFCOUNT );
+		*iGenericSecret = *iCryptContext = CRYPT_ERROR;
 		return( status );
 		}
 
@@ -421,6 +424,8 @@ static int createContexts( OUT_HANDLE_OPT CRYPT_CONTEXT *iGenericSecret,
 		krnlSendNotifier( *iGenericSecret, IMESSAGE_DECREFCOUNT );
 		krnlSendNotifier( *iCryptContext, IMESSAGE_DECREFCOUNT );
 		krnlSendNotifier( *iMacContext, IMESSAGE_DECREFCOUNT );
+		*iGenericSecret = *iCryptContext = *iMacContext = CRYPT_ERROR;
+		return( status );
 		}
 	
 	return( CRYPT_OK );
@@ -716,7 +721,8 @@ static int addPrivateKeyMetadata( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
 	if( cryptStatusError( status ) )
 		return( status );
 
-	/* Calculate the private-key storage size */
+	/* Calculate the private-key storage size and if necessary allocate new 
+	   storage for it */
 #ifdef USE_RSA_EXTRAPARAM
 	if( privKeyParams->pkcCryptAlgo == CRYPT_ALGO_RSA )
 		{
@@ -726,12 +732,12 @@ static int addPrivateKeyMetadata( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
 							bytesToBits( privKeyParams->modulusSize ) );
 		}
 #endif /* USE_RSA_EXTRAPARAM */
-	status = calculatePrivkeyStorage( &newPrivKeyData, &newPrivKeyDataSize, 
-									  pkcs15infoPtr->privKeyData,
-									  pkcs15infoPtr->privKeyDataSize,
-									  sizeofShortObject( privKeySize ),
-									  privKeyParams->privKeyAttributeSize, 
-									  extraDataSize );
+	status = assignPrivkeyStorage( &newPrivKeyData, &newPrivKeyDataSize, 
+								   pkcs15infoPtr->privKeyData,
+								   pkcs15infoPtr->privKeyDataSize,
+								   sizeofShortObject( privKeySize ),
+								   privKeyParams->privKeyAttributeSize, 
+								   extraDataSize );
 	if( cryptStatusError( status ) )
 		return( status );
 
@@ -785,7 +791,7 @@ static int addPrivateKeyMetadata( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
 					checkCertObjectEncoding( newPrivKeyData, 
 											 newPrivKeyDataSize ) ) );
 			 /* Note that the above may leak newPrivKeyData if it's been
-			    dynamically allocated in calculatePrivkeyStorage(), however
+			    dynamically allocated in assignPrivkeyStorage(), however
 				there's no easy way to selectively free this and since it's
 				a should-never-occur error condition we're already in an
 				emergency-exit state anyway */
@@ -930,7 +936,8 @@ static int writePrivateKey( IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,
 	   encapsulation */
 	privKeySize = sizeofShortObject( envelopeContentSize );
 
-	/* Calculate the private-key storage size */
+	/* Calculate the private-key storage size and if necessary allocate new 
+	   storage for it */
 #ifdef USE_RSA_EXTRAPARAM
 	if( privKeyParams->pkcCryptAlgo == CRYPT_ALGO_RSA )
 		{
@@ -939,11 +946,11 @@ static int writePrivateKey( IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,
 		extraDataSize = sizeofShortInteger( privKeyParams->modulusSize );
 		}
 #endif /* USE_RSA_EXTRAPARAM */
-	status = calculatePrivkeyStorage( newPrivKeyData, newPrivKeyDataSize, 
-									  origPrivKeyData, origPrivKeyDataSize,
-									  privKeySize, 
-									  privKeyParams->privKeyAttributeSize, 
-									  extraDataSize );
+	status = assignPrivkeyStorage( newPrivKeyData, newPrivKeyDataSize, 
+								   origPrivKeyData, origPrivKeyDataSize,
+								   privKeySize, 
+								   privKeyParams->privKeyAttributeSize, 
+								   extraDataSize );
 	if( cryptStatusError( status ) )
 		return( status );
 
@@ -972,8 +979,11 @@ static int writePrivateKey( IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		{
-		if( newPrivKeyData != origPrivKeyData )
+		if( *newPrivKeyData != origPrivKeyData )
+			{
 			clFree( "writePrivateKey", *newPrivKeyData );
+			*newPrivKeyData = NULL;
+			}
 		retExt( status, 
 				( status, errorInfo, 
 				  "Couldn't MAC encryption attributes" ) );
@@ -1001,8 +1011,11 @@ static int writePrivateKey( IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,
 	if( cryptStatusError( status ) )
 		{
 		sMemClose( &stream );
-		if( newPrivKeyData != origPrivKeyData )
+		if( *newPrivKeyData != origPrivKeyData )
+			{
 			clFree( "writePrivateKey", *newPrivKeyData );
+			*newPrivKeyData = NULL;
+			}
 		retExt( status, 
 				( status, errorInfo, 
 				  "Couldn't write private key attributes" ) );
@@ -1017,6 +1030,11 @@ static int writePrivateKey( IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,
 	if( cryptStatusError( status ) )
 		{
 		sMemClose( &stream );
+		if( *newPrivKeyData != origPrivKeyData )
+			{
+			clFree( "writePrivateKey", *newPrivKeyData );
+			*newPrivKeyData = NULL;
+			}
 		return( status );
 		}
 	
@@ -1039,8 +1057,11 @@ static int writePrivateKey( IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,
 	if( cryptStatusError( status ) )
 		{
 		sMemClose( &stream );
-		if( newPrivKeyData != origPrivKeyData )
+		if( *newPrivKeyData != origPrivKeyData )
+			{
 			clFree( "writePrivateKey", *newPrivKeyData );
+			*newPrivKeyData = NULL;
+			}
 		retExt( status, 
 				( status, errorInfo, 
 				  "Couldn't write wrapped private key" ) );
@@ -1057,8 +1078,11 @@ static int writePrivateKey( IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,
 	if( cryptStatusError( status ) )
 		{
 		sMemClose( &stream );
-		if( newPrivKeyData != origPrivKeyData )
+		if( *newPrivKeyData != origPrivKeyData )
+			{
 			clFree( "writePrivateKey", *newPrivKeyData );
+			*newPrivKeyData = NULL;
+			}
 		retExt( status, 
 				( status, errorInfo, 
 				  "Couldn't write integrity check value for wrapped private "
@@ -1076,6 +1100,11 @@ static int writePrivateKey( IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,
 		if( cryptStatusError( status ) )
 			{
 			sMemClose( &stream );
+			if( *newPrivKeyData != origPrivKeyData )
+				{
+				clFree( "writePrivateKey", *newPrivKeyData );
+				*newPrivKeyData = NULL;
+				}
 			return( status );
 			}
 		}
@@ -1090,8 +1119,6 @@ static int writePrivateKey( IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,
 	}
 
 /* Add a private key to a PKCS #15 collection */
-
-#if 1	/* New (3.4.0+) code to write the private key as AuthEnvData */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 6, 11 ) ) \
 int pkcs15AddPrivateKey( INOUT_PTR PKCS15_INFO *pkcs15infoPtr, 
@@ -1212,247 +1239,4 @@ int pkcs15AddPrivateKey( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
 						newPrivKeyDataSize, newPrivKeyOffset );
 	return( CRYPT_OK );
 	}
-
-#else	/* Old (pre-3.4.0) code to write the encrypted private key as
-		   EnvelopedData rather than AuthEnv'd data */
-
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 4, 6, 11 ) ) \
-int pkcs15AddPrivateKey( INOUT_PTR PKCS15_INFO *pkcs15infoPtr, 
-						 IN_HANDLE const CRYPT_HANDLE iCryptContext,
-						 IN_HANDLE const CRYPT_HANDLE iCryptOwner,
-						 IN_BUFFER( passwordLength ) const char *password, 
-						 IN_LENGTH_NAME const int passwordLength,
-						 IN_BUFFER( privKeyAttributeSize ) \
-							const void *privKeyAttributes, 
-						 IN_LENGTH_SHORT const int privKeyAttributeSize,
-						 IN_ALGO const CRYPT_ALGO_TYPE pkcCryptAlgo, 
-						 IN_LENGTH_PKC const int modulusSize, 
-						 IN_BOOL const BOOLEAN isStorageObject, 
-						 INOUT_PTR ERROR_INFO *errorInfo )
-	{
-	CRYPT_CONTEXT iSessionKeyContext;
-	MECHANISM_WRAP_INFO mechanismInfo;
-	STREAM stream;
-	BYTE envelopeHeaderBuffer[ 256 + 8 ];
-	void *newPrivKeyData = pkcs15infoPtr->privKeyData;
-	int newPrivKeyDataSize, newPrivKeyOffset DUMMY_INIT;
-	int privKeySize DUMMY_INIT, extraDataSize = 0;
-	int keyTypeTag, status;
-
-	assert( isWritePtr( pkcs15infoPtr, sizeof( PKCS15_INFO ) ) );
-	assert( ( isStorageObject && password == NULL && passwordLength == 0 ) || \
-			( !isStorageObject && isReadPtrDynamic( password, passwordLength ) ) );
-	assert( isReadPtrDynamic( privKeyAttributes, privKeyAttributeSize ) );
-
-	REQUIRES( isHandleRangeValid( iCryptContext ) );
-	REQUIRES( iCryptOwner == DEFAULTUSER_OBJECT_HANDLE || \
-			  isHandleRangeValid( iCryptOwner ) );
-	REQUIRES( ( isStorageObject && password == NULL && \
-				passwordLength == 0 ) || \
-			  ( !isStorageObject && password != NULL && \
-				passwordLength >= MIN_NAME_LENGTH && \
-				passwordLength < MAX_ATTRIBUTE_SIZE ) );
-	REQUIRES( isShortIntegerRangeNZ( privKeyAttributeSize ) );
-	REQUIRES( isPkcAlgo( pkcCryptAlgo ) );
-	REQUIRES( ( isEccAlgo( pkcCryptAlgo ) && \
-				modulusSize >= MIN_PKCSIZE_ECC && \
-				modulusSize <= CRYPT_MAX_PKCSIZE_ECC ) || \
-			  ( !isEccAlgo( pkcCryptAlgo ) && \
-				modulusSize >= MIN_PKCSIZE && \
-				modulusSize <= CRYPT_MAX_PKCSIZE ) );
-	REQUIRES( isBooleanValue( isStorageObject ) );
-	REQUIRES( errorInfo != NULL );
-
-	/* Get the tag for encoding the key data */
-	status = getKeyTypeTag( CRYPT_UNUSED, pkcCryptAlgo, &keyTypeTag );
-	if( cryptStatusError( status ) )
-		return( status );
-
-	/* If this is a dummy object (in other words object metadata) being 
-	   stored in a PKCS #15 object store then there's nothing present except
-	   key attributes and a reference to the key held in external hardware,
-	   in which case we use a simplified version if the code that follows */
-	if( isStorageObject )
-		{
-		status = addPrivateKeyMetadata( pkcs15infoPtr, iCryptContext, 
-										privKeyAttributes, privKeyAttributeSize,
-										pkcCryptAlgo, modulusSize, keyTypeTag );
-		if( cryptStatusError( status ) )
-			{
-			retExt( status, 
-					( status, errorInfo, 
-					  "Couldn't write private key metadata" ) );
-			}
-
-		return( CRYPT_OK );
-		}
-
-	/* Create a session key context and generate a key and IV into it.  The 
-	   IV would be generated automatically later on when we encrypt data for 
-	   the first time but we do it explicitly here to catch any possible 
-	   errors at a point where recovery is easier */
-	status = createStrongEncryptionContext( &iSessionKeyContext, iCryptOwner );
-	if( cryptStatusError( status ) )
-		return( status );
-	status = krnlSendNotifier( iSessionKeyContext, IMESSAGE_CTX_GENKEY );
-	if( cryptStatusOK( status ) )
-		status = krnlSendNotifier( iSessionKeyContext, IMESSAGE_CTX_GENIV );
-	if( cryptStatusError( status ) )
-		{
-		krnlSendNotifier( iSessionKeyContext, IMESSAGE_DECREFCOUNT );
-		retExt( status, 
-				( status, errorInfo, 
-				  "Couldn't create session key to wrap private key" ) );
-		}
-
-	/* Calculate the eventual encrypted key size */
-	setMechanismWrapInfo( &mechanismInfo, NULL, 0, NULL, 0, iCryptContext,
-						  iSessionKeyContext );
-	status = krnlSendMessage( MECHANISM_OBJECT_HANDLE, IMESSAGE_DEV_EXPORT,
-							  &mechanismInfo, MECHANISM_PRIVATEKEYWRAP );
-	if( cryptStatusOK( status ) )
-		privKeySize = mechanismInfo.wrappedDataLength;
-	clearMechanismInfo( &mechanismInfo );
-	if( cryptStatusError( status ) )
-		{
-		krnlSendNotifier( iSessionKeyContext, IMESSAGE_DECREFCOUNT );
-		return( status );
-		}
-	ENSURES( privKeySize <= 256 + MAX_PRIVATE_KEYSIZE );
-
-	/* Write the CMS envelope header for the wrapped private key except for 
-	   the outermost wrapper, which we have to defer writing until later 
-	   since we won't know the wrapped session key or inner CMS header size 
-	   until we've written them.  Since we're using KEKRecipientInfo we use 
-	   a version of 2 rather than 0 */
-	sMemOpen( &stream, envelopeHeaderBuffer, 256 );
-	writeShortInteger( &stream, 2, DEFAULT_TAG );
-	status = writeWrappedSessionKey( &stream, iSessionKeyContext,
-									 iCryptOwner, password, passwordLength );
-	if( cryptStatusOK( status ) )
-		{
-		status = writeCMSencrHeader( &stream, OID_CMS_DATA, 
-									 sizeofOID( OID_CMS_DATA ), privKeySize,
-									 iSessionKeyContext );
-		}
-	if( cryptStatusError( status ) )
-		{
-		sMemClose( &stream );
-		krnlSendNotifier( iSessionKeyContext, IMESSAGE_DECREFCOUNT );
-		retExt( status, 
-				( status, errorInfo, 
-				  "Couldn't write envelope header for wrapping private "
-				  "key" ) );
-		}
-	envelopeHeaderSize = stell( &stream );
-	REQUIRES( isShortIntegerRangeNZ( envelopeHeaderSize ) );
-	REQUIRES( !checkOverflowAdd( envelopeHeaderSize, privKeySize ) );
-	envelopeContentSize = envelopeHeaderSize + privKeySize;
-	sMemDisconnect( &stream );
-
-	/* Since we haven't been able to write the outer CMS envelope wrapper 
-	   yet we need to adjust the overall size for the additional level of
-	   encapsulation */
-	REQUIRES( !checkOverflowAdd( privKeySize, envelopeHeaderSize ) );
-	privKeySize = sizeofShortObject( privKeySize + envelopeHeaderSize );
-
-	/* Calculate the private-key storage size */
-#ifdef USE_RSA_EXTRAPARAM
-	if( pkcCryptAlgo == CRYPT_ALGO_RSA )
-		{
-		/* RSA keys have an extra element for PKCS #11 compatibility, only
-		   required for pre-PKCS #15 v1.2 */
-		extraDataSize = sizeofShortInteger( modulusSize );
-		}
-#endif /* USE_RSA_EXTRAPARAM */
-	status = calculatePrivkeyStorage( pkcs15infoPtr, &newPrivKeyData,
-									  &newPrivKeyDataSize, privKeySize, 
-									  privKeyAttributeSize, 
-									  extraDataSize );
-	if( cryptStatusError( status ) )
-		{
-		krnlSendNotifier( iSessionKeyContext, IMESSAGE_DECREFCOUNT );
-		return( status );
-		}
-
-	sMemOpen( &stream, newPrivKeyData, newPrivKeyDataSize );
-
-	/* Write the outer header and attributes */
-	writeConstructed( &stream, privKeyAttributeSize + \
-							   sizeofShortObject( \
-									sizeofShortObject( privKeySize ) + \
-									extraDataSize ),
-					  keyTypeTag );
-	swrite( &stream, privKeyAttributes, privKeyAttributeSize );
-	REQUIRES( !checkOverflowAdd( privKeySize, extraDataSize ) );
-	writeConstructed( &stream, 
-					  sizeofShortObject( privKeySize + extraDataSize ), 
-					  CTAG_OB_TYPEATTR );
-	status = writeSequence( &stream, privKeySize + extraDataSize );
-	if( cryptStatusOK( status ) )
-		{
-		newPrivKeyOffset = stell( &stream );
-		ENSURES( isIntegerRangeNZ( newPrivKeyOffset ) );
-		}
-	if( cryptStatusError( status ) )
-		{
-		sMemClose( &stream );
-		krnlSendNotifier( iSessionKeyContext, IMESSAGE_DECREFCOUNT );
-		if( newPrivKeyData != pkcs15infoPtr->privKeyData )
-			clFree( "addPrivateKey", newPrivKeyData );
-		retExt( status, 
-				( status, errorInfo, 
-				  "Couldn't write private key attributes" ) );
-		}
-
-	/* Write the previously-encoded CMS envelope header and key exchange
-	   information and follow it with the encrypted private key.  Since we
-	   now know the size of the envelope header (which we couldn't write
-	   earlier) we can add this now too */
-	writeConstructed( &stream, envelopeContentSize, CTAG_OV_DIRECTPROTECTED );
-	status = swrite( &stream, envelopeHeaderBuffer, envelopeHeaderSize );
-	if( cryptStatusOK( status ) )
-		{
-		void *dataPtr;
-		int length;
-
-		status = sMemGetDataBlockRemaining( &stream, &dataPtr, &length );
-		if( cryptStatusOK( status ) )
-			{
-			status = writeWrappedPrivateKey( dataPtr, length, &privKeySize, 
-											 iCryptContext, iSessionKeyContext, 
-											 pkcCryptAlgo );
-			}
-		}
-	if( cryptStatusOK( status ) )
-		status = sExtend( &stream, privKeySize, MAX_INTLENGTH_SHORT );
-#ifdef USE_RSA_EXTRAPARAM
-	if( cryptStatusOK( status ) && pkcCryptAlgo == CRYPT_ALGO_RSA )
-		{
-		/* RSA keys have an extra element for PKCS #11 compatibility that we
-		   need to kludge onto the end of the private-key data, only
-		   required for pre-PKCS #15 v1.2 */
-		status = writeShortInteger( &stream, modulusSize, DEFAULT_TAG );
-		}
-#endif /* USE_RSA_EXTRAPARAM */
-	krnlSendNotifier( iSessionKeyContext, IMESSAGE_DECREFCOUNT );
-	if( cryptStatusError( status ) )
-		{
-		sMemClose( &stream );
-		retExt( status, 
-				( status, errorInfo, 
-				  "Couldn't wrap private key using session key" ) );
-		}
-	assert( newPrivKeyDataSize == stell( &stream ) );
-	sMemDisconnect( &stream );
-	ENSURES( cryptStatusOK( \
-					checkCertObjectEncoding( newPrivKeyData, 
-											 newPrivKeyDataSize ) ) );
-
-	/* Replace the old data with the newly-written data */
-	replacePrivkeyData( pkcs15infoPtr, newPrivKeyData, 
-						newPrivKeyDataSize, newPrivKeyOffset );
-	return( CRYPT_OK );
-	}
-#endif /* 0 */
 #endif /* USE_PKCS15 */

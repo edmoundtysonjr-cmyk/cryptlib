@@ -51,7 +51,7 @@
    A survey of the web PKI in 2026 indicated 900M certificates using F4 and
    20 using an oddball set of values all > F4 */
 
-#if defined( USE_PGP ) || defined( USE_PGPKEYS )
+#ifdef USE_PGPKEYS 
   #define MIN_PUBLIC_EXPONENT		17
 #elif defined( USE_SSH )
   #define MIN_PUBLIC_EXPONENT		33

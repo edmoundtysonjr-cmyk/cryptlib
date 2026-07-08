@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						 cryptlib PGP Key Write Routines					*
-*						Copyright Peter Gutmann 1992-2014					*
+*						Copyright Peter Gutmann 1992-2025					*
 *																			*
 ****************************************************************************/
 
@@ -221,7 +221,10 @@ static int getUserID( IN_HANDLE const CRYPT_CONTEXT cryptHandle,
 	( void ) krnlSendMessage( iCryptCert, IMESSAGE_SETATTRIBUTE,
 							  MESSAGE_VALUE_FALSE, CRYPT_IATTRIBUTE_LOCKED );
 	if( cryptStatusError( status ) )
-		return( status );
+		{
+		/* There's no email address present, just go with the user ID */
+		return( CRYPT_OK );
+		}
 	
 	/* If there isn't room to append the email address to the name, in the
 	   form "name <email>", then we're done */
@@ -646,7 +649,7 @@ int pgpWritePubkey( INOUT_PTR PGP_INFO *pgpInfoPtr,
 		swrite( &stream, userIDbuffer, userIDlen );
 		status = swrite( &stream, userIDsigBuffer, userIDsigLen );
 		}
-	if( cryptStatusOK( status ) && pgpInfoPtr->keyDataLen > 0 )
+	if( cryptStatusOK( status ) && pgpInfoPtr->keyData != NULL )
 		{
 		status = pgpWritePacketHeader( &stream, PGP_PACKET_PUBKEY_SUB, 
 									   pgpInfoPtr->keyDataLen );

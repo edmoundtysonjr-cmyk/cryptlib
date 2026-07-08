@@ -985,7 +985,7 @@ static int readTlsPQCPublicKey( INOUT_PTR STREAM *stream,
 *																			*
 ****************************************************************************/
 
-#ifdef USE_PGP 
+#ifdef USE_PGPKEYS 
 
 /* Read PGP public keys:
 
@@ -1346,7 +1346,7 @@ static int readPgpEccPublicKey( INOUT_PTR STREAM *stream,
 	return( CRYPT_OK );
 	}
 #endif /* USE_ECDH || USE_ECDSA */
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 /****************************************************************************
 *																			*
@@ -1478,12 +1478,12 @@ int readPublicKeyRsaFunction( INOUT_PTR STREAM *stream,
 			break;
 #endif /* USE_SSH */
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS
 		case KEYFORMAT_PGP:
 			status = readPgpRsaPublicKey( stream, contextInfoPtr, 
 										  &actionFlags );
 			break;
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 		default:
 			retIntError();
@@ -1540,12 +1540,12 @@ int readPublicKeyDlpFunction( INOUT_PTR STREAM *stream,
 			break;
 #endif /* USE_TLS */
 		
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS
 		case KEYFORMAT_PGP:
 			status = readPgpDlpPublicKey( stream, contextInfoPtr, 
 										  cryptAlgo, &actionFlags );
 			break;
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 		default:
 			retIntError();
@@ -1606,12 +1606,12 @@ int readPublicKeyEccFunction( INOUT_PTR STREAM *stream,
 			break;
 #endif /* USE_SSH */
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS
 		case KEYFORMAT_PGP:
 			status = readPgpEccPublicKey( stream, contextInfoPtr, 
 										  cryptAlgo, &actionFlags );
 			break;
-#endif /* USE_SSH */
+#endif /* USE_PGPKEYS */
 
 		default:
 			retIntError();
@@ -1771,7 +1771,7 @@ int decodeDLValuesFunction( IN_BUFFER( bufSize ) const BYTE *buffer,
 			break;
 #endif /* USE_INT_ASN1 */
 
-#ifdef USE_PGP
+#ifdef USE_PGPKEYS
 		case CRYPT_FORMAT_PGP:
 			status = readBignumInteger16Ubits( &stream, value1, 
 											   DLPPARAM_MIN_SIG_R,
@@ -1784,7 +1784,7 @@ int decodeDLValuesFunction( IN_BUFFER( bufSize ) const BYTE *buffer,
 											   bytesToBits( CRYPT_MAX_PKCSIZE ),
 											   maxRange, BIGNUM_CHECK_VALUE );
 			break;
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 	
 #ifdef USE_SSH
 		case CRYPT_IFORMAT_SSH:

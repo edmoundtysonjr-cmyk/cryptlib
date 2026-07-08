@@ -768,7 +768,7 @@ static int cmdGetAttribute( COMMAND_INFO *cmd )
 	/* Get the attribute data from the object.  If it's a config option,
 	   we're usually doing this via the default user object which is
 	   invisible to the user, so we have to use an internal message for this
-	   one case.
+	   one case (see also the long comment in misc/user_rw.c).
 
 	   This is further complicated by the fact that the kernel checks that
 	   the destination memory is writable and either returns an error (for
@@ -1121,7 +1121,8 @@ static int cmdSetAttribute( COMMAND_INFO *cmd )
 	/* Send the attribute data to the object, mapping the return code to the
 	   correct value if necessary.  If it's a config option, we're usually
 	   doing this via the default user object which is invisible to the user,
-	   so we have to use an internal message for this one case */
+	   so we have to use an internal message for this one case (see also the 
+	   long comment in misc/user_rw.c) */
 	if( cmd->noStrArgs == 0 )
 		{
 		if( cmd->arg[ 0 ] == DEFAULTUSER_OBJECT_HANDLE )

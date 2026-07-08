@@ -287,6 +287,7 @@ int getTrustedCert( INOUT_PTR TYPECAST( TRUST_INFO * ) struct TI *trustInfoPtr,
 		REQUIRES( isShortIntegerRangeNZ( trustInfo->certObjectLength ) ); 
 		zeroise( certObjectPtr, trustInfo->certObjectLength );
 		clFree( "getTrustedCert", certObjectPtr );
+		certObjectPtr = NULL;
 		DATAPTR_SET( trustInfo->certObject, NULL );
 		trustInfo->certObjectLength = 0;
 		trustInfo->certChecksum = 0;
@@ -813,6 +814,7 @@ int deleteTrustEntry( IN_DATAPTR const DATAPTR trustInfo,
 		REQUIRES( isShortIntegerRangeNZ( entryToDelete->certObjectLength ) ); 
 		zeroise( certObjectPtr, entryToDelete->certObjectLength );
 		clFree( "deleteTrustEntry", certObjectPtr );
+		certObjectPtr = NULL;
 		}
 
 	/* Remove the trust entry from the list */

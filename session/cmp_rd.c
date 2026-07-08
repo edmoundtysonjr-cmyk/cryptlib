@@ -165,7 +165,7 @@ static int updateMacInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						  INOUT_PTR STREAM *stream,
 						  IN_BOOL const BOOLEAN isRevocation )
 	{
-	const ATTRIBUTE_LIST *passwordPtr = \
+	const SESSION_ATTRIBUTE_LIST *passwordPtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_PASSWORD );
 	BYTE macKey[ CRYPT_MAX_HASHSIZE + 8 ];
 	BOOLEAN decodedMacKey = FALSE;
@@ -1506,11 +1506,16 @@ int readPkiMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 										protocolInfo, tag );
 			if( cryptStatusError( status ) )
 				{
+				sMemDisconnect( &stream );
 				protocolInfo->pkiFailInfo = \
 						( status == CRYPT_ERROR_SIGNATURE || \
 						  status == CRYPT_ERROR_INVALID ) ? \
 						  CMPFAILINFO_BADMESSAGECHECK : \
 						  CMPFAILINFO_BADDATAFORMAT;
+				retExt( status,
+						( status, SESSION_ERRINFO, 
+						   "Invalid extraCerts field for %s",
+						   getCMPMessageName( tag ) ) );
 				}
 			}
 		else

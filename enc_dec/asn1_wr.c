@@ -375,7 +375,7 @@ int writeInteger( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtrDynamic( integer, integerLength ) );
 
-	REQUIRES_S( isShortIntegerRange( integerLength ) );
+	REQUIRES_S( isShortIntegerRangeNZ( integerLength ) );
 	REQUIRES_S( tag == DEFAULT_TAG || ( tag >= 0 && tag < MAX_TAG_VALUE ) );
 
 	writeTag( stream, ( tag == DEFAULT_TAG ) ? \

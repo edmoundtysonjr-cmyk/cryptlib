@@ -13,6 +13,10 @@
   #include "cert/dn.h"
 #endif /* Compiler-specific includes */
 
+/* The maximum number of components that we allow in a DN */
+
+#define MAX_DN_COMPONENTS	32
+
 #ifdef USE_CERTIFICATES
 
 /****************************************************************************
@@ -198,7 +202,7 @@ static int readRDNcomponent( INOUT_PTR STREAM *stream,
 	   bytes, see the comment for copyFromASN1String() below */
 	if( valueLength > MAX_ATTRIBUTE_SIZE / 4 )
 		return( CRYPT_ERROR_OVERFLOW );
-	if( stringTag ==  BER_STRING_BMP && ( valueLength & 1 ) )
+	if( stringTag == BER_STRING_BMP && ( valueLength & 1 ) )
 		{
 		/* Unicode strings shouldn't have an odd length, this avoids 
 		   potential problems later with code that processes two bytes 
@@ -268,7 +272,8 @@ static int readDNComponent( INOUT_PTR STREAM *stream,
 		return( status );
 
 	/* Read each RDN component */
-	LOOP_MED( noComponents = 0, rdnLength > 0 && noComponents < 32,
+	LOOP_MED( noComponents = 0, 
+			  rdnLength > 0 && noComponents < MAX_DN_COMPONENTS,
 			  noComponents++ )
 		{
 		const int rdnStart = stell( stream );
@@ -276,7 +281,8 @@ static int readDNComponent( INOUT_PTR STREAM *stream,
 
 		REQUIRES( isShortIntegerRangeNZ( rdnStart ) );
 
-		ENSURES( LOOP_INVARIANT_MED( noComponents, 0, 31 ) );
+		ENSURES( LOOP_INVARIANT_MED( noComponents, 0, 
+									 MAX_DN_COMPONENTS - 1 ) );
 
 		status = readRDNcomponent( stream, dnPtr, rdnLength );
 		if( cryptStatusOK( status ) )
@@ -295,7 +301,7 @@ static int readDNComponent( INOUT_PTR STREAM *stream,
 			}
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( rdnLength < 0 || noComponents >= 32 )
+	if( rdnLength < 0 || noComponents >= MAX_DN_COMPONENTS )
 		return( CRYPT_ERROR_BADDATA );
 
 	return( CRYPT_OK );
@@ -328,7 +334,8 @@ int readDN( INOUT_PTR STREAM *stream,
 		return( CRYPT_OK );
 		}
 	DATAPTR_SET( dn, NULL );
-	LOOP_MED( noComponents = 0, length > 0 && noComponents < 32,
+	LOOP_MED( noComponents = 0, 
+			  length > 0 && noComponents < MAX_DN_COMPONENTS,
 			  noComponents++ )
 		{
 		const int innerStartPos = stell( stream );
@@ -336,7 +343,8 @@ int readDN( INOUT_PTR STREAM *stream,
 
 		REQUIRES( isShortIntegerRangeNZ( innerStartPos ) );
 
-		ENSURES( LOOP_INVARIANT_MED( noComponents, 0, 31 ) );
+		ENSURES( LOOP_INVARIANT_MED( noComponents, 0, 
+									 MAX_DN_COMPONENTS - 1 ) );
 
 		status = readDNComponent( stream, &dn );
 		if( cryptStatusOK( status ) )
@@ -356,7 +364,7 @@ int readDN( INOUT_PTR STREAM *stream,
 		}
 	ENSURES( LOOP_BOUND_OK );
 	if( cryptStatusError( status ) || \
-		length < 0 || noComponents >= 32 )
+		length < 0 || noComponents >= MAX_DN_COMPONENTS )
 		{
 		/* Delete the local copy of the DN read so far if necessary */
 		if( DATAPTR_ISSET( dn ) )

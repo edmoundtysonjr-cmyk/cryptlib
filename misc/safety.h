@@ -508,11 +508,11 @@ BOOLEAN safeBufferCheck( IN_BUFFER( bufSize ) const void *buffer,
    form it's used as an access token for a function call to ensure that the 
    function really was called as intended:
 
-	functionName( MK_TOKEN( "functionName", 12 ), ..... );
+	functionName( MK_TOKEN( "functionName" ), ..... );
 
 	int functionName( const ACCESS_TOKEN accessToken, ... )
 		{
-		REQUIRES( CHECK_TOKEN( "functionName", 12 ) );
+		REQUIRES( CHECK_TOKEN( "functionName", accessToken ) );
 
 		...
 		}
@@ -956,7 +956,8 @@ typedef unsigned int CFI_CHECK_TYPE;
 /* Pseudo-constants used for array bounds-checking.  These provide a more
    precise limit than the FAILSAFE_ITERATIONS_xxx values above.  We subtract
    one from the total count because static arrays are always overallocated 
-   with two extra dummy elements at the end */
+   with two extra dummy elements at the end and this means we calculate the
+   failsafe bound as one past the last valid element */
 
 #define FAILSAFE_ARRAYSIZE( array, elementType ) \
 		( ( sizeof( array ) / sizeof( elementType ) ) - 1 )
@@ -2507,17 +2508,22 @@ typedef struct {
 
    And occasionally:
 
-	status = tmrSrubData( ... ); */
+	status = tmrScrubData( ... ); */
 
 CHECK_RETVAL \
-int tmrRecoverData( INOUT_BUFFER_FIXED( size) void *a, 
-					INOUT_BUFFER_FIXED( size) void *b, 
-					INOUT_BUFFER_FIXED( size) void *c, 
+int tmrStoreData( INOUT_BUFFER_FIXED( size ) void *a, 
+				  INOUT_BUFFER_FIXED( size ) void *b, 
+				  INOUT_BUFFER_FIXED( size ) void *c, 
+				  IN_LENGTH const int size );
+CHECK_RETVAL \
+int tmrRecoverData( INOUT_BUFFER_FIXED( size ) void *a, 
+					INOUT_BUFFER_FIXED( size ) void *b, 
+					INOUT_BUFFER_FIXED( size ) void *c, 
 					IN_LENGTH const int size );
 CHECK_RETVAL \
-int tmrScrubData( INOUT_BUFFER_FIXED( size) void *a, 
-				  INOUT_BUFFER_FIXED( size) void *b, 
-				  INOUT_BUFFER_FIXED( size) void *c, 
+int tmrScrubData( INOUT_BUFFER_FIXED( size ) void *a, 
+				  INOUT_BUFFER_FIXED( size ) void *b, 
+				  INOUT_BUFFER_FIXED( size ) void *c, 
 				  IN_LENGTH const int size );
 
 #endif /* _SAFETY_DEFINED */

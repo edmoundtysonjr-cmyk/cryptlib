@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							Set Certificate Components						*
-*						Copyright Peter Gutmann 1997-2019					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -315,7 +315,7 @@ static int copyKeyFromCertificate( INOUT_PTR CERT_INFO *destCertInfoPtr,
 
 	REQUIRES( isShortIntegerRangeNZ( srcCertInfoPtr->publicKeyInfoSize ) );
 	if( ( publicKeyInfoPtr = \
-				clAlloc( "copyPublicKeyInfo", 
+				clAlloc( "copyKeyFromCertificate", 
 						 srcCertInfoPtr->publicKeyInfoSize ) ) == NULL )
 		return( CRYPT_ERROR_MEMORY );
 	memcpy( publicKeyInfoPtr, srcCertInfoPtr->publicKeyInfo, 
@@ -381,14 +381,17 @@ static int copyKeyFromContext( INOUT_PTR CERT_INFO *destCertInfoPtr,
 		return( status );
 	length = msgData.length;
 	REQUIRES( isShortIntegerRangeNZ( length ) );
-	if( ( publicKeyInfoPtr = clAlloc( "copyPublicKeyInfo", 
+	if( ( publicKeyInfoPtr = clAlloc( "copyKeyFromContext", 
 									  length ) ) == NULL )
 		return( CRYPT_ERROR_MEMORY );
 	setMessageData( &msgData, publicKeyInfoPtr, length );
 	status = krnlSendMessage( iCryptContext, IMESSAGE_GETATTRIBUTE_S,
 							  &msgData, CRYPT_IATTRIBUTE_KEY_SPKI );
 	if( cryptStatusError( status ) )
+		{
+		clFree( "copyKeyFromContext", publicKeyInfoPtr );
 		return( status );
+		}
 	destCertInfoPtr->publicKeyData = \
 		destCertInfoPtr->publicKeyInfo = publicKeyInfoPtr;
 	destCertInfoPtr->publicKeyInfoSize = length;
@@ -939,8 +942,8 @@ static int copyCertToRevRequest( INOUT_PTR CERT_INFO *crmfRevRequestInfoPtr,
 		{
 		clFree( "copyCertToRevRequest", 
 				crmfRevRequestInfoPtr->issuerDNdata );
-		crmfRevRequestInfoPtr->issuerDNptr = \
-			crmfRevRequestInfoPtr->issuerDNdata = NULL;
+		crmfRevRequestInfoPtr->issuerDNdata = \
+			crmfRevRequestInfoPtr->issuerDNptr = NULL;
 		crmfRevRequestInfoPtr->issuerDNsize = 0;
 		if( crmfRevRequestInfoPtr->cCertCert->serialNumber != NULL && \
 			crmfRevRequestInfoPtr->cCertCert->serialNumber != \

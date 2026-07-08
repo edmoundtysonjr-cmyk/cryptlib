@@ -199,7 +199,8 @@ static int beginRADIUSMessage( INOUT_PTR STREAM *stream,
 	/* Write the RADIUS packet, with a placeholder for the length */
 	sputc( stream, radiusType );
 	sputc( stream, eapInfo->radiusCtr );
-	if( radiusType != RADIUS_TYPE_REQUEST )
+	if( radiusType != RADIUS_TYPE_REQUEST && \
+		radiusType != RADIUS_TYPE_STATUSSVR )
 		{
 		/* It's not a request, update the counter value for the next packet 
 		   that we'll read */
@@ -536,11 +537,13 @@ int writeRADIUSMessage( INOUT_PTR STREAM *stream,
 									TRANSPORT_FLAG_FLUSH ) );
 	}
 
-/* Write an RFC 5997 RADIUS ping.  As with anonymised standard RADIUS 
-   messages how the server verifies the MAC on a message with no
-   identification information is a mystery, with the RFC specifically
-   requiring that "User authentication credentials such as User-Name
-   [...] MUST NOT appear in a Status-Server packet" */
+/* Write an RFC 5997 RADIUS ping, which is an EAP-less message so we need a
+   custom function to send it rather than using writeRADIUSMessage().  
+   
+   As with anonymised standard RADIUS messages how the server verifies the 
+   MAC on a message with no identification information is a mystery, with 
+   the RFC specifically requiring that "User authentication credentials such 
+   as User-Name [...] MUST NOT appear in a Status-Server packet" */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int writeRADIUSPing( INOUT_PTR STREAM *stream,

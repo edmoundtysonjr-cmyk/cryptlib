@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						 cryptlib DBMS Backend Interface					*
-*						Copyright Peter Gutmann 1996-2007					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -161,7 +161,7 @@ static int performQuery( INOUT_PTR DBMS_INFO *dbmsInfo,
 				queryType == DBMS_QUERY_CANCEL ) ) || \
 			isReadPtrDynamic( command, commandLength ) );
 	assert( ( data == NULL && dataLength == NULL ) || \
-			isWritePtr( data, MAX_QUERY_RESULT_SIZE ) );
+			isWritePtr( data, dataMaxLength ) );
 	assert( ( boundData == NULL ) || \
 			isReadPtr( boundData, \
 					   sizeof( BOUND_DATA ) * BOUND_DATA_MAXITEMS ) );
@@ -356,6 +356,9 @@ static int copyStringArg( OUT_BUFFER( bufMaxLen, *bufPos ) char *buffer,
 	REQUIRES( isShortIntegerRange( bufMaxLen ) );
 	REQUIRES( isShortIntegerRangeNZ( stringLen ) );
 
+	/* Clear return value */
+	*bufPos = 0;
+
 	/* Make sure that there's room for at least one more character of 
 	   output */
 	if( bufMaxLen < 1 )
@@ -475,21 +478,21 @@ int dbmsFormatQuery( OUT_BUFFER( outMaxLength, *outLength ) char *output,
 				status = CRYPT_ERROR_BADDATA;
 				break;
 				}
-			LOOP_MED( i = 0, 
-					  i < FAILSAFE_ARRAYSIZE( nameMapTbl, NAMEMAP_INFO ) && \
-							nameMapTbl[ i ].sourceName != NULL,
-					  i++ )
+			LOOP_MED_ALT( i = 0, 
+						  i < FAILSAFE_ARRAYSIZE( nameMapTbl, NAMEMAP_INFO ) && \
+							  nameMapTbl[ i ].sourceName != NULL,
+						  i++ )
 				{
-				ENSURES( LOOP_INVARIANT_MED( i, 0, 
-											 FAILSAFE_ARRAYSIZE( nameMapTbl, \
-																 NAMEMAP_INFO ) - 1 ) );
+				ENSURES( LOOP_INVARIANT_MED_ALT( i, 0, 
+												 FAILSAFE_ARRAYSIZE( nameMapTbl, \
+																	 NAMEMAP_INFO ) - 1 ) );
 
 				if( length == nameMapTbl[ i ].sourceLength && \
 					!strCompare( fieldName, nameMapTbl[ i ].sourceName, \
 								 length ) )
 					break;
 				}
-			ENSURES( LOOP_BOUND_OK );
+			ENSURES( LOOP_BOUND_OK_ALT );
 			ENSURES( i < FAILSAFE_ARRAYSIZE( nameMapTbl, NAMEMAP_INFO ) );
 			if( nameMapTbl[ i ].sourceName == NULL )
 				{

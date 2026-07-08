@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							cryptlib DBMS Interface							*
-*						Copyright Peter Gutmann 1996-2013					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -244,7 +244,7 @@ static int checkObjectIDMatch( IN_HANDLE const CRYPT_CERTIFICATE iCryptCert,
 		  itemType == KEYMGMT_ITEM_PKIUSER ) && \
 		keyIDtype == CRYPT_IKEYID_KEYID )
 		{
-		BYTE storedKeyID[ DBXKEYID_SIZE + 8 ];
+		BYTE storedKeyID[ ENCODED_DBXKEYID_SIZE + 8 ];
 		int storedKeyIDlength;
 
 		REQUIRES( keyIDlength == ENCODED_DBXKEYID_SIZE );
@@ -260,7 +260,7 @@ static int checkObjectIDMatch( IN_HANDLE const CRYPT_CERTIFICATE iCryptCert,
 		status = getCertKeyID( storedKeyID, ENCODED_DBXKEYID_SIZE, 
 							   &storedKeyIDlength, iCryptCert );
 		if( cryptStatusOK( status ) && \
-			!memcmp( keyID, storedKeyID, DBXKEYID_SIZE ) )
+			!memcmp( keyID, storedKeyID, ENCODED_DBXKEYID_SIZE ) )
 			return( CRYPT_OK );
 
 		DEBUG_DIAG(( "Fetched item's keyID doesn't match keyID used to fetch it" ));
@@ -477,7 +477,7 @@ int getItemData( INOUT_PTR DBMS_INFO *dbmsInfo,
 		/* Retrieve the certificate data and base64-decode it if necessary */
 		status = dbmsQuery( queryString, certDataPtr, 
 							hasBinaryBlobs( dbmsInfo ) ? \
-								MAX_CERT_SIZE : MAX_SQL_QUERY_SIZE,
+								MAX_CERT_SIZE : MAX_QUERY_RESULT_SIZE,
 							&certDataLength, boundDataPtr, cachedQueryType, 
 							queryType );
 		if( cryptStatusError( status ) )

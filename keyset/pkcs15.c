@@ -464,24 +464,28 @@ void pkcs15freeEntry( INOUT_PTR PKCS15_INFO *pkcs15info )
 		REQUIRES_V( isShortIntegerRangeNZ( pkcs15info->pubKeyDataSize ) ); 
 		zeroise( pkcs15info->pubKeyData, pkcs15info->pubKeyDataSize );
 		clFree( "pkcs15freeEntry", pkcs15info->pubKeyData );
+		pkcs15info->pubKeyData = NULL;
 		}
 	if( pkcs15info->privKeyData != NULL )
 		{
 		REQUIRES_V( isShortIntegerRangeNZ( pkcs15info->privKeyDataSize ) ); 
 		zeroise( pkcs15info->privKeyData, pkcs15info->privKeyDataSize );
 		clFree( "pkcs15freeEntry", pkcs15info->privKeyData );
+		pkcs15info->privKeyData = NULL;
 		}
 	if( pkcs15info->certData != NULL )
 		{
 		REQUIRES_V( isShortIntegerRangeNZ( pkcs15info->certDataSize ) ); 
 		zeroise( pkcs15info->certData, pkcs15info->certDataSize );
 		clFree( "pkcs15freeEntry", pkcs15info->certData );
+		pkcs15info->certData = NULL;
 		}
 	if( pkcs15info->dataData != NULL )
 		{
 		REQUIRES_V( isShortIntegerRangeNZ( pkcs15info->dataDataSize ) ); 
 		zeroise( pkcs15info->dataData, pkcs15info->dataDataSize );
 		clFree( "pkcs15freeEntry", pkcs15info->dataData );
+		pkcs15info->dataData = NULL;
 		}
 	zeroise( pkcs15info, sizeof( PKCS15_INFO ) );
 	}

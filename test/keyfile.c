@@ -2111,14 +2111,14 @@ int testReadOldKey( void )
 
 	fputs( "Testing read of older key formats...\n", outputStream );
 
-	/* Test each keyset from 3.4.7 to 3.4.0.  Note that as of 3.4.6 we don't 
+	/* Test each keyset from 3.4.9 to 3.4.0.  Note that as of 3.4.6 we don't 
 	   test the 3.4.0 keyset which was based on an RFC draft that didn't 
 	   MAC the EncryptedContentInfo.ContentEncryptionAlgorithmIdentifier and 
 	   used a 128-bit HMAC-SHA1 key instead of a 160-bit one.  Versions from 
 	   3.4.1 to 3.4.5 contained a workaround which MAC'd the data in a 3.4.0-
 	   compatible manner if the original MAC calculation failed, however 
 	   this was removed in 3.4.6 when 3.4.0 was more than a decade old */
-	for( i = 47; i >= 41; i-- )
+	for( i = 49; i >= 41; i-- )
 		{
 		if( !readOldKey( i ) )
 			return( FALSE );

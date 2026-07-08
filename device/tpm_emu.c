@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							cryptlib TPM Emulation							*
-*						Copyright Peter Gutmann 2020-2022					*
+*						Copyright Peter Gutmann 2020-2025					*
 *																			*
 ****************************************************************************/
 
@@ -47,7 +47,7 @@
    
    The size should match TPM_BUFFER_SIZE defined in device/tpm.c */
 
-static BYTE appDataBuffer[ 8192 ];
+static BYTE appDataBuffer[ 8192 + 8 ];
 
 /****************************************************************************
 *																			*
@@ -235,7 +235,7 @@ static int deleteFapiContext( IN_STRING const char *tpmPath )
 
 /* Emulation of standard FAPI functions */
 
-static BYTE sealKey[ 16 ];
+static BYTE sealKey[ 16 + 8 ];
 static BOOLEAN sealKeyInited = FALSE;
 
 TSS2_RC Fapi_CreateSeal( FAPI_CONTEXT *context, char const *path, 
@@ -402,7 +402,7 @@ TSS2_RC Fapi_Decrypt( FAPI_CONTEXT *context, char const *keyPath,
 					  uint8_t **plainText, size_t *plainTextSize )
 	{
 	CRYPT_CONTEXT cryptContext;
-	static BYTE buffer[ CRYPT_MAX_PKCSIZE ];
+	static BYTE buffer[ CRYPT_MAX_PKCSIZE + 8 ];
 	LOOP_INDEX index;
 	int payloadStartPos, status;
 
@@ -411,6 +411,7 @@ TSS2_RC Fapi_Decrypt( FAPI_CONTEXT *context, char const *keyPath,
 	status = findFapiContext( keyPath, &cryptContext );
 	if( cryptStatusError( status ) )
 		return( TSS2_RC_SUCCESS + 1 );
+	ENSURES( cipherTextSize <= CRYPT_MAX_PKCSIZE );
 	memcpy( buffer, cipherText, cipherTextSize );
 	status = krnlSendMessage( cryptContext, IMESSAGE_CTX_DECRYPT, buffer,
 							  cipherTextSize );
@@ -475,7 +476,7 @@ TSS2_RC Fapi_GetAppData( FAPI_CONTEXT *context, char const *path,
 #endif /* TR 24731 I/O functions */
 	fseek( filePtr, 0, SEEK_END );
 	dataSize = ftell( filePtr );
-	if( dataSize >= 8192 )
+	if( dataSize <= 0 || dataSize > 8192 )
 		{
 		fclose( filePtr );
 		return( TSS2_BASE_RC_PATH_NOT_FOUND );
@@ -483,6 +484,7 @@ TSS2_RC Fapi_GetAppData( FAPI_CONTEXT *context, char const *path,
 	fseek( filePtr, 0, SEEK_SET );
 	count = fread( appDataBuffer, dataSize, 1, filePtr );
 	fclose( filePtr );
+	ENSURES( count == dataSize );
 	*appData = appDataBuffer;
 	*appDataSize = ( size_t ) dataSize;
 	return( TSS2_RC_SUCCESS );
@@ -546,7 +548,7 @@ TSS2_RC Fapi_Sign( FAPI_CONTEXT *context, char const *keyPath,
 	{
 	CRYPT_CONTEXT cryptContext;
 	STREAM stream;
-	static BYTE buffer[ CRYPT_MAX_PKCSIZE ];
+	static BYTE buffer[ CRYPT_MAX_PKCSIZE + 8 ];
 	LOOP_INDEX i;
 	int payloadSize, status;
 
@@ -597,8 +599,8 @@ TSS2_RC Tss2_MU_TPM2B_PUBLIC_Unmarshal( uint8_t const buffer[],
 	TPM2B_PUBLIC_KEY_RSA *rsaPubKey;
 	STREAM stream;
 	MESSAGE_DATA msgData;
-	BYTE integerValue[ CRYPT_MAX_PKCSIZE ];
-	BYTE spkiBuffer[ 128 + CRYPT_MAX_PKCSIZE ];
+	BYTE integerValue[ CRYPT_MAX_PKCSIZE + 8 ];
+	BYTE spkiBuffer[ 128 + CRYPT_MAX_PKCSIZE + 8 ];
 	int integerLength DUMMY_INIT, status;
 
 	/* Retrieve the context from the data we've been passed */
@@ -643,6 +645,7 @@ TSS2_RC Tss2_MU_TPM2B_PUBLIC_Unmarshal( uint8_t const buffer[],
 	rsaParams->keyBits = TEST_KEYSIZE_BITS;
 	rsaParams->exponent = 65537L;
 	rsaPubKey = &tpmtPubkey->unique.rsa;
+	ENSURES( integerLength <= sizeof( rsaPubKey->buffer ) );
 	memcpy( rsaPubKey->buffer, integerValue, integerLength );
 	rsaPubKey->size = ( UINT16 ) integerLength;
 

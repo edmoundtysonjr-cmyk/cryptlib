@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					cryptlib PKCS #11 Init/Shutdown Routines				*
-*						Copyright Peter Gutmann 1998-2009					*
+*						Copyright Peter Gutmann 1998-2025					*
 *																			*
 ****************************************************************************/
 
@@ -40,20 +40,20 @@
 /* Get random data from the device */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-static int getRandomFunction( INOUT_PTR DEVICE_INFO *deviceInfo, 
+static int getRandomFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr, 
 							  OUT_BUFFER_FIXED( length ) void *data,
 							  IN_LENGTH_SHORT const int length,
 							  INOUT_PTR_OPT \
 								MESSAGE_FUNCTION_EXTINFO *messageExtInfo )
 	{
 	CK_RV status;
-	PKCS11_INFO *pkcs11Info = deviceInfo->devicePKCS11;
+	PKCS11_INFO *pkcs11Info = deviceInfoPtr->devicePKCS11;
 
-	assert( isWritePtr( deviceInfo, sizeof( DEVICE_INFO ) ) );
+	assert( isWritePtr( deviceInfoPtr, sizeof( DEVICE_INFO ) ) );
 	assert( isWritePtrDynamic( data, length ) );
 	assert( messageExtInfo == NULL );
 
-	REQUIRES( sanityCheckDevice( deviceInfo ) );
+	REQUIRES( sanityCheckDevice( deviceInfoPtr ) );
 	REQUIRES( isShortIntegerRangeNZ( length ) );
 
 	status = C_GenerateRandom( pkcs11Info->hSession, data, length );
@@ -281,8 +281,11 @@ void deviceEndPKCS11( void )
 CHECK_RETVAL \
 int deviceInitPKCS11( void )
 	{
-	LOOP_INDEX optionIndex;
 	int tblIndex = 0, cryptStatus;
+#ifdef __UNIX__
+	BOOLEAN driverSpecified = FALSE;
+#endif /* __UNIX__ */
+	LOOP_INDEX optionIndex;
 
 	/* If we've previously tried to initialise the drivers, don't try it 
 	   again */
@@ -303,11 +306,16 @@ int deviceInitPKCS11( void )
 		setMessageData( &msgData, deviceDriverName, MAX_PATH_LENGTH );
 		cryptStatus = krnlSendMessage( DEFAULTUSER_OBJECT_HANDLE, 
 									   IMESSAGE_GETATTRIBUTE_S, &msgData, 
-									   optionIndex + \
-										CRYPT_OPTION_DEVICE_PKCS11_DVR01 );
+									   CRYPT_OPTION_DEVICE_PKCS11_DVR01 + \
+											optionIndex );
 		if( cryptStatusError( cryptStatus ) )
 			continue;
 		deviceDriverName[ msgData.length ] = '\0';
+#ifdef __UNIX__
+		driverSpecified = TRUE;
+#endif /* __UNIX__ */
+		DEBUG_DIAG(( "Attempting to load PKCS #11 driver %d: '%s'",
+					 optionIndex + 1, deviceDriverName ));
 		cryptStatus = loadPKCS11driver( &pkcs11InfoTbl[ tblIndex ], 
 									    deviceDriverName );
 		if( cryptStatusOK( cryptStatus ) )
@@ -335,17 +343,13 @@ int deviceInitPKCS11( void )
 	   zero so it's probably better to take the more user-friendly option
 	   of trying to load a default driver */
 #ifdef __UNIX__
-	if( !pkcs11Initialised )
+	if( !driverSpecified )
 		{
+		DEBUG_DIAG(( "No drivers specified in configuration options, "
+					 "attempting to load default driver name "
+					 "'libpkcs11.so'" ));
 		cryptStatus = loadPKCS11driver( &pkcs11InfoTbl[ tblIndex ], 
 										"libpkcs11.so" );
-		if( cryptStatusOK( cryptStatus ) )
-			pkcs11Initialised = TRUE;
-		}
-	if( !pkcs11Initialised )
-		{
-		cryptStatus = loadPKCS11driver( &pkcs11InfoTbl[ tblIndex ], 
-										"/opt/nfast/toolkits/pkcs11/libcknfast.so" );
 		if( cryptStatusOK( cryptStatus ) )
 			pkcs11Initialised = TRUE;
 		}
@@ -429,7 +433,7 @@ static CAPABILITY_INFO capabilityTemplates[] = {
 /* Query a given capability for a device and fill out a capability 
    information record for it if present */
 
-static CAPABILITY_INFO *getCapability( const DEVICE_INFO *deviceInfo,
+static CAPABILITY_INFO *getCapability( const DEVICE_INFO *deviceInfoPtr,
 									   const PKCS11_MECHANISM_INFO *mechanismInfoPtr,
 									   const int maxMechanisms )
 	{
@@ -439,12 +443,12 @@ static CAPABILITY_INFO *getCapability( const DEVICE_INFO *deviceInfo,
 	const CRYPT_ALGO_TYPE cryptAlgo = mechanismInfoPtr->cryptAlgo;
 	const BOOLEAN isPKC = isPkcAlgo( cryptAlgo ) ? TRUE : FALSE;
 	const CK_FLAGS keyGenFlag = isPKC ? CKF_GENERATE_KEY_PAIR : CKF_GENERATE;
-	PKCS11_INFO *pkcs11Info = deviceInfo->devicePKCS11;
+	PKCS11_INFO *pkcs11Info = deviceInfoPtr->devicePKCS11;
 	BOOLEAN_INT hardwareOnly;
 	LOOP_INDEX i;
 	int noMechanisms;
 
-	assert( isReadPtr( deviceInfo, sizeof( DEVICE_INFO ) ) );
+	assert( isReadPtr( deviceInfoPtr, sizeof( DEVICE_INFO ) ) );
 	assert( isReadPtrDynamic( mechanismInfoPtr, \
 							  maxMechanisms * sizeof( PKCS11_MECHANISM_INFO ) ) );
 
@@ -473,8 +477,8 @@ static CAPABILITY_INFO *getCapability( const DEVICE_INFO *deviceInfo,
 		assert( DEBUG_WARN );
 		return( NULL );
 		}
-	status = krnlSendMessage( deviceInfo->ownerHandle, IMESSAGE_GETATTRIBUTE, 
-							  &hardwareOnly, 
+	status = krnlSendMessage( deviceInfoPtr->ownerHandle, 
+							  IMESSAGE_GETATTRIBUTE, &hardwareOnly, 
 							  CRYPT_OPTION_DEVICE_PKCS11_HARDWAREONLY );
 	if( cryptStatusOK( status ) && hardwareOnly == TRUE && \
 		!( pMechanism.flags & CKF_HW ) )
@@ -872,19 +876,19 @@ static CAPABILITY_INFO *getCapability( const DEVICE_INFO *deviceInfo,
    on what's plugged in), we have to build this up on the fly rather than
    using a fixed table like the built-in capabilities */
 
-static void freeCapabilities( DEVICE_INFO *deviceInfo )
+static void freeCapabilities( DEVICE_INFO *deviceInfoPtr )
 	{
 	LOOP_INDEX_PTR CAPABILITY_INFO_LIST *capabilityInfoListPtr = \
-		( CAPABILITY_INFO_LIST * ) DATAPTR_GET( deviceInfo->capabilityInfoList );
+		( CAPABILITY_INFO_LIST * ) DATAPTR_GET( deviceInfoPtr->capabilityInfoList );
 
-	assert( isWritePtr( deviceInfo, sizeof( DEVICE_INFO ) ) );
+	assert( isWritePtr( deviceInfoPtr, sizeof( DEVICE_INFO ) ) );
 
-	REQUIRES_V( DATAPTR_ISVALID( deviceInfo->capabilityInfoList ) );
+	REQUIRES_V( DATAPTR_ISVALID( deviceInfoPtr->capabilityInfoList ) );
 
 	/* If the list was empty, return now */
 	if( capabilityInfoListPtr == NULL )
 		return;
-	DATAPTR_SET( deviceInfo->capabilityInfoList, NULL );
+	DATAPTR_SET( deviceInfoPtr->capabilityInfoList, NULL );
 
 	assert( isWritePtr( capabilityInfoListPtr, 
 						sizeof( CAPABILITY_INFO_LIST ) ) );
@@ -910,22 +914,22 @@ static void freeCapabilities( DEVICE_INFO *deviceInfo )
 	ENSURES_V( LOOP_BOUND_OK );
 	}
 
-static int getCapabilities( DEVICE_INFO *deviceInfo,
+static int getCapabilities( DEVICE_INFO *deviceInfoPtr,
 							const PKCS11_MECHANISM_INFO *mechanismInfoPtr, 
 							const int maxMechanisms )
 	{
 	CAPABILITY_INFO_LIST *capabilityInfoListTail = \
-		( CAPABILITY_INFO_LIST * ) DATAPTR_GET( deviceInfo->capabilityInfoList );
+		( CAPABILITY_INFO_LIST * ) DATAPTR_GET( deviceInfoPtr->capabilityInfoList );
 	LOOP_INDEX i;
 
-	assert( isWritePtr( deviceInfo, sizeof( DEVICE_INFO ) ) );
+	assert( isWritePtr( deviceInfoPtr, sizeof( DEVICE_INFO ) ) );
 	assert( isReadPtrDynamic( mechanismInfoPtr, \
 							  maxMechanisms * sizeof( PKCS11_MECHANISM_INFO ) ) );
 
 	static_assert( sizeof( CAPABILITY_INFO ) == sizeof( VARIABLE_CAPABILITY_INFO ),
 				   "Variable capability-info-struct" );
 
-	REQUIRES( DATAPTR_ISVALID( deviceInfo->capabilityInfoList ) );
+	REQUIRES( DATAPTR_ISVALID( deviceInfoPtr->capabilityInfoList ) );
 
 	/* Find the end of the list to add new capabilities */
 	if( capabilityInfoListTail != NULL )
@@ -963,7 +967,7 @@ static int getCapabilities( DEVICE_INFO *deviceInfo,
 		   Because some tinkertoy implementations support only the bare 
 		   minimum functionality (e.g.RSA private key ops and nothing else),
 		   we allow asymmetric functionality for PKCs */
-		newCapability = getCapability( deviceInfo, &mechanismInfoPtr[ i ],
+		newCapability = getCapability( deviceInfoPtr, &mechanismInfoPtr[ i ],
 									   maxMechanisms - i );
 		if( newCapability == NULL )
 			continue;
@@ -974,13 +978,14 @@ static int getCapabilities( DEVICE_INFO *deviceInfo,
 								 sizeof( CAPABILITY_INFO_LIST ) ) ) == NULL )
 			{
 			clFree( "getCapabilities", newCapability );
+			newCapability = NULL;
 			continue;
 			}
 		DATAPTR_SET( newCapabilityList->info, newCapability );
 		DATAPTR_SET( newCapabilityList->next, NULL );
-		if( DATAPTR_ISNULL( deviceInfo->capabilityInfoList ) )
+		if( DATAPTR_ISNULL( deviceInfoPtr->capabilityInfoList ) )
 			{
-			DATAPTR_SET( deviceInfo->capabilityInfoList, 
+			DATAPTR_SET( deviceInfoPtr->capabilityInfoList, 
 						 newCapabilityList );
 			}
 		else
@@ -1008,7 +1013,7 @@ static int getCapabilities( DEVICE_INFO *deviceInfo,
 	ENSURES( LOOP_BOUND_OK );
 	ENSURES( i < maxMechanisms );
 
-	return( ( DATAPTR_ISNULL( deviceInfo->capabilityInfoList ) ) ? \
+	return( ( DATAPTR_ISNULL( deviceInfoPtr->capabilityInfoList ) ) ? \
 			CRYPT_ERROR : CRYPT_OK );
 	}
 
@@ -1023,28 +1028,28 @@ static int getCapabilities( DEVICE_INFO *deviceInfo,
    initialisation process fails */
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-static void shutdownFunction( INOUT_PTR DEVICE_INFO *deviceInfo )
+static void shutdownFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr )
 	{
-	PKCS11_INFO *pkcs11Info = deviceInfo->devicePKCS11;
+	PKCS11_INFO *pkcs11Info = deviceInfoPtr->devicePKCS11;
 
-	assert( isWritePtr( deviceInfo, sizeof( DEVICE_INFO ) ) );
+	assert( isWritePtr( deviceInfoPtr, sizeof( DEVICE_INFO ) ) );
 
 	/* Log out and close the session with the device */
-	if( TEST_FLAG( deviceInfo->flags, DEVICE_FLAG_LOGGEDIN ) )
+	if( TEST_FLAG( deviceInfoPtr->flags, DEVICE_FLAG_LOGGEDIN ) )
 		C_Logout( pkcs11Info->hSession );
 	C_CloseSession( pkcs11Info->hSession );
 	pkcs11Info->hSession = CK_OBJECT_NONE;
-	CLEAR_FLAG( deviceInfo->flags, DEVICE_FLAG_ACTIVE | \
-								   DEVICE_FLAG_LOGGEDIN );
+	CLEAR_FLAG( deviceInfoPtr->flags, DEVICE_FLAG_ACTIVE | \
+									  DEVICE_FLAG_LOGGEDIN );
 
 	/* Free the device capability information */
-	freeCapabilities( deviceInfo );
+	freeCapabilities( deviceInfoPtr );
 	}
 
 /* Open a session with the device */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo, 
+static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr, 
 						 IN_BUFFER( nameLength ) const char *name,
 						 IN_LENGTH_SHORT const int nameLength )
 	{
@@ -1054,14 +1059,14 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 	CK_SLOT_INFO slotInfo;
 	CK_TOKEN_INFO tokenInfo;
 	CK_RV status;
-	PKCS11_INFO *pkcs11Info = deviceInfo->devicePKCS11;
+	PKCS11_INFO *pkcs11Info = deviceInfoPtr->devicePKCS11;
 	const PKCS11_MECHANISM_INFO *mechanismInfoPtr;
 	const char *labelPtr;
 	int tokenSlot = DEFAULT_SLOT, labelLength, mechanismInfoSize;
 	LOOP_INDEX i;
 	int cryptStatus, cryptStatus2;
 
-	assert( isWritePtr( deviceInfo, sizeof( DEVICE_INFO ) ) );
+	assert( isWritePtr( deviceInfoPtr, sizeof( DEVICE_INFO ) ) );
 	assert( isReadPtrDynamic( name, nameLength ) );
 
 	REQUIRES( isShortIntegerRangeNZ( nameLength ) );
@@ -1073,8 +1078,12 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 		return( pkcs11MapError( status, CRYPT_ERROR_OPEN ) );
 	if( slotCount <= 0 )
 		{
-		/* There are token slots present but no tokens in the slots */
-		return( CRYPT_ERROR_OPEN );
+		/* There are token slots present but no tokens in the slots.  This 
+		   is a bit tricky to report because it uses PKCS #11 jargon, the
+		   following is an attempt to make the report useful */
+		retExt( CRYPT_ERROR_OPEN,
+				( CRYPT_ERROR_OPEN, DEVICE_ERRINFO, 
+				  "PKCS #11 driver reports no crypto tokens present" ) );
 		}
 
 	/* Check whether a token name (used to select the slot) has been 
@@ -1133,30 +1142,34 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 	status = C_GetSlotInfo( pkcs11Info->slotID, &slotInfo );
 	if( status != CKR_OK )
 		{
-		shutdownFunction( deviceInfo );
-		return( pkcs11MapError( status, CRYPT_ERROR_OPEN ) );
+		shutdownFunction( deviceInfoPtr );
+		retExt( pkcs11MapError( status, CRYPT_ERROR_OPEN ),
+				( pkcs11MapError( status, CRYPT_ERROR_OPEN ), DEVICE_ERRINFO,
+				  "C_GetSlotInfo() failed" ) );
 		}
 	if( slotInfo.flags & CKF_REMOVABLE_DEVICE )
 		{
 		/* The device is removable */
-		SET_FLAG( deviceInfo->flags, DEVICE_FLAG_REMOVABLE );
+		SET_FLAG( deviceInfoPtr->flags, DEVICE_FLAG_REMOVABLE );
 		}
 	status = C_GetTokenInfo( pkcs11Info->slotID, &tokenInfo );
 	if( status != CKR_OK )
 		{
-		shutdownFunction( deviceInfo );
-		return( pkcs11MapError( status, CRYPT_ERROR_OPEN ) );
+		shutdownFunction( deviceInfoPtr );
+		retExt( pkcs11MapError( status, CRYPT_ERROR_OPEN ),
+				( pkcs11MapError( status, CRYPT_ERROR_OPEN ), DEVICE_ERRINFO,
+				  "C_GetTokenInfo() failed" ) );
 		}
 	if( tokenInfo.flags & CKF_RNG )
 		{
 		/* The device has an onboard RNG that we can use */
-		FNPTR_SET( deviceInfo->getRandomFunction, getRandomFunction );
+		FNPTR_SET( deviceInfoPtr->getRandomFunction, getRandomFunction );
 		}
 	else
 		{
 		/* There's no onboard RNG, make sure that we don't try and access 
 		   it */
-		FNPTR_SET( deviceInfo->getRandomFunction, NULL );
+		FNPTR_SET( deviceInfoPtr->getRandomFunction, NULL );
 		}
 #if 0	/* The Spyrus driver for pre-Lynks-II cards returns the local system 
 		   time (with a GMT/localtime offset), ignoring the fact that the 
@@ -1205,7 +1218,7 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 			if( ( currentTime <= MIN_TIME_VALUE ) || \
 				( theTime >= currentTime - 86400 && \
 				  theTime <= currentTime + 86400 ) )
-				SET_FLAG( deviceInfo->flags, DEVICE_FLAG_TIME );
+				SET_FLAG( deviceInfoPtr->flags, DEVICE_FLAG_TIME );
 			}
 
 		/* If this check is triggered then the token time may be faked since 
@@ -1227,7 +1240,7 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 	if( tokenInfo.flags & CKF_WRITE_PROTECTED )
 		{
 		/* The device can't have data on it changed */
-		SET_FLAG( deviceInfo->flags, DEVICE_FLAG_READONLY );
+		SET_FLAG( deviceInfoPtr->flags, DEVICE_FLAG_READONLY );
 		}
 	if( ( tokenInfo.flags & CKF_LOGIN_REQUIRED ) || \
 		!( tokenInfo.flags & CKF_USER_PIN_INITIALIZED ) )
@@ -1245,7 +1258,7 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 		   to functions that do require a login.  To avoid this, we make an 
 		   uninitialised device look like a login-required device, so the 
 		   user gets an invalid-PIN error if they try and proceed */
-		SET_FLAG( deviceInfo->flags, DEVICE_FLAG_NEEDSLOGIN );
+		SET_FLAG( deviceInfoPtr->flags, DEVICE_FLAG_NEEDSLOGIN );
 		}
 	if( !isIntegerRange( tokenInfo.ulMinPinLen ) || \
 		( pkcs11Info->minPinSize = ( int ) tokenInfo.ulMinPinLen ) < 4 )
@@ -1264,7 +1277,7 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 		   ULONG_MAX we play it safe and set the limit to 8 bytes, which most
 		   devices should be able to handle */
 		DEBUG_DIAG(( "Driver reports suspicious maximum PIN size %lu, "
-					 "using 8", tokenInfo.ulMinPinLen ));
+					 "using 8", tokenInfo.ulMaxPinLen ));
 		pkcs11Info->maxPinSize = 8;
 		}
 	if( pkcs11Info->maxPinSize > CRYPT_MAX_TEXTSIZE )
@@ -1273,6 +1286,15 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 		   whatever the developer chose to hardcode in, if we get a
 		   suspiciously large PIN size we clip it at CRYPT_MAX_TEXTSIZE */
 		pkcs11Info->maxPinSize = CRYPT_MAX_TEXTSIZE;
+		}
+	if( pkcs11Info->minPinSize > pkcs11Info->maxPinSize )
+		{
+		/* Theoretically possible given all the other craziness that devices
+		   report */
+		DEBUG_DIAG(( "Driver reports maximum PIN size %d less than minimum "
+					 "PIN size %d using 8", pkcs11Info->maxPinSize,
+					 pkcs11Info->minPinSize ));
+		pkcs11Info->minPinSize = 8;
 		}
 	cryptStatus = labelLength = \
 				strStripWhitespace( &labelPtr, tokenInfo.label, 32 );
@@ -1297,6 +1319,8 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 			REQUIRES( rangeCheck( labelLength, 1, CRYPT_MAX_TEXTSIZE ) );
 			memcpy( pkcs11Info->labelBuffer, 
 					pkcs11InfoTbl[ pkcs11Info->deviceNo ].name, labelLength );
+			sanitiseString( pkcs11Info->labelBuffer, CRYPT_MAX_TEXTSIZE, 
+							labelLength );
 			}
 		else
 			{
@@ -1305,8 +1329,8 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 			}
 		}
 	pkcs11Info->hActiveSignObject = CK_OBJECT_NONE;
-	deviceInfo->label = ( char * ) pkcs11Info->labelBuffer;	/* BYTE vs.char */
-	deviceInfo->labelLen = labelLength;
+	deviceInfoPtr->label = ( char * ) pkcs11Info->labelBuffer;	/* BYTE vs.char */
+	deviceInfoPtr->labelLen = labelLength;
 
 	/* Open a session with the device.  This gets a bit awkward because we 
 	   can't tell whether a R/W session is OK without opening a session, but 
@@ -1342,25 +1366,27 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 			   so we return a not initialised error */
 			cryptStatus = CRYPT_ERROR_NOTINITED;
 			}
-		return( cryptStatus );
+
+		retExt( cryptStatus ,
+				( cryptStatus , DEVICE_ERRINFO, "C_OpenSession() failed" ) );
 		}
 	ENSURES( hSession != CK_OBJECT_NONE );
 	pkcs11Info->hSession = hSession;
-	SET_FLAG( deviceInfo->flags, DEVICE_FLAG_ACTIVE );
+	SET_FLAG( deviceInfoPtr->flags, DEVICE_FLAG_ACTIVE );
 
 	/* Set up the capability information for this device.  Since there can 
 	   be devices that have one set of capabilities but not the other (e.g.
 	   a smart card that only performs RSA ops), we allow one of the two
 	   sets of mechanism information setups to fail, but not both */
 	mechanismInfoPtr = getMechanismInfoPKC( &mechanismInfoSize );
-	cryptStatus = getCapabilities( deviceInfo, mechanismInfoPtr, 
+	cryptStatus = getCapabilities( deviceInfoPtr, mechanismInfoPtr, 
 								   mechanismInfoSize );
 	mechanismInfoPtr = getMechanismInfoConv( &mechanismInfoSize );
-	cryptStatus2 = getCapabilities( deviceInfo, mechanismInfoPtr, 
+	cryptStatus2 = getCapabilities( deviceInfoPtr, mechanismInfoPtr, 
 									mechanismInfoSize );
 	if( cryptStatusError( cryptStatus ) && cryptStatusError( cryptStatus2 ) )
 		{
-		shutdownFunction( deviceInfo );
+		shutdownFunction( deviceInfoPtr );
 		return( ( cryptStatus == CRYPT_ERROR ) ? \
 				CRYPT_ERROR_OPEN : cryptStatus );
 		}
@@ -1371,15 +1397,15 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 /* Set up the function pointers to the init/shutdown methods */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-int initPKCS11Init( INOUT_PTR DEVICE_INFO *deviceInfo,
+int initPKCS11Init( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 					IN_BUFFER( nameLength ) const char *name, 
 					IN_LENGTH_SHORT const int nameLength )
 	{
-	PKCS11_INFO *pkcs11Info = deviceInfo->devicePKCS11;
+	PKCS11_INFO *pkcs11Info = deviceInfoPtr->devicePKCS11;
 	LOOP_INDEX i;
 	int driverNameLength = nameLength;
 
-	assert( isWritePtr( deviceInfo, sizeof( DEVICE_INFO ) ) );
+	assert( isWritePtr( deviceInfoPtr, sizeof( DEVICE_INFO ) ) );
 	assert( isReadPtrDynamic( name, nameLength ) );
 
 	REQUIRES( isShortIntegerRangeNZ( nameLength ) );
@@ -1436,9 +1462,9 @@ int initPKCS11Init( INOUT_PTR DEVICE_INFO *deviceInfo,
 		}
 
 	/* Set up remaining function and access information */
-	FNPTR_SET( deviceInfo->initFunction, initFunction );
-	FNPTR_SET( deviceInfo->shutdownFunction, shutdownFunction );
-	deviceInfo->devicePKCS11->functionListPtr = \
+	FNPTR_SET( deviceInfoPtr->initFunction, initFunction );
+	FNPTR_SET( deviceInfoPtr->shutdownFunction, shutdownFunction );
+	deviceInfoPtr->devicePKCS11->functionListPtr = \
 					pkcs11InfoTbl[ pkcs11Info->deviceNo ].functionListPtr;
 
 	return( CRYPT_OK );

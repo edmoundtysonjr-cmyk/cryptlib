@@ -397,7 +397,11 @@ static int popHandshakeInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 /* TLS uses 24-bit lengths in some places even though the maximum packet 
    length is only 16 bits (actually it's limited even further by the spec 
    to 14 bits).  To handle this odd length we define our own read/
-   writeUint24() functions that always set the high byte to zero */
+   writeUint24() functions that always set the high byte to zero.
+   
+   Since we're emulating a function that would normally be with the encode/
+   decode functions which sSetError() in the case of an error, we also 
+   sSetError() here */
 
 CHECK_RETVAL_LENGTH STDC_NONNULL_ARG( ( 1 ) ) \
 int readUint24( INOUT_PTR STREAM *stream )
@@ -638,7 +642,7 @@ int readTLSCertChain( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					  IN_BOOL const BOOLEAN isServer )
 	{
 	CRYPT_CERTIFICATE iLocalCertChain;
-	const ATTRIBUTE_LIST *fingerprintPtr = \
+	const SESSION_ATTRIBUTE_LIST *fingerprintPtr = \
 				findSessionInfo( sessionInfoPtr,
 								 CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2 );
 	MESSAGE_DATA msgData;
@@ -796,20 +800,23 @@ int readTLSCertChain( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* In TLS 1.3 the authentication algorithm isn't negotiated in the 
 	   handshake so we set it now from the certificate */
 #ifdef USE_TLS13
-	handshakeInfo->authAlgo = certAlgo;
-#else
-	/* If we're the client, make sure that the certificate algorithm matches
-	   what was negotiated in the handshake */
-	if( !isServer && certAlgo != handshakeInfo->authAlgo )
-		{
-		krnlSendNotifier( iLocalCertChain, IMESSAGE_DECREFCOUNT );
-		retExt( CRYPT_ERROR_WRONGKEY,
-				( CRYPT_ERROR_WRONGKEY, SESSION_ERRINFO, 
-				  "Server key algorithm %s doesn't match negotiated "
-				  "algorithm %s", getAlgoName( certAlgo ), 
-				  getAlgoName( handshakeInfo->authAlgo ) ) );
-		}
+	if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 )
+		handshakeInfo->authAlgo = certAlgo;
+	else
 #endif /* USE_TLS13 */
+		{
+		/* If we're the client, make sure that the certificate algorithm 
+		   matches what was negotiated in the handshake */
+		if( !isServer && certAlgo != handshakeInfo->authAlgo )
+			{
+			krnlSendNotifier( iLocalCertChain, IMESSAGE_DECREFCOUNT );
+			retExt( CRYPT_ERROR_WRONGKEY,
+					( CRYPT_ERROR_WRONGKEY, SESSION_ERRINFO, 
+					  "Server key algorithm %s doesn't match negotiated "
+					  "algorithm %s", getAlgoName( certAlgo ), 
+					  getAlgoName( handshakeInfo->authAlgo ) ) );
+			}
+		}
 
 	/* Either compare the certificate fingerprint to a supplied one or save 
 	   it for the caller to examine */
@@ -858,8 +865,8 @@ int readTLSCertChain( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				  "%s provided a key incapable of being used for %s",
 				  peerTypeName,
 				  isServer ? "client authentication" : \
-				  isKeyexAlgo( certAlgo ) ? "key exchange authentication" : \
-										    "encryption" ) );
+				  isKeyexAlgo( handshakeInfo->keyexAlgo ) ? \
+						"key exchange authentication" : "encryption" ) );
 		}
 
 	/* For ECC with Suite B there are additional constraints on the key
@@ -1294,7 +1301,7 @@ static int getAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 #ifdef USE_WEBSOCKETS
 	if( type == CRYPT_SESSINFO_TLS_WSPROTOCOL )
 		{
-		const ATTRIBUTE_LIST *attributeListPtr;
+		const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 		MESSAGE_DATA *msgData = ( MESSAGE_DATA * ) data;
 
 		attributeListPtr = findSessionInfo( sessionInfoPtr, 
@@ -1316,7 +1323,7 @@ static int getAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	if( type == CRYPT_SESSINFO_TLS_EAPCHALLENGE || \
 		type == CRYPT_SESSINFO_TLS_EAPKEY )
 		{
-		const ATTRIBUTE_LIST *attributeListPtr;
+		const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 		MESSAGE_DATA *msgData = ( MESSAGE_DATA * ) data;
 
 		attributeListPtr = findSessionInfo( sessionInfoPtr, type );

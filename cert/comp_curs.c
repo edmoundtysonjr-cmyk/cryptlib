@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					Manage Certificate Attribute Cursors					*
-*					  Copyright Peter Gutmann 1997-2016						*
+*					  Copyright Peter Gutmann 1997-2025						*
 *																			*
 ****************************************************************************/
 
@@ -863,25 +863,17 @@ static int setCursorValInfo( INOUT_PTR CERT_INFO *certInfoPtr,
 			break;
 
 		case CRYPT_CURSOR_PREVIOUS:
-			validityInfoPtr = DATAPTR_GET( certValInfo->validityInfo );
+			validityInfoPtr = DATAPTR_GET( certValInfo->currentValidity );
 			if( validityInfoPtr == NULL || \
-				DATAPTR_ISNULL( certValInfo->currentValidity ) || \
-				DATAPTR_SAME( certValInfo->validityInfo, \
-							  certValInfo->currentValidity ) )
-				{
-				/* No validity information or we're already at the start of 
-				   the list */
+				DATAPTR_ISNULL( validityInfoPtr->prev ) )
 				return( CRYPT_ERROR_NOTFOUND );
-				}
-
 			certValInfo->currentValidity = validityInfoPtr->prev;
 			break;
 
 		case CRYPT_CURSOR_NEXT:
 			validityInfoPtr = DATAPTR_GET( certValInfo->currentValidity );
-			if( validityInfoPtr == NULL )
-				return( CRYPT_ERROR_NOTFOUND );
-			if( DATAPTR_ISNULL( validityInfoPtr->next ) )
+			if( validityInfoPtr == NULL || \
+				DATAPTR_ISNULL( validityInfoPtr->next ) )
 				return( CRYPT_ERROR_NOTFOUND );
 			certValInfo->currentValidity = validityInfoPtr->next;
 			break;
@@ -944,25 +936,15 @@ static int setCursorRevInfo( INOUT_PTR CERT_INFO *certInfoPtr,
 			break;
 
 		case CRYPT_CURSOR_PREVIOUS:
-			revInfoPtr = DATAPTR_GET( certRevInfo->revocations );
-			if( revInfoPtr == NULL || \
-				DATAPTR_ISNULL( certRevInfo->currentRevocation ) || \
-				DATAPTR_SAME( certRevInfo->revocations, \
-							  certRevInfo->currentRevocation ) )
-				{
-				/* No revocations or we're already at the start of the 
-				   list */
+			revInfoPtr = DATAPTR_GET( certRevInfo->currentRevocation );
+			if( revInfoPtr == NULL || DATAPTR_ISNULL( revInfoPtr->prev ) )
 				return( CRYPT_ERROR_NOTFOUND );
-				}
-
 			certRevInfo->currentRevocation = revInfoPtr->prev;
 			break;
 
 		case CRYPT_CURSOR_NEXT:
 			revInfoPtr = DATAPTR_GET( certRevInfo->currentRevocation );
-			if( revInfoPtr == NULL )
-				return( CRYPT_ERROR_NOTFOUND );
-			if( DATAPTR_ISNULL( revInfoPtr->next ) )
+			if( revInfoPtr == NULL || DATAPTR_ISNULL( revInfoPtr->next ) )
 				return( CRYPT_ERROR_NOTFOUND );
 			certRevInfo->currentRevocation = revInfoPtr->next;
 			break;

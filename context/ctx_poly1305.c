@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						cryptlib Poly1305 MAC Routines						*
-*						Copyright Peter Gutmann 2016-2021					*
+*						Copyright Peter Gutmann 2016-2025					*
 *																			*
 ****************************************************************************/
 
@@ -282,13 +282,13 @@ static int selfTest( void )
 	memset( macStatePtr, 0, POLY1305_MAC_STATE_SIZE );	/* Keep static analysers happy */
 	LOOP_MED( i = 0, 
 			  i < FAILSAFE_ARRAYSIZE( testPoly1305, POLY1305_TESTINFO ) && \
-					testPoly1305[ i ].data != NULL,
+					testPoly1305[ i ].isValid,
 			  i++ )
 		{
 		ENSURES( LOOP_INVARIANT_MED( i, 0, 
 									 FAILSAFE_ARRAYSIZE( testPoly1305, \
 														 POLY1305_TESTINFO ) - 1 ) );
-		status = testMAC( capabilityInfo, macStatePtr, 
+		status = testMAC( capabilityInfo, 0, macStatePtr, 
 						  testPoly1305[ i ].key, POLY1305_KEY_SIZE,
 						  testPoly1305[ i ].data, testPoly1305[ i ].length, 
 						  testPoly1305[ i ].mac );

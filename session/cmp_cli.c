@@ -56,9 +56,9 @@ static int initClientInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						   INOUT_PTR CMP_PROTOCOL_INFO *protocolInfo )
 	{
 	CMP_INFO *cmpInfo = sessionInfoPtr->sessionCMP;
-	const ATTRIBUTE_LIST *userNamePtr = \
+	const SESSION_ATTRIBUTE_LIST *userNamePtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_USERNAME );
-	const ATTRIBUTE_LIST *passwordPtr = \
+	const SESSION_ATTRIBUTE_LIST *passwordPtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_PASSWORD );
 	int operation, status;
 

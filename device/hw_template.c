@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					cryptlib Crypto HAL Template Routines					*
-*					  Copyright Peter Gutmann 1998-2020						*
+*					  Copyright Peter Gutmann 1998-2025						*
 *																			*
 ****************************************************************************/
 
@@ -483,7 +483,7 @@ int hwStorageUpdateNotify( IN_PTR_OPT void *contextHandle,
 	{
 	REQUIRES( ( dataLength == CRYPT_UNUSED ) || \
 			  ( isIntegerRange( dataLength ) && \
-				dataLength < STORAGE_SIZE ) );
+				dataLength <= STORAGE_SIZE ) );
 
 	/* The contents of the storage buffer have changed, commit them to 
 	   backing store, for example by initiating a flash program cycle */
@@ -522,12 +522,18 @@ int hwStorageUpdateNotify( IN_PTR_OPT void *contextHandle,
 /* Clone an existing hardware object into a new object, replacing the 
    existing storage reference with the new one */
 
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int hwCloneNotify( int *storageRef )
 	{
 	const PERSONALITY_INFO *originalPersonalityInfoPtr;
 	PERSONALITY_INFO *clonedPersonalityInfoPtr;
 	const int originalStorageRef = *storageRef;
 	int newStorageRef, status;
+
+	assert( isWritePtr( storageRef, sizeof( int ) ) );
+
+	REQUIRES( originalStorageRef >= 0 && \
+			  originalStorageRef < NO_PERSONALITIES );
 
 	/* Clear the cloned storage reference to make sure that we don't try and 
 	   delete it twice, once via the original and once via the cloned 
@@ -539,9 +545,11 @@ int hwCloneNotify( int *storageRef )
 	if( cryptStatusError( status ) )
 		return( status );
 	clonedPersonalityInfoPtr = getPersonality( newStorageRef );
+	ENSURES( clonedPersonalityInfoPtr != NULL );
 
 	/* Clone the existing personality into the new one */
 	originalPersonalityInfoPtr = getPersonality( originalStorageRef );
+	ENSURES( originalPersonalityInfoPtr != NULL );
 	memcpy( clonedPersonalityInfoPtr, originalPersonalityInfoPtr, 
 			sizeof( PERSONALITY_INFO ) );
 	*storageRef = newStorageRef;

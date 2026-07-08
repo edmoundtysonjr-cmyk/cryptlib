@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *				cryptlib DBMS CA Certificate Revocation Interface			*
-*						Copyright Peter Gutmann 1996-2007					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -483,7 +483,7 @@ int caIssueCRL( INOUT_PTR DBMS_INFO *dbmsInfo,
 	MESSAGE_CREATEOBJECT_INFO createInfo;
 	BOUND_DATA boundData[ BOUND_DATA_MAXITEMS ], *boundDataPtr = boundData;
 	BYTE crlEntry[ MAX_QUERY_RESULT_SIZE + 8 ];
-	BOOLEAN crlEntryAdded = FALSE;
+	BOOLEAN crlEntryAdded = FALSE, queryCompleted = FALSE;
 	char crlEntryBuffer[ MAX_QUERY_RESULT_SIZE + 8 ];
 	void *crlEntryPtr = hasBinaryBlobs( dbmsInfo ) ? \
 						crlEntry : ( void * ) crlEntryBuffer;
@@ -558,6 +558,7 @@ int caIssueCRL( INOUT_PTR DBMS_INFO *dbmsInfo,
 			/* We've got all the entries, complete the query and exit */
 			dbmsStaticQuery( NULL, DBMS_CACHEDQUERY_NONE,
 							 DBMS_QUERY_CANCEL );
+			queryCompleted = TRUE;
 			break;
 			}
 		if( cryptStatusOK( status ) && !hasBinaryBlobs( dbmsInfo ) )
@@ -602,6 +603,12 @@ int caIssueCRL( INOUT_PTR DBMS_INFO *dbmsInfo,
 		crlEntryAdded = TRUE;
 		}
 	ENSURES( LOOP_BOUND_OK );
+	if( !queryCompleted )
+		{
+		/* We exited due to a problem and never completed the query, do so 
+		   now */
+		dbmsStaticQuery( NULL, DBMS_CACHEDQUERY_NONE, DBMS_QUERY_CANCEL );
+		}
 	if( errorCount >= 5 || noCrlEntries >= 500 )
 		{
 		/* It's hard to tell what type of error an iterationCount-exceeded
@@ -622,6 +629,7 @@ int caIssueCRL( INOUT_PTR DBMS_INFO *dbmsInfo,
 		   try and continue */
 		if( !crlEntryAdded )
 			{
+			krnlSendNotifier( createInfo.cryptHandle, IMESSAGE_DECREFCOUNT );
 			updateCertErrorLogMsg( dbmsInfo, operationStatus, 
 								   "No CRL entries could be added to the "
 								   "CRL" );

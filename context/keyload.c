@@ -998,9 +998,9 @@ static int generateKeyPKCFunction( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	   Fortunately the standard never actually explains what the creation 
 	   time field is for, so it probably doesn't matter what we set it to.
        Because of this we leave it at its default value of zero */
-#if defined( USE_PGP ) && 0
+#if defined( USE_PGPKEYS ) && 0
 	contextInfoPtr->ctxPKC->pgpCreationTime = getApproxTime();
-#endif /* USE_PGP */
+#endif /* USE_PGPKEYS */
 
 	/* If there's no key size specified, use the default length.  In theory 
 	   we could also read the CRYPT_OPTION_PKC_KEYSIZE at this point, 

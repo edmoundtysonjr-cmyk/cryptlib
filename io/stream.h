@@ -768,7 +768,9 @@ int sFileToMemStream( OUT_PTR STREAM *memStream,
 					  OUT_BUFFER_ALLOC_OPT( length ) void **bufPtrPtr, 
 					  IN_DATALENGTH const int length );
 
-/* Special-case file I/O calls */
+/* Special-case file I/O calls.  fileBuildCryptlibPath() both returns a 
+   length and null-terminates the path for use with low-level file 
+   functions */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN fileReadonly( IN_STRING const char *fileName );

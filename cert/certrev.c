@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					Certificate Revocation (CRL/OCSP) Routines				*
-*						Copyright Peter Gutmann 1996-2015					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -683,7 +683,7 @@ static int checkCertAgainstCRL( INOUT_PTR CERT_INFO *certInfoPtr,
 			REQUIRES_OBJECT( sanityCheckCert( certChainInfoPtr ), 
 							 certChainInfoPtr->objectHandle );
 			if( crlInfoPtr->type == CRYPT_CERTTYPE_CRL )
-				status = checkRevocationCRL( certInfoPtr, crlInfoPtr );
+				status = checkRevocationCRL( certChainInfoPtr, crlInfoPtr );
 			else
 				status = checkRevocationOCSP( certChainInfoPtr, crlInfoPtr );
 			krnlReleaseObject( certChainInfoPtr->objectHandle );
@@ -1226,7 +1226,8 @@ int checkOCSPResponse( INOUT_PTR CERT_INFO *certInfoPtr,
 			REQUIRES_OBJECT( sanityCheckCert( crlEntryInfoPtr ),
 							 crlEntryInfoPtr->objectHandle );
 
-			crlRevocationInfo = DATAPTR_GET( certRevInfo->revocations );
+			crlRevocationInfo = \
+					DATAPTR_GET( crlEntryInfoPtr->cCertRev->revocations );
 			if( crlRevocationInfo != NULL )
 				{
 				revocationInfo->revocationTime = \

@@ -107,8 +107,8 @@ typedef enum {
 	TLS_TEST_SNI,				/* Server certificate switching via SNI */
 	TLS_TEST_FORCEVER_CLI,		/* Force use of given TLS version on client */
 	TLS_TEST_FORCEVER_SVR,		/* Force use of given TLS version on server */
-	TLS_TEST_WHITELIST,			/* Server certificate in whitelist */
-	TLS_TEST_WHITELIST_FAIL,	/* Server certificate not in whitelist */
+	TLS_TEST_ALLOWLIST,			/* Server certificate in allowist */
+	TLS_TEST_ALLOWLIST_FAIL,	/* Server certificate not in allowlist */
 	TLS_TEST_PSK,				/* User auth.with shared key */
 	TLS_TEST_PSK_SVRONLY,		/* Client = no PSK, server = TLS-PSK */
 	TLS_TEST_PSK_CLIONLY,		/* Client = TLS-PSK, server = no PSK */
@@ -992,30 +992,68 @@ static SOCKET negotiateSTARTTLS( int *protocol )
 static SOCKET createServerSocket( void )
 	{
 	SOCKET netSocket;
+#ifdef __WINDOWS__
+	/* Under Windows the client connect to localhost will always create an 
+	   IPv6 connection no matter what we do so we have to explicitly listen
+	   on an IPv6 socket not an IPv4 one (in other words kludge things for 
+	   IPv6) in order to allow the client to connect.
+	   
+	   Thank Microsoft, kids / Thaaaanks Bill! */
+	#pragma comment( lib, "ws2_32.lib" )
+	int __stdcall inet_pton( int Family, PCSTR pszAddrString, PVOID pAddrBuf );
+	#define AF_INET6	23
+	struct in6_addr {
+		union {
+			u_char Byte[ 16 ];
+			u_short Word[ 8 ];
+			} u;
+		};
+	struct sockaddr_in6 {
+		short sin6_family;
+		u_short sin6_port;
+		u_long sin6_flowinfo;
+		struct in6_addr sin6_addr;
+		u_long sin6_scope_id;
+		};
+	struct sockaddr_in6 serverInfo6;
+#else
 	struct sockaddr_in serverInfo;
+#endif /* __WINDOWS__ */
 	int status;
 
 	fputs( "Creating user-defined local server socket...\n", outputStream );
 
 	/* Connect to a generally-available server to test STARTTLS/STLS
 	   functionality */
-	memset( &serverInfo, 0, sizeof( struct sockaddr_in ) );
-	serverInfo.sin_family = AF_INET;
 #ifdef __WINDOWS__
-	serverInfo.sin_port = htons( 443 );
-#else
-	serverInfo.sin_port = htons( 4443 );
-#endif /* OS-specific port handling */
-	serverInfo.sin_addr.s_addr = inet_addr( "127.0.0.1" );
-	netSocket = socket( PF_INET, SOCK_STREAM, 0 );
+	memset( &serverInfo6, 0, sizeof( struct sockaddr_in6 ) );
+	serverInfo6.sin6_family = AF_INET6;
+	inet_pton( AF_INET6, "[::1]", ( void * ) &serverInfo6.sin6_addr );
+	serverInfo6.sin6_port = htons( 443 );
+	netSocket = socket( AF_INET6, SOCK_STREAM, 0 );
 	if( netSocket == INVALID_SOCKET )
 		{
 		fprintf( outputStream, "Couldn't create socket, line %d.\n", 
 				 __LINE__ );
 		return( CRYPT_ERROR_FAILED );
 		}
-	status = bind( netSocket, ( struct sockaddr* ) &serverInfo, 
+	status = bind( netSocket, ( struct sockaddr * ) &serverInfo6, 
+				   sizeof( struct sockaddr_in6 ) );
+#else
+	memset( &serverInfo, 0, sizeof( struct sockaddr_in ) );
+	serverInfo.sin_family = AF_INET;
+	serverInfo.sin_addr.s_addr = inet_addr( "127.0.0.1" );
+	serverInfo.sin_port = htons( 4443 );
+	netSocket = socket( AF_INET, SOCK_STREAM, 0 );
+	if( netSocket == INVALID_SOCKET )
+		{
+		fprintf( outputStream, "Couldn't create socket, line %d.\n", 
+				 __LINE__ );
+		return( CRYPT_ERROR_FAILED );
+		}
+	status = bind( netSocket, ( struct sockaddr * ) &serverInfo, 
 				   sizeof( struct sockaddr_in ) );
+#endif /* OS-specific port handling */
 	if( status == SOCKET_ERROR )
 		{
 		closesocket( netSocket );
@@ -1176,8 +1214,8 @@ static int connectTLS( const CRYPT_SESSION_TYPE sessionType,
 			 ( testType == TLS_TEST_SNI ) ? " with SNI-based server key selection" : \
 			 ( testType == TLS_TEST_FORCEVER_CLI || \
 			   testType == TLS_TEST_FORCEVER_SVR ) ? " with forced TLS version" : \
-			 ( testType == TLS_TEST_WHITELIST || \
-			   testType == TLS_TEST_WHITELIST_FAIL ) ? " using server cert whitelist" : \
+			 ( testType == TLS_TEST_ALLOWLIST || \
+			   testType == TLS_TEST_ALLOWLIST_FAIL ) ? " using server cert allowlist" : \
 			 ( testType == TLS_TEST_STARTTLS || \
 			   testType == TLS_TEST_LOCALSERVER ) ? " with local socket" : \
 			 ( testType == TLS_TEST_BULKTRANSER ) ? " for bulk data transfer" : \
@@ -1586,8 +1624,8 @@ static int connectTLS( const CRYPT_SESSION_TYPE sessionType,
 				}
 			}
 		if( cryptStatusOK( status ) && \
-			( testType == TLS_TEST_WHITELIST || \
-			  testType == TLS_TEST_WHITELIST_FAIL ) )
+			( testType == TLS_TEST_ALLOWLIST || \
+			  testType == TLS_TEST_ALLOWLIST_FAIL ) )
 			{
 			CRYPT_CONTEXT publicKey;
 			CRYPT_KEYSET cryptKeyset;
@@ -1619,27 +1657,28 @@ static int connectTLS( const CRYPT_SESSION_TYPE sessionType,
 				{
 				cryptDestroySession( cryptSession );
 				fprintf( outputStream, "Couldn't get server key for "
-						 "whitelist, error code %d, line %d.\n", status, 
+						 "allowlist, error code %d, line %d.\n", status, 
 						 __LINE__ );
 				return( FALSE );
 				}
 			commonName[ length ] = '\0';
 
-			/* Open the whitelist keyset */
+			/* Open the allowlist keyset */
 			status = cryptKeysetOpen( &cryptKeyset, CRYPT_UNUSED,
 								CRYPT_KEYSET_DATABASE, DATABASE_KEYSET_NAME,
 								CRYPT_KEYOPT_NONE );
 			if( cryptStatusError( status ) )
 				{
 				cryptDestroySession( cryptSession );
+				cryptDestroyContext( publicKey );
 				fprintf( outputStream, "Server certificate keyset open "
 						 "failed with error code %d, line %d.\n", status, 
 						 __LINE__ );
 				return( FALSE );
 				}
-			if( testType == TLS_TEST_WHITELIST )
+			if( testType == TLS_TEST_ALLOWLIST )
 				{
-				/* We're using the keyset as a whitelist to enable access 
+				/* We're using the keyset as a allowlist to enable access 
 				   for this server, add its certificate.  If it's already
 				   present from a previous run then this isn't an error  */
 				status = cryptAddPublicKey( cryptKeyset, publicKey );
@@ -1648,7 +1687,7 @@ static int connectTLS( const CRYPT_SESSION_TYPE sessionType,
 				}
 			else
 				{
-				/* We're using the keyset as an empty whitelist to block 
+				/* We're using the keyset as an empty allowlist to block 
 				   access for this server, delete its certificate in case 
 				   it's already present from a previous run */
 				status = cryptDeleteKey( cryptKeyset, CRYPT_KEYID_NAME, 
@@ -1656,9 +1695,11 @@ static int connectTLS( const CRYPT_SESSION_TYPE sessionType,
 				if( status == CRYPT_ERROR_NOTFOUND )
 					status = CRYPT_OK;
 				}
+			cryptDestroyContext( publicKey );
 			if( cryptStatusError( status ) )
 				{
 				cryptDestroySession( cryptSession );
+				cryptKeysetClose( cryptKeyset );
 				fprintf( outputStream, "Server certificate keyset open "
 						 "failed with error code %d, line %d.\n", status, 
 						 __LINE__ );
@@ -2044,7 +2085,7 @@ dualThreadContinue:
 #endif /* CONFIG_FAULTS */
 		if( isErrorTest || testType == TLS_TEST_PSK_CLIONLY || \
 			testType == TLS_TEST_PSK_SVRONLY || \
-			testType == TLS_TEST_WHITELIST_FAIL )
+			testType == TLS_TEST_ALLOWLIST_FAIL )
 			{
 			/* These tests are supposed to fail, so if this happens then the 
 			   overall test has succeeded */
@@ -2892,13 +2933,13 @@ int testSessionTLS12ServerClientCertManual( void )
 
 	return( status );
 	}
-int testSessionTLS12ServerWhitelist( void )
+int testSessionTLS12ServerAllowlist( void )
 	{
 	int status;
 
 	createMutex();
 
-	status = connectTLS( CRYPT_SESSION_TLS_SERVER, TLS_TEST_WHITELIST, 3, CRYPT_UNUSED, TRUE );
+	status = connectTLS( CRYPT_SESSION_TLS_SERVER, TLS_TEST_ALLOWLIST, 3, CRYPT_UNUSED, TRUE );
 	destroyMutex();
 
 	return( status );
@@ -3037,7 +3078,7 @@ int testSessionTLSBadSSL( void )
 		if( badSslInfo[ i ].testType == TLS_TEST_BADSSL_DHSMALLSUBGROUP )
 			{
 			fputs( "Skipping TLS_TEST_BADSSL_DHSMALLSUBGROUP in debug "
-				   "build.", origOutputStream );
+				   "build.\n", origOutputStream );
 			continue;
 			}
 #endif /* NDEBUG */
@@ -3075,9 +3116,17 @@ int testSessionTLSBadSSL( void )
 				status == CRYPT_ERROR_FAILED )
 				continue;
 
-			/* TLS_TEST_BADSSL_DH1024 or TLS_TEST_BADSSL_DH2048 may also fail
+			/* TLS_TEST_BADSSL_DH1024 and TLS_TEST_BADSSL_DH2048 can fail 
 			   randomly at times, the solution is to wait a few minutes and 
 			   then run the tests again */
+			if( badSslInfo[ i ].testType == TLS_TEST_BADSSL_DH1024 || \
+				badSslInfo[ i ].testType == TLS_TEST_BADSSL_DH2048 )
+				{
+				fputs( "  (This test can randomly fail and then work again "
+					   "a few minutes later,\n   continuing...)\n", 
+					   origOutputStream );
+				continue;
+				}
 
 			fclose( outputStream );
 			outputStream = origOutputStream;
@@ -3277,8 +3326,8 @@ static int tls12ClientServer( const TLS_TEST_TYPE testType )
 	/* If this is a test that requires a database keyset, make sure that one 
 	   is available */
 	if( ( testType == TLS_TEST_CLIENTCERT || \
-		  testType == TLS_TEST_WHITELIST || \
-		  testType == TLS_TEST_WHITELIST_FAIL ) && \
+		  testType == TLS_TEST_ALLOWLIST || \
+		  testType == TLS_TEST_ALLOWLIST_FAIL ) && \
 		!checkDatabaseKeysetAvailable() )
 		{
 		fputs( "Skipping test due to unavailability of database "
@@ -3316,6 +3365,14 @@ static int tls12ClientServer( const TLS_TEST_TYPE testType )
 int testSessionTLS12ClientServer( void )
 	{
 	return( tls12ClientServer( TLS_TEST_NORMAL ) );
+	}
+int testSessionTLS12SharedKeyClientServer( void )
+	{
+	return( tls12ClientServer( TLS_TEST_PSK ) );
+	}
+int testSessionTLS12NoSharedKeyClientServer( void )
+	{
+	return( tls12ClientServer( TLS_TEST_PSK_WRONGKEY ) );
 	}
 int testSessionTLS12ClientServerEccKey( void )
 	{
@@ -3355,17 +3412,25 @@ int testSessionTLS12ClientCertManualClientServer( void )
 	return( TRUE );
 #endif /* !NO_SESSION_CACHE */
 	}
+int testSessionTLS12BulkTransferClientServer( void )
+	{
+	return( tls12ClientServer( TLS_TEST_BULKTRANSER ) );
+	}
+int testSessionTLS12LocalServerSocketClientServer( void )
+	{
+	return( tls12ClientServer( TLS_TEST_LOCALSERVER ) );
+	}
 int testSessionTLS12SNIClientServer( void )
 	{
 	return( tls12ClientServer( TLS_TEST_SNI ) );
 	}
-int testSessionTLS12WhitelistClientServer( void )
+int testSessionTLS12AllowlistClientServer( void )
 	{
-	return( tls12ClientServer( TLS_TEST_WHITELIST ) );
+	return( tls12ClientServer( TLS_TEST_ALLOWLIST ) );
 	}
-int testSessionTLS12WhitelistFailClientServer( void )
+int testSessionTLS12AllowlistFailClientServer( void )
 	{
-	return( tls12ClientServer( TLS_TEST_WHITELIST_FAIL ) );
+	return( tls12ClientServer( TLS_TEST_ALLOWLIST_FAIL ) );
 	}
 int testSessionTLS12WebSocketsClientServer( void )
 	{

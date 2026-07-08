@@ -297,15 +297,16 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 		   opaque string rather than an RFC 1738 user:password.  However 
 		   since in practice the user info is either a username or a 
 		   username + password no matter what RFC 3986 wants to think it 
-		   is, we treat it as a username of size CRYPT_MAX_TEXTSIZE unless
-		   it's LDAP which has a username + password of size 2 * 
-		   CRYPT_MAX_TEXTSIZE */
+		   is, we treat it as a username of size CRYPT_MAX_TEXTSIZE.  We do
+		   this even for LDAP which explicitly has a username + password but 
+		   is essentially never used and even if it would be is unlikely to
+		   overflow CRYPT_MAX_TEXTSIZE so we cap it at that to avoid having 
+		   to special-case things for the remote chance that it's actually 
+		   used */
 		if( offset < 1 || offset > strLen || offset > MAX_URL_SIZE )
 			return( CRYPT_ERROR_BADDATA );
 		userInfoLen = strExtract( &userInfo, strPtr, 0, offset );
-		if( userInfoLen < 1 || \
-			userInfoLen > ( ( urlTypeHint == URL_TYPE_LDAP ) ? \
-							CRYPT_MAX_TEXTSIZE * 2 : CRYPT_MAX_TEXTSIZE ) )
+		if( userInfoLen < 1 || userInfoLen > CRYPT_MAX_TEXTSIZE )
 			return( CRYPT_ERROR_BADDATA );
 
 		/* Perform a secondary check in case someone is playing silly 
@@ -455,9 +456,11 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 	/* Check for a port after a ':' */
 	if( *strPtr == ':' )
 		{
-		LOOP_INDEX_XXX portStrLen;
-		int port;
+		int port, portStrLen;
 
+		static_assert( MIN_PORT_NUMBER >= 10,
+					   "Minimum port number must have two digits" );
+					   
 		/* Skip the colon */
 		strLen = strExtract( &strPtr, strPtr, 1, strLen );
 		if( strLen < 2 || strLen > MAX_URL_SIZE )

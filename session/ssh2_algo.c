@@ -737,7 +737,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4, 6 ) ) \
 int readAlgoString( INOUT_PTR STREAM *stream, 
 					IN_ARRAY( noAlgoStringEntries ) \
 						const ALGO_STRING_INFO *algoInfo,
-					IN_RANGE( 1, 100 ) const int noAlgoStringEntries, 
+					IN_RANGE( 1, 16 ) const int noAlgoStringEntries, 
 					OUT_INT_SHORT_Z int *algoParam, 
 					IN_BOOL const BOOLEAN useFirstMatch, 
 					INOUT_PTR ERROR_INFO *errorInfo )
@@ -788,7 +788,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4, 5, 6, 9 ) ) \
 static int readAlgoStringPair( INOUT_PTR STREAM *stream, 
 							   IN_ARRAY( noAlgoStringEntries ) \
 									const ALGO_STRING_INFO *algoInfo,
-							   IN_RANGE( 1, 100 ) const int noAlgoStringEntries,
+							   IN_RANGE( 1, 16 ) const int noAlgoStringEntries,
 							   OUT_ALGO_Z CRYPT_ALGO_TYPE *algo, 
 							   OUT_ENUM_OPT( CRYPT_MODE ) CRYPT_MODE_TYPE *mode,
 							   OUT_INT_SHORT_Z int *parameter,
@@ -1057,7 +1057,7 @@ static int writeAlgoListEx( INOUT_PTR STREAM *stream,
 	ENSURES( LOOP_BOUND_OK );
 
 	/* Make sure that we'll be writing at least one algorithm */
-	ENSURES( boundsCheck( noAlgos, 1, 15 ) );
+	ENSURES( rangeCheck( noAlgos, 1, 15 ) );
 
 	/* If we're using signalling algorithms, add those as well.  These are 
 	   always server-side algorithms since the client-side is written through

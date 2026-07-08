@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					Certificate DN String Read/Write Routines				*
-*						Copyright Peter Gutmann 1996-2015					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -39,6 +39,7 @@
 
 /* Check whether a string can be represented as a textual DN string */
 
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 static BOOLEAN isTextString( IN_BUFFER( stringLength ) const BYTE *string, 
 							 IN_LENGTH_ATTRIBUTE const int stringLength )
 	{
@@ -197,7 +198,8 @@ static BOOLEAN parseDNString( OUT_ARRAY( MAX_DNSTRING_COMPONENTS ) \
 		dnStringInfoPtr->text = string + stringPos;
 		REQUIRES_B( !checkOverflowSub( i, stringPos ) );
 		dnStringInfoPtr->textLen = i - stringPos;
-		if( string[ i ] == ',' || string[ i ] == '+' )
+		if( i < stringLength && \
+			( string[ i ] == ',' || string[ i ] == '+' ) )
 			{
 			/* Skip the final ',' or '+' and remember whether this is a 
 			   continued RDN */
@@ -237,7 +239,7 @@ int readDNstring( INOUT_PTR_DATAPTR DATAPTR_DN *dnPtr,
 	{
 	DN_STRING_INFO dnStringInfo[ MAX_DNSTRING_COMPONENTS + 8 ];
 	DATAPTR_DN dn;
-	DN_COMPONENT *dnComponentList = NULL, *dnComponentListCursor;
+	DN_COMPONENT *dnComponentListCursor;
 	int stringInfoIndex, LOOP_ITERATOR;
 
 	assert( isWritePtr( dnPtr, sizeof( DATAPTR_DN ) ) );
@@ -394,7 +396,7 @@ int readDNstring( INOUT_PTR_DATAPTR DATAPTR_DN *dnPtr,
 	ENSURES( LOOP_BOUND_MED_REV_OK );
 
 	/* We're done, lock the DN against further updates */
-	LOOP_LARGE( dnComponentListCursor = dnComponentList,
+	LOOP_LARGE( dnComponentListCursor = DATAPTR_GET( dn ),
 				dnComponentListCursor != NULL,
 				dnComponentListCursor = DATAPTR_GET( dnComponentListCursor->next ) )
 		{

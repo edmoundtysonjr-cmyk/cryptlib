@@ -121,7 +121,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int getPkiUserInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						   INOUT_PTR SCEP_PROTOCOL_INFO *protocolInfo )
 	{
-	const ATTRIBUTE_LIST *userNamePtr = \
+	const SESSION_ATTRIBUTE_LIST *userNamePtr = \
 				findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_USERNAME );
 	MESSAGE_KEYMGMT_INFO getkeyInfo;
 	MESSAGE_DATA msgData;

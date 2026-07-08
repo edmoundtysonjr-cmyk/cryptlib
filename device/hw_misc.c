@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					cryptlib Cryptgraphic HAL Assists Routines				*
-*						Copyright Peter Gutmann 1998-2020					*
+*						Copyright Peter Gutmann 1998-2025					*
 *																			*
 ****************************************************************************/
 
@@ -291,15 +291,15 @@ static int eccGenerateComponents( OUT_PTR CRYPT_PKCINFO_ECC *eccKeyInfo,
 	/* Extract the newly-generated key components for the caller to use */
 	eccKeyInfo->curveType = pkcInfo->curveType;
 	eccKeyInfo->qxLen = BN_num_bits( &pkcInfo->eccParam_qx );
-	status = exportBignum( eccKeyInfo->qx, CRYPT_MAX_PKCSIZE, &dummy,
+	status = exportBignum( eccKeyInfo->qx, CRYPT_MAX_PKCSIZE_ECC, &dummy,
 						   &pkcInfo->eccParam_qx );
 	ENSURES( cryptStatusOK( status ) );
 	eccKeyInfo->qyLen = BN_num_bits( &pkcInfo->eccParam_qy );
-	status = exportBignum( eccKeyInfo->qy, CRYPT_MAX_PKCSIZE, &dummy,
+	status = exportBignum( eccKeyInfo->qy, CRYPT_MAX_PKCSIZE_ECC, &dummy,
 						   &pkcInfo->eccParam_qy );
 	ENSURES( cryptStatusOK( status ) );
 	eccKeyInfo->dLen = BN_num_bits( &pkcInfo->eccParam_d );
-	status = exportBignum( eccKeyInfo->d, CRYPT_MAX_PKCSIZE, &dummy,
+	status = exportBignum( eccKeyInfo->d, CRYPT_MAX_PKCSIZE_ECC, &dummy,
 						   &pkcInfo->eccParam_d );
 	ENSURES( cryptStatusOK( status ) );
 
@@ -342,7 +342,7 @@ int generatePKCcomponents( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 #endif /* USE_DH || USE_DSA || USE_ELGAMAL */
 
 #if defined( USE_ECDSA ) || defined( USE_ECDH ) || \
-	defined( USE_ECDSA ) || defined( USE_X25519 )
+	defined( USE_X25519 ) || defined( USE_ED25519 )
 		case CRYPT_ALGO_ECDSA:
 		case CRYPT_ALGO_ECDH:
 		case CRYPT_ALGO_25519:
@@ -357,7 +357,7 @@ int generatePKCcomponents( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	retIntError();
 	}
-#endif /* !CONFIG_CRYPTO_HW1 && !CONFIG_CRYPTO_HW1 */
+#endif /* !CONFIG_CRYPTO_HW1 && !CONFIG_CRYPTO_HW2 */
 
 /****************************************************************************
 *																			*

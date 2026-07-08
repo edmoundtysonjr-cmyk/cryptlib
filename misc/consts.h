@@ -93,9 +93,14 @@
 #define MIN_PKCSIZE_PQC			1184
 #define MAX_PKCSIZE_PQC			1184
 
-/* The minimum hash/MAC size */
+/* The minimum hash/MAC size, defined by MD5 (still present for internal use
+   by TLS 1.1) and Poly1305 */
 
-#define MIN_HASHSIZE			16
+#if defined( USE_MD5 ) || defined( USE_POLY1305 )
+  #define MIN_HASHSIZE			16
+#else
+  #define MIN_HASHSIZE			20
+#endif /* USE_MD5 || USE_POLY1305 */
 
 /* The size of the largest public-key wrapped value, corresponding to an
    ASN.1-encoded Elgamal-encrypted key.  If we're not using Elgamal it's
@@ -196,7 +201,7 @@
    which means that we can see counts close to 2^26, working out to
    1,015,808 with the / 64 factor taken into account */
 
-#define MAX_KEYSETUP_HASHSPECIFIER		( 65011712L / 64 )
+#define MAX_KEYSETUP_HASHSPECIFIER		( 65011712 / 64 )
 
 /* The HMAC input and output padding values.  These are defined here rather
    than in context.h because they're needed by some PRF mechanisms that

@@ -550,13 +550,19 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	if( cryptStatusOK( status ) && skipGuessedKeyex )
 		{
 		/* There's an incorrectly-guessed keyex following the client hello, 
-		   skip it */
+		   skip it.  This appears to be extremely unlikely to nonexistent in
+		   practice because versions up to 3.4.9 in 2026 hardcoded the 
+		   required minimum size at MIN_PKCSIZE which would have rejected 
+		   any guessed ECC keyex but this never caused any problems so it's
+		   unlikely it was ever encountered */
 		status = readHSPacketSSH2( sessionInfoPtr, 
 								   ( handshakeInfo->isFixedDH || \
 								     handshakeInfo->isECDH ) ?
 									SSH_MSG_KEXDH_INIT : \
 									SSH_MSG_KEX_DH_GEX_INIT,
-								   ID_SIZE + sizeofString32( MIN_PKCSIZE ) );
+								   handshakeInfo->isECDH ? \
+									ID_SIZE + sizeofString32( MIN_PKCSIZE_ECC ) : \
+									ID_SIZE + sizeofString32( MIN_PKCSIZE ) );
 		}
 	if( !cryptStatusError( status ) )	/* readHSPSSH2() returns a length */
 		{
@@ -1035,7 +1041,7 @@ static int completeServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			string	service_name = "ssh-userauth" */
 		status = length = \
 			readPostHSPacketSSH2( sessionInfoPtr, SSH_MSG_SERVICE_REQUEST,
-								  ID_SIZE + sizeofString32( 8 ) );
+								  ID_SIZE + sizeofString32( 12 ) );
 		if( cryptStatusError( status ) )
 			return( status );
 		sMemConnect( &stream, sessionInfoPtr->receiveBuffer, length );

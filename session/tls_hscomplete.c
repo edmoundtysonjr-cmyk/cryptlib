@@ -22,12 +22,15 @@
 /* Pre-encoded finished message header that we can use for message hashing:
 
 	byte		ID = TLS_HAND_FINISHED
-	uint24		len = 12 (IPsec cargo-cult truncated MAC) */
+	uint24		len = 12 (IPsec cargo-cult truncated MAC) / 32 (TLS-LTS) 
+
+   The length value is replaced at runtime in completeHandshakeTLS() or 
+   TLS-LTS */
 
 #define FINISHED_TEMPLATE_SIZE				4
 
-static const BYTE finishedTemplateTLS[] = \
-		{ TLS_HAND_FINISHED, 0, 0, TLS_HASHEDMAC_SIZE };
+static const BYTE finishedTemplate[] = \
+					{ TLS_HAND_FINISHED, 0, 0, TLS_HASHEDMAC_SIZE };
 
 /****************************************************************************
 *																			*
@@ -94,7 +97,7 @@ static int addSessionToCache( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   the information if we try to reconnect later */
 	if( isClient )
 		{
-		const ATTRIBUTE_LIST *attributeListPtr;
+		const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 
 		attributeListPtr = findSessionInfo( sessionInfoPtr,
 											CRYPT_SESSINFO_SERVER_NAME );
@@ -203,14 +206,17 @@ static int readHandshakeCompletionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		return( status );
 		}
 	sMemConnect( &stream, sessionInfoPtr->receiveBuffer, length );
-	value = sgetc( &stream );
+	status = value = sgetc( &stream );
 	sMemDisconnect( &stream );
-	if( value != 1 )
+	if( cryptStatusError( status ) || length != 1 || value != 1 )
 		{
+		/* This is an incredibly unlikely error condition so we don't put
+		   a lot of effort into picking apart all of the sub-conditions but
+		   just report it as a general error */
 		retExt( CRYPT_ERROR_BADDATA,
 				( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
 				  "Invalid change cipher spec packet payload, expected "
-				  "0x01, got 0x%02X", value ) );
+				  "0x01" ) );
 		}
 	CFI_CHECK_UPDATE( "readHSPacketTLS" );
 
@@ -291,6 +297,9 @@ static int readHandshakeCompletionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		if( status == CRYPT_ERROR_BADDATA || \
 			status == CRYPT_ERROR_SIGNATURE )
 			{
+			/* The return uses a doubled SESSION_ERRINFO because we're 
+			   extending the existing error information that may be present
+			   with additional information */
 			retExtErr( CRYPT_ERROR_WRONGKEY,
 					   ( CRYPT_ERROR_WRONGKEY, SESSION_ERRINFO, 
 						 SESSION_ERRINFO, 
@@ -454,8 +463,8 @@ static int writeHandshakeCompletionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 		byte		ID = TLS_HAND_FINISHED
 		uint24		len
-			SSLv3						TLS
-		byte[16]	MD5 MAC			byte[12]	hashedMAC
+			SSLv3						TLS		TLS-LTS
+		byte[16]	MD5 MAC			byte[12]	byte[32]	hashedMAC
 		byte[20]	SHA-1 MAC */
 	status = continuePacketStreamTLS( stream, sessionInfoPtr,
 									  TLS_MSG_HANDSHAKE, &ccsEndPos );
@@ -587,7 +596,10 @@ int completeHandshakeTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	status = initCryptoTLS( sessionInfoPtr, handshakeInfo, masterSecret,
 							TLS_SECRET_SIZE, isClient, isResumedSession );
 	if( cryptStatusError( status ) )
+		{
+		zeroise( masterSecret, TLS_SECRET_SIZE );
 		return( status );
+		}
 	if( isResumedSession )
 		{
 		/* Remember that this is a resumed session in case the caller needs 
@@ -690,8 +702,17 @@ int completeHandshakeTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   finally get rid of the master secret */
 	if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS12 )
 		{
+		BYTE finishedTemplateBuffer[ FINISHED_TEMPLATE_SIZE + 8 ];
+		
+		REQUIRES( rangeCheck( FINISHED_TEMPLATE_SIZE, 1, \
+							  FINISHED_TEMPLATE_SIZE ) );
+		memcpy( finishedTemplateBuffer, finishedTemplate, 
+				FINISHED_TEMPLATE_SIZE );
+		finishedTemplateBuffer[ FINISHED_TEMPLATE_SIZE - 1 ] = \
+									intToByte( initiatorHashLength );
 		status = krnlSendMessage( responderSHA2context, IMESSAGE_CTX_HASH,
-				( MESSAGE_CAST ) finishedTemplateTLS, FINISHED_TEMPLATE_SIZE );
+								  finishedTemplateBuffer, 
+								  FINISHED_TEMPLATE_SIZE );
 		if( cryptStatusOK( status ) )
 			{
 			status = krnlSendMessage( responderSHA2context, IMESSAGE_CTX_HASH, 
@@ -701,11 +722,11 @@ int completeHandshakeTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	else
 		{
 		status = krnlSendMessage( responderMD5context, IMESSAGE_CTX_HASH,
-				( MESSAGE_CAST ) finishedTemplateTLS, FINISHED_TEMPLATE_SIZE );
+				( MESSAGE_CAST ) finishedTemplate, FINISHED_TEMPLATE_SIZE );
 		if( cryptStatusOK( status ) )
 			{
 			status = krnlSendMessage( responderSHA1context, IMESSAGE_CTX_HASH,
-				( MESSAGE_CAST ) finishedTemplateTLS, FINISHED_TEMPLATE_SIZE );
+				( MESSAGE_CAST ) finishedTemplate, FINISHED_TEMPLATE_SIZE );
 			}
 		if( cryptStatusOK( status ) )
 			{
@@ -728,6 +749,8 @@ int completeHandshakeTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	CFI_CHECK_UPDATE( "IMESSAGE_CTX_HASH" );
 	if( sessionInfoPtr->version < TLS_MINOR_VERSION_TLS12 )
 		{
+		/* The responderHashLength value is essentially a dummy value that's
+		   never used since it's the same as initiatorHashLength */
 		status = completeTLSHashedMAC( responderMD5context, 
 							responderSHA1context, responderHashes, 
 							CRYPT_MAX_HASHSIZE * 2, &responderHashLength, 
@@ -856,7 +879,7 @@ static const BYTE eapolEAPSecret[] = {
 	0xde, 0x7a, 0x85, 0xf0, 0xce, 0x3d, 0xfa, 0xf8,
 	0x87, 0x43, 0xea, 0xc9, 0xc8, 0xd7, 0x8c, 0x43
 	};
-const ATTRIBUTE_LIST *attributeInfoPtr;
+const SESSION_ATTRIBUTE_LIST *attributeInfoPtr;
 BYTE masterSecret[ TLS_SECRET_SIZE + 8 ];
 int status;
 

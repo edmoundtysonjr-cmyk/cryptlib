@@ -138,7 +138,7 @@ int envelopeWrap( IN_BUFFER( inDataLength ) const void *inData,
 		if( cryptStatusOK( status ) )
 			{
 			ENSURES( msgData.length > inDataLength && \
-					 msgData.length < outDataMaxLength );
+					 msgData.length <= outDataMaxLength );
 			*outDataLength = msgData.length;
 			}
 		}
@@ -172,7 +172,7 @@ int envelopeUnwrap( IN_BUFFER( inDataLength ) const void *inData,
 	MESSAGE_CREATEOBJECT_INFO createInfo;
 	MESSAGE_DATA msgData;
 	const int minBufferSize = max( MIN_BUFFER_SIZE, inDataLength );
-	int status;
+	int envFormat, status;
 
 	assert( isReadPtrDynamic( inData, inDataLength ) );
 	assert( isWritePtrDynamic( outData, outDataMaxLength ) );
@@ -198,16 +198,12 @@ int envelopeUnwrap( IN_BUFFER( inDataLength ) const void *inData,
 	*outDataLength = 0;
 	clearErrorInfo( errorInfo );
 
-	/* Create an envelope to unwrap the data, add the decryption key if
-	   necessary, and pop the unwrapped result.  In theory we could use 
-	   checkASN1() here to perform a safety check of the envelope data
-	   prior to processing but this has already been done by the calling
-	   code when the datagram containing the enveloped data was read so
-	   we don't need to repeat the (rather heavyweight) operation here.
-	   
-	   Since the enveloping code auto-detects the data type that it's being
-	   fed, we explicitly check that the format and usage type is what we're
-	   expecting */
+	/* Create an envelope to unwrap the data and add the decryption key/
+	   password if necessary.  In theory we could use checkASN1() here to 
+	   perform a safety check of the envelope data prior to processing but 
+	   this has already been done by the calling code when the datagram 
+	   containing the enveloped data was read so we don't need to repeat 
+	   the (rather heavyweight) operation here */
 	setMessageCreateObjectInfo( &createInfo, CRYPT_FORMAT_AUTO );
 	status = krnlSendMessage( SYSTEM_OBJECT_HANDLE,
 							  IMESSAGE_DEV_CREATEOBJECT, &createInfo,
@@ -225,36 +221,6 @@ int envelopeUnwrap( IN_BUFFER( inDataLength ) const void *inData,
 	setMessageData( &msgData, ( MESSAGE_CAST ) inData, inDataLength );
 	status = krnlSendMessage( iCryptEnvelope, IMESSAGE_ENV_PUSHDATA,
 							  &msgData, 0 );
-	if( cryptStatusOK( status ) )
-		{
-		int envFormat;
-
-		ENSURES( msgData.length >= inDataLength );
-
-		/* Make sure that the format is what we're expecting */
-		status = krnlSendMessage( iCryptEnvelope, IMESSAGE_GETATTRIBUTE,
-								  &envFormat, CRYPT_IATTRIBUTE_ENVFORMAT );
-		if( cryptStatusError( status ) || \
-			( envFormat != CRYPT_FORMAT_CRYPTLIB && \
-			  envFormat != CRYPT_FORMAT_CMS && \
-			  envFormat != CRYPT_FORMAT_SMIME ) )
-			status = CRYPT_ERROR_BADDATA;
-		}
-	if( cryptStatusOK( status ) )
-		{
-		const int expectedUsage = \
-					( iPrivKey == CRYPT_UNUSED && password == NULL ) ? \
-					  CRYPT_CONTENT_DATA : CRYPT_CONTENT_ENVELOPEDDATA;
-		int envUsage;
-
-		/* Make sure that the usage is what we're expecting */
-		status = krnlSendMessage( iCryptEnvelope, IMESSAGE_GETATTRIBUTE,
-								  &envUsage, CRYPT_IATTRIBUTE_ENVUSAGE );
-		if( cryptStatusError( status ) || envUsage != expectedUsage )
-			status = CRYPT_ERROR_BADDATA;
-		}
-	REQUIRES( isIntegerRangeNZ( outDataMaxLength ) ); 
-	memset( outData, 0, min( 16, outDataMaxLength ) );
 	if( cryptStatusError( status ) && status == CRYPT_ENVELOPE_RESOURCE )
 		{
 		if( iPrivKey != CRYPT_UNUSED )
@@ -267,10 +233,13 @@ int envelopeUnwrap( IN_BUFFER( inDataLength ) const void *inData,
 			{
 			if( password != NULL )
 				{
-				setMessageData( &msgData, ( MESSAGE_CAST ) password, 
+				MESSAGE_DATA msgDataPW;
+
+				setMessageData( &msgDataPW, ( MESSAGE_CAST ) password, 
 								passwordLength );
 				status = krnlSendMessage( iCryptEnvelope, 
-										  IMESSAGE_SETATTRIBUTE_S, &msgData, 
+										  IMESSAGE_SETATTRIBUTE_S, 
+										  &msgDataPW, 
 										  CRYPT_ENVINFO_PASSWORD );
 				}
 			else
@@ -283,9 +252,53 @@ int envelopeUnwrap( IN_BUFFER( inDataLength ) const void *inData,
 		}
 	if( cryptStatusOK( status ) )
 		{
+		/* We should now have consumed all of the input */
+		ENSURES( msgData.length >= inDataLength );
+
 		setMessageData( &msgData, NULL, 0 );
 		status = krnlSendMessage( iCryptEnvelope, IMESSAGE_ENV_PUSHDATA,
 								  &msgData, 0 );
+		}
+	if( cryptStatusError( status ) )
+		{
+		/* Fetch any additional error information that may be available */
+		readErrorInfo( errorInfo, iCryptEnvelope );
+		krnlSendNotifier( iCryptEnvelope, IMESSAGE_DECREFCOUNT );
+
+		REQUIRES( isIntegerRangeNZ( outDataMaxLength ) ); 
+		memset( outData, 0, min( 16, outDataMaxLength ) );
+		assert( !cryptArgError( status ) );
+		return( cryptArgError( status ) ? CRYPT_ERROR_BADDATA : status );
+		}
+
+	/* We've successfully processed the input (which may use the same memory
+	   as the output in the case of in-place processing), we can safely clear 
+	   the  output now */
+	REQUIRES( isIntegerRangeNZ( outDataMaxLength ) ); 
+	memset( outData, 0, min( 16, outDataMaxLength ) );
+
+	/* Since the enveloping code auto-detects the data type that it's being
+	   fed, we explicitly check that the format and usage type is what we're
+	   expecting and then pop the result */
+	status = krnlSendMessage( iCryptEnvelope, IMESSAGE_GETATTRIBUTE,
+							  &envFormat, CRYPT_IATTRIBUTE_ENVFORMAT );
+	if( cryptStatusError( status ) || \
+		( envFormat != CRYPT_FORMAT_CRYPTLIB && \
+		  envFormat != CRYPT_FORMAT_CMS && \
+		  envFormat != CRYPT_FORMAT_SMIME ) )
+		status = CRYPT_ERROR_BADDATA;
+	if( cryptStatusOK( status ) )
+		{
+		const int expectedUsage = \
+					( iPrivKey == CRYPT_UNUSED && password == NULL ) ? \
+					  CRYPT_CONTENT_DATA : CRYPT_CONTENT_ENVELOPEDDATA;
+		int envUsage;
+
+		/* Make sure that the usage is what we're expecting */
+		status = krnlSendMessage( iCryptEnvelope, IMESSAGE_GETATTRIBUTE,
+								  &envUsage, CRYPT_IATTRIBUTE_ENVUSAGE );
+		if( cryptStatusError( status ) || envUsage != expectedUsage )
+			status = CRYPT_ERROR_BADDATA;
 		}
 	if( cryptStatusOK( status ) )
 		{
@@ -366,7 +379,7 @@ int envelopeSign( IN_BUFFER_OPT( inDataLength ) const void *inData,
 	REQUIRES( isHandleRangeValid( iSigKey ) );
 	REQUIRES( iCmsAttributes == CRYPT_UNUSED || \
 			  isHandleRangeValid( iCmsAttributes ) );
-	REQUIRES( !checkOverflowAdd( inDataLength, 512 ) );
+	REQUIRES( !checkOverflowAdd( inDataLength, 1024 ) );
 	ENSURES( isBufsizeRangeMin( minBufferSize, MIN_BUFFER_SIZE ) );
 
 	/* Clear return values.  Note that we can't clear the output buffer 
@@ -643,10 +656,20 @@ int envelopeSigCheck( IN_BUFFER( inDataLength ) const void *inData,
 		else
 			{
 			/* Since this error isn't coming from the enveloping code we 
-			   have to provide our own message */
+			   have to provide our own message and cleanup handling */
 			setErrorString( errorInfo, 
 							"Signed data has a missing message body", 38 );
 			status = CRYPT_ERROR_BADDATA;
+			if( iSigningCert != NULL )
+				{
+				krnlSendNotifier( *iSigningCert, IMESSAGE_DECREFCOUNT );
+				*iSigningCert = CRYPT_ERROR;
+				}
+			if( iCmsAttributes != NULL )
+				{
+				krnlSendNotifier( *iCmsAttributes, IMESSAGE_DECREFCOUNT );
+				*iCmsAttributes = CRYPT_ERROR;
+				}
 			}
 		}
 

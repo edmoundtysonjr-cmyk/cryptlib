@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					  cryptlib PKCS #11 Item Read Routines					*
-*						Copyright Peter Gutmann 1998-2023					*
+*						Copyright Peter Gutmann 1998-2025					*
 *																			*
 ****************************************************************************/
 
@@ -23,7 +23,7 @@
   #include "device/pkcs11_api.h"
   #include "enc_dec/asn1.h"
   #if defined( USE_ECDSA ) || defined( USE_ECDH ) || \
-	  defined( USE_ECDSA ) || defined( USE_X25519 )
+	  defined( USE_X25519 ) || defined( USE_ED25519 )
 	#include "enc_dec/asn1_ext.h"
   #endif /* USE_ECDSA || USE_ECDH || USE_X25519 || USE_ED25519 */
 #endif /* Compiler-specific includes */
@@ -177,9 +177,22 @@ static int getObjectLabel( INOUT_PTR PKCS11_INFO *pkcs11Info,
 									 CRYPT_MAX_TEXTSIZE );
 	if( cryptStatusError( cryptStatus ) )
 		return( cryptStatus );
-	*labelLength = min( localLabelLength, maxLabelSize );
-	REQUIRES( rangeCheck( *labelLength, 1, maxLabelSize ) );
-	memcpy( label, localLabel, *labelLength );
+	if( localLabelLength <= 0 )
+		{
+		/* If there's no label present, use a dummy value. In theory we 
+		   shouldn't have a zero-length label since the read call should
+		   return CKR_ATTRIBUTE_TYPE_INVALID, but given the flexibility of 
+		   interpretation of PKCS #11 it's possible that some 
+		   implementations do this */
+		*labelLength = min( 26, maxLabelSize - 1 );	/* -1 for terminator */
+		strlcpy_s( label, maxLabelSize, "Label-less PKCS #11 object" );
+		}
+	else
+		{
+		*labelLength = min( localLabelLength, maxLabelSize );
+		REQUIRES( rangeCheck( *labelLength, 1, maxLabelSize ) );
+		memcpy( label, localLabel, *labelLength );
+		}
 	getAttributeValueEnd( localLabel, labelBuffer );
 
 	return( CRYPT_OK );
@@ -1788,12 +1801,6 @@ static int createDeviceObject( INOUT_PTR PKCS11_INFO *pkcs11Info,
 								  CRYPT_MAX_TEXTSIZE, &labelLength );
 	if( cryptStatusError( cryptStatus ) )
 		return( cryptStatus );
-	if( labelLength <= 0 )
-		{
-		/* If there's no label present, use a dummy value */
-		strlcpy_s( label, CRYPT_MAX_TEXTSIZE, "Label-less PKCS #11 key" );
-		labelLength = 23;
-		}
 	cryptStatus = createContextFromCapability( &iLocalContext, 
 							iOwnerHandle, capabilityInfoPtr, 
 							createFlags | CREATEOBJECT_FLAG_PERSISTENT );
@@ -2214,9 +2221,9 @@ static int getItemFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 	   decryption or a key that's genuinely only valid for unwrapping, but
 	   at this point we're ready to try anything */
 	if( itemType == KEYMGMT_ITEM_PRIVATEKEY && \
-		( keyIDtype == CRYPT_IKEYID_ISSUERANDSERIALNUMBER && \
-		  cryptStatus == CRYPT_ERROR_NOTFOUND ) || \
-		( cryptStatus == CRYPT_ERROR_DUPLICATE ) )
+		( ( keyIDtype == CRYPT_IKEYID_ISSUERANDSERIALNUMBER && \
+			cryptStatus == CRYPT_ERROR_NOTFOUND ) || \
+		  ( cryptStatus == CRYPT_ERROR_DUPLICATE ) ) )
 		{
 		static const CK_OBJECT_CLASS privkeyClass = CKO_PRIVATE_KEY;
 		static const CK_BBOOL bTrue = CK_TRUE;
@@ -2449,12 +2456,14 @@ static int getFirstItemFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 	*iCertificate = CRYPT_ERROR;
 	*stateInfo = CRYPT_ERROR;
 
-	/* Try and find the certificate with the given ID.  This should work 
-	   because we've just read the ID for the indirect-import that lead to 
-	   the getFirst() call.  Note that we can't use findCert() for this 
-	   because it uses getCertChain() to build the full chain of 
-	   certificates from the leaf, which would end up calling back to 
-	   here */
+	/* Try and find the certificate with the given ID.  This should always 
+	   work because we've just read the ID for the indirect-import that lead 
+	   to the getFirst() call so we make it an ENSURES() rather than a 
+	   standard error-exit.
+	   
+	   Note that we can't use findCert() for this because it uses 
+	   getCertChain() to build the full chain of certificates from the leaf, 
+	   which would end up calling back to here */
 	cryptStatus = findObject( pkcs11Info, &hCertificate, certTemplate, 3 );
 	ENSURES( cryptStatusOK( cryptStatus ) );
 

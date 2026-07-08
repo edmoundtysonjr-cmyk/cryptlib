@@ -1368,7 +1368,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int writeSSHID( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo )
 	{
-	const ATTRIBUTE_LIST *attributeListPtr;
+	const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 	STREAM stream;
 	int status;
 

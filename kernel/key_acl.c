@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *									Keyset ACLs								*
-*						Copyright Peter Gutmann 1997-2019					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -73,8 +73,6 @@ static const CRYPT_KEYID_TYPE pkiUserIDs[] = {
 		CRYPT_KEYID_NONE, CRYPT_KEYID_NONE };
 static const CRYPT_KEYID_TYPE revInfoIDs[] = { 
 		CRYPT_IKEYID_CERTID, CRYPT_IKEYID_ISSUERID, 
-		CRYPT_KEYID_NONE, CRYPT_KEYID_NONE };
-static const CRYPT_KEYID_TYPE dataIDs[] = { 
 		CRYPT_KEYID_NONE, CRYPT_KEYID_NONE };
 
 /* Key management ACL information.  These work in the same general way as the
@@ -224,15 +222,6 @@ static const KEYMGMT_ACL keyManagementACL[] = {
 		/*Flg*/	KEYMGMT_FLAG_NONE,
 		ACCESS_KEYSET_xxRxD, ACCESS_KEYSET_xxxxx ),
 
-	/* Other data (for PKCS #15 tokens) */
-	MK_KEYACL_RWD( KEYMGMT_ITEM_DATA,
-		/*RWD*/	ST_KEYSET_FILE, ST_KEYSET_FILE, ST_NONE,
-		/*FnQ*/	ST_NONE, ST_NONE,
-		/*Obj*/	ST_NONE,
-		/*IDs*/	dataIDs, FAILSAFE_ARRAYSIZE( dataIDs, CRYPT_KEYID_TYPE ),
-		/*Flg*/	KEYMGMT_FLAG_NONE,
-		ACCESS_KEYSET_xxRWD, ACCESS_KEYSET_FNxxx ),
-
 	/* Last item type */
 	MK_KEYACL( KEYMGMT_ITEM_NONE, ST_NONE, ST_NONE, ST_NONE, NULL, 0,
 		KEYMGMT_FLAG_NONE, ACCESS_KEYSET_xxxxx, ACCESS_KEYSET_xxxxx ),
@@ -316,7 +305,7 @@ int initKeymgmtACL( void )
 			retIntError();
 			}
 
-		if( keyMgmtACL->keysetR_subTypeA != ST_NONE || \
+		if( keyMgmtACL->keysetW_subTypeA != ST_NONE || \
 			( keyMgmtACL->keysetW_subTypeB & ( SUBTYPE_CLASS_A | \
 											   SUBTYPE_CLASS_C ) ) || \
 			( keyMgmtACL->keysetW_subTypeB & \
@@ -329,7 +318,7 @@ int initKeymgmtACL( void )
 			retIntError();
 			}
 
-		if( keyMgmtACL->keysetR_subTypeA != ST_NONE || \
+		if( keyMgmtACL->keysetD_subTypeA != ST_NONE || \
 			( keyMgmtACL->keysetD_subTypeB & ( SUBTYPE_CLASS_A | \
 											   SUBTYPE_CLASS_C ) ) || \
 			( keyMgmtACL->keysetD_subTypeB & \
@@ -341,7 +330,7 @@ int initKeymgmtACL( void )
 			DEBUG_DIAG(( "Key management/delete ACLs inconsistent" ));
 			retIntError();
 			}
-		if( keyMgmtACL->keysetR_subTypeA != ST_NONE || \
+		if( keyMgmtACL->keysetFN_subTypeA != ST_NONE || \
 			( keyMgmtACL->keysetFN_subTypeB & ( SUBTYPE_CLASS_A | \
 											    SUBTYPE_CLASS_C ) ) || \
 			( keyMgmtACL->keysetFN_subTypeB & \
@@ -354,7 +343,7 @@ int initKeymgmtACL( void )
 			retIntError();
 			}
 
-		if( keyMgmtACL->keysetR_subTypeA != ST_NONE || \
+		if( keyMgmtACL->keysetQ_subTypeA != ST_NONE || \
 			( keyMgmtACL->keysetQ_subTypeB & ( SUBTYPE_CLASS_A | \
 											   SUBTYPE_CLASS_C ) ) || \
 			( keyMgmtACL->keysetQ_subTypeB & \

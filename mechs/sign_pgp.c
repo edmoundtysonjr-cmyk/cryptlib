@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							PGP Signature Routines							*
-*						Copyright Peter Gutmann 1993-2024					*
+*						Copyright Peter Gutmann 1993-2025					*
 *																			*
 ****************************************************************************/
 
@@ -15,7 +15,7 @@
   #include "mechs/mech.h"
 #endif /* Compiler-specific includes */
 
-#ifdef USE_PGP
+#if defined( USE_PGP ) || defined( USE_PGPKEYS )
 
 /****************************************************************************
 *																			*
@@ -235,8 +235,9 @@ int createSignaturePGP( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 	BYTE signatureData[ CRYPT_MAX_PKCSIZE + 128 + 8 ];
 	BYTE extraData[ 1024 + 8 ], *extraDataPtr = extraData;
 	BYTE extraTrailer[ 8 + 8 ];
-	int extraDataLength = 1024, extraTrailerLength DUMMY_INIT;
-	int signatureDataLength, iAndSlength = 0, totalLength DUMMY_INIT;
+	int extraDataMaxLength = 1024, extraDataLength;
+	int extraTrailerLength DUMMY_INIT, iAndSlength = 0;
+	int signatureDataLength, totalLength DUMMY_INIT;
 	int status;
 
 	assert( ( signature == NULL && sigMaxLength == 0 ) || \
@@ -306,14 +307,14 @@ int createSignaturePGP( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 	   because we're allocating a buffer larger than just the attribute in 
 	   order to hold the additional PGP signature data, not the 
 	   same size as the attribute which is what dynCreate() does */
-	REQUIRES( !checkOverflowSub( extraDataLength, 128 ) );
-	if( iAndSlength > extraDataLength - 128 )
+	REQUIRES( !checkOverflowAdd3( 128, iAndSlength, sigAttributeLength ) );
+	if( 128 + iAndSlength + sigAttributeLength > extraDataMaxLength )
 		{
-		REQUIRES( !checkOverflowAdd( 128, iAndSlength ) );
-		extraDataLength = 128 + iAndSlength;
-		ENSURES( isShortIntegerRangeNZ( extraDataLength ) );
+		extraDataMaxLength = 128 + iAndSlength + sigAttributeLength;
+							 /* Add checked above */
+		ENSURES( isShortIntegerRangeNZ( extraDataMaxLength ) );
 		if( ( extraDataPtr = clDynAlloc( "createSignaturePGP", \
-										 extraDataLength ) ) == NULL )
+										 extraDataMaxLength ) ) == NULL )
 			return( CRYPT_ERROR_MEMORY );
 		}
 
@@ -332,7 +333,7 @@ int createSignaturePGP( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 	   the length of the unauthenticated attributes), and then go back and 
 	   assemble the whole thing including the length and signature later on 
 	   from the pre-hashed data and the length, hash check, and signature */
-	status = writePgpSigPacketHeader( extraDataPtr, extraDataLength, 
+	status = writePgpSigPacketHeader( extraDataPtr, extraDataMaxLength, 
 									  &extraDataLength, iSignContext,
 									  sigDataInfo->hashAlgo, 
 									  sigAttributes, sigAttributeLength, 
@@ -356,8 +357,8 @@ int createSignaturePGP( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 		}
 	if( cryptStatusError( status ) )
 		{
-		REQUIRES( isShortIntegerRangeNZ( extraDataLength ) ); 
-		zeroise( extraDataPtr, extraDataLength );
+		REQUIRES( isShortIntegerRangeNZ( extraDataMaxLength ) ); 
+		zeroise( extraDataPtr, extraDataMaxLength );
 		if( extraDataPtr != extraData )
 			clFree( "createSignaturePGP", extraDataPtr );
 		retExt( status,
@@ -406,8 +407,8 @@ int createSignaturePGP( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 		}
 	if( cryptStatusError( status ) )
 		{
-		REQUIRES( isShortIntegerRangeNZ( extraDataLength ) ); 
-		zeroise( extraDataPtr, extraDataLength );
+		REQUIRES( isShortIntegerRangeNZ( extraDataMaxLength ) ); 
+		zeroise( extraDataPtr, extraDataMaxLength );
 		if( extraDataPtr != extraData )
 			clFree( "createSignaturePGP", extraDataPtr );
 		retExt( status,
@@ -416,7 +417,9 @@ int createSignaturePGP( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 		}
 	ENSURES( isShortIntegerRangeNZ( extraTrailerLength ) );
 
-	/* We've finally finished with all the hashing, create the signature */
+	/* We've finally finished with all the hashing, create the signature.  
+	   The '1 + pgpSizeofLength()' below synthesises a hypothetical 
+	   pgpSizeofPacketHeader() */
 	status = createSignature( signatureData, CRYPT_MAX_PKCSIZE + 128, 
 							  &signatureDataLength, iSignContext, 
 							  sigDataInfo, SIGNATURE_PGP, errorInfo );
@@ -428,14 +431,14 @@ int createSignaturePGP( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 					  pgpSizeofLength( extraDataLength + 2 + \
 									   signatureDataLength ) + \
 					  extraDataLength + 2 + signatureDataLength;
-		if( totalLength + 64 > sigMaxLength )
+		if( totalLength > sigMaxLength )
 			status = CRYPT_ERROR_OVERFLOW;
 		}
 	if( cryptStatusError( status ) )
 		{
 		zeroise( hash, CRYPT_MAX_HASHSIZE );
-		REQUIRES( isShortIntegerRangeNZ( extraDataLength ) ); 
-		zeroise( extraDataPtr, extraDataLength );
+		REQUIRES( isShortIntegerRangeNZ( extraDataMaxLength ) ); 
+		zeroise( extraDataPtr, extraDataMaxLength );
 		if( extraDataPtr != extraData )
 			clFree( "createSignaturePGP", extraDataPtr );
 		return( status );
@@ -454,7 +457,7 @@ int createSignaturePGP( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 	status = pgpWritePacketHeader( &stream, PGP_PACKET_SIGNATURE,
 								   extraDataLength + 2 + \
 									signatureDataLength );
-									/* Checked earlier */
+									/* Add checked earlier */
 	if( cryptStatusOK( status ) )
 		{
 		swrite( &stream, extraDataPtr, extraDataLength );
@@ -465,11 +468,14 @@ int createSignaturePGP( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 		*signatureLength = stell( &stream );
 	sMemDisconnect( &stream );
 	zeroise( hash, CRYPT_MAX_HASHSIZE );
-	REQUIRES( isShortIntegerRangeNZ( extraDataLength ) ); 
-	zeroise( extraDataPtr, extraDataLength );
+	REQUIRES( isShortIntegerRangeNZ( extraDataMaxLength ) ); 
+	zeroise( extraDataPtr, extraDataMaxLength );
 	zeroise( signatureData, CRYPT_MAX_PKCSIZE + 128 );
 	if( extraDataPtr != extraData )
+		{
 		clFree( "createSignaturePGP", extraDataPtr );
+		extraDataPtr = NULL;
+		}
 	if( cryptStatusError( status ) )
 		{
 		retExt( status,
@@ -543,7 +549,7 @@ int checkSignaturePGP( IN_BUFFER( signatureLength ) const void *signature,
 	/* After hashing the content, PGP also hashes in extra authenticated
 	   attributes, see the earlier comment in createSignaturePGP() */
 	REQUIRES( boundsCheck( queryInfo.attributeStart, 
-						   queryInfo.attributeLength, queryInfo.size ) );
+						   queryInfo.attributeLength, signatureLength ) );
 	status = krnlSendMessage( sigDataInfo->hashContext, IMESSAGE_CTX_HASH,
 							  ( BYTE * ) signature + queryInfo.attributeStart,
 							  queryInfo.attributeLength );
@@ -615,4 +621,4 @@ int checkSignaturePGP( IN_BUFFER( signatureLength ) const void *signature,
 
 	return( CRYPT_OK );
 	}
-#endif /* USE_PGP */
+#endif /* USE_PGP || USE_PGPKEYS */

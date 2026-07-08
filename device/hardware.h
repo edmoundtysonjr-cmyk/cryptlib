@@ -25,6 +25,7 @@ int hwGetStorage( IN_PTR_OPT void *contextHandle,
 CHECK_RETVAL \
 int hwStorageUpdateNotify( IN_PTR_OPT void *contextHandle,
 						   IN_LENGTH_Z const int dataLength );
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int hwCloneNotify( int *storageRef );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int hwLookupItem( IN_BUFFER( storageIDlength ) const void *storageID,

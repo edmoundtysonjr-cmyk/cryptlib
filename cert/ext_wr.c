@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						Certificate Attribute Write Routines				*
-*						 Copyright Peter Gutmann 1996-2015					*
+*						 Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -320,11 +320,16 @@ static int calculateAttributeSizes( IN_PTR const ATTRIBUTE_LIST *attributeListPt
 
 		ENSURES( LOOP_INVARIANT_LARGE_GENERIC() );
 
-		attributeDataSize = \
-					sizeofShortObject( sizeofOID( attributeListPtr->oid ) + \
-					sizeofShortObject( attributeListPtr->dataValueLength ) );
+		REQUIRES( \
+			!checkOverflowAdd( sizeofOID( attributeListPtr->oid ), 
+							   sizeofShortObject( \
+									attributeListPtr->dataValueLength ) ) );
+		attributeDataSize = sizeofOID( attributeListPtr->oid ) + \
+							sizeofShortObject( \
+								attributeListPtr->dataValueLength );
 		if( TEST_FLAG( attributeListPtr->flags, ATTR_FLAG_CRITICAL ) )
 			attributeDataSize += sizeofBoolean();
+		attributeDataSize = sizeofShortObject( attributeDataSize );
 		if( hasSpecialEncoding )
 			{
 			REQUIRES( !checkOverflowAdd( *encapsAttributeSize, 

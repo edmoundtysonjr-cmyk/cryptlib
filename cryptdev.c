@@ -1362,7 +1362,7 @@ static int openDevice( OUT_HANDLE_OPT CRYPT_DEVICE *iCryptDevice,
 												CREATEOBJECT_FUNCTION_INFO );
 		}
 	if( cryptStatusOK( status ) && \
-		DATAPTR_GET( deviceInfoPtr->capabilityInfoList ) == NULL )
+		TEST_FLAG( deviceInfoPtr->flags, DEVICE_FLAG_PASSTHROUGH ) )
 		{
 		DEVICE_INFO systemDeviceInfo;
 		
@@ -1371,8 +1371,6 @@ static int openDevice( OUT_HANDLE_OPT CRYPT_DEVICE *iCryptDevice,
 		   we set up a dummy DEVICE_INFO object and then initialise it with 
 		   system-device values, which we copy them across to the current 
 		   device */
-		ENSURES( TEST_FLAG( deviceInfoPtr->flags, 
-							DEVICE_FLAG_PASSTHROUGH ) );
 		memset( &systemDeviceInfo, 0, sizeof( DEVICE_INFO ) );
 		( void ) setDeviceSystem( &systemDeviceInfo );
 		deviceInfoPtr->capabilityInfoList = \

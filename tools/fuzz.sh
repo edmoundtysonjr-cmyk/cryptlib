@@ -1,5 +1,12 @@
 #!/bin/bash
 # Fuzz cryptlib (via the spcially-built testlib).
+#
+# Temperature -> power usage:
+# 25% CPU = 40W avg. sensors = 60W wall power, ratio = 1.50.
+# 18% CPU = 34W avg. sensors = 52W wall power, ratio = 1.53.
+# 12% CPU = 27W avg. sensors = 42W wall power, ratio = 1.55.
+#  6% CPU = 19W avg. sensors = 30W wall power, ratio = 1.57.
+#  0% CPU =  3W avg. sensors =  7W wall power, ratio = 2.33.
 
 INPUT_DIR_PARENT="afl-in"
 OUTPUT_DIR_PARENT="afl-out"
@@ -16,6 +23,7 @@ DIRNAME=""
 INPUT_DIR=""
 OUTPUT_DIR=""
 NO_CPUS=$(getconf _NPROCESSORS_ONLN)
+POWER="$(echo "$(sensors -u 2>&1 | grep average | awk '{print $2}') * 1.5" | bc)"
 DEBUG=0
 VERBOSE=0
 
@@ -184,6 +192,7 @@ if [ "$1" = "stats" ] ; then
 	for FUZZTYPE in ${FUZZTYPES} ; do
 		show_stats "${FUZZTYPE}"
 	done
+	printf "\nPower usage: %.f watts.\n" $POWER
 	exit 0
 fi
 

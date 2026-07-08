@@ -2431,6 +2431,7 @@ static void slowPollWindows( void )
 		ENSURES_V( LOOP_BOUND_OK );
 		}
 	clFree( "slowPollWindows", buffer );
+	buffer = NULL;
 
 	/* If we got enough data, we can leave now without having to try for a
 	   Win32-level performance information query */

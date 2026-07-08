@@ -118,7 +118,6 @@ static BOOLEAN sanityCheckEnvCMSDenv( const ENVELOPE_INFO *envelopeInfoPtr )
 *																			*
 ****************************************************************************/
 
-
 /* Add information on different object types to a content-list entry */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
@@ -1786,7 +1785,7 @@ static int processPostamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 			if( cryptStatusError( status ) )
 				{
 				setErrorString( ENVELOPE_ERRINFO, 
-								"Invalid SignerInfo signature record", 36 );
+								"Invalid SignerInfo signature record", 35 );
 				break;
 				}
 

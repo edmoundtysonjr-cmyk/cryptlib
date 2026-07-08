@@ -197,7 +197,7 @@ static BOOLEAN sanityCheckContentAuthenc( IN_PTR \
 		return( FALSE );
 		}
 	if( contentAuthEncInfo->authEncParamLength <= 0 || \
-		contentAuthEncInfo->authEncParamLength > 128 )
+		contentAuthEncInfo->authEncParamLength > AUTHENCPARAM_MAX_SIZE )
 		{
 		DEBUG_PUTS(( "sanityCheckContentList: Authenc parameter size" ));
 		return( FALSE );
@@ -406,7 +406,7 @@ int createContentListItem( OUT_BUFFER_ALLOC_OPT( sizeof( CONTENT_LIST ) ) \
 	REQUIRES( isEnumRange( formatType, CRYPT_FORMAT ) );
 	REQUIRES( ( object == NULL && objectSize == 0 ) || \
 			  ( object != NULL && \
-				isBufsizeRangeNZ( objectSize ) ) );
+				isBufsizeRangeMin( objectSize, 8 ) ) );
 
 	/* Clear return value */
 	*newContentListItemPtrPtr = NULL;
@@ -1390,6 +1390,7 @@ static int addSignatureInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	   data, to deal with this we have to go through and clear every pointer
 	   value that pointed to the now-freed object data */
 	clFree( "addSignatureInfo", ( void * ) objectPtr );
+	objectPtr = NULL;
 	DATAPTR_SET( contentListPtr->object, NULL );
 	contentListPtr->objectSize = 0;
 	contentListPtr->issuerAndSerialNumber = \

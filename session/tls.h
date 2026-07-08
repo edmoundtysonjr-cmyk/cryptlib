@@ -1743,7 +1743,7 @@ int unwrapPacketTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									 *dataLength ) void *data, 
 					   IN_DATALENGTH const int dataMaxLength, 
 					   OUT_DATALENGTH_Z int *dataLength,
-					   OUT_RANGE( TLS_HAND_NONE, TLS_HAND_LAST ) \
+					   OUT_RANGE( TLS_MSG_NONE, TLS_MSG_LAST ) \
 							int *actualPacketType,
 					   IN_RANGE( TLS_PACKETTYPE_FIRST, \
 								 TLS_PACKETTYPE_LAST ) \

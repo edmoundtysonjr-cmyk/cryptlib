@@ -251,7 +251,7 @@ static int hashRAM( OUT_BUFFER_FIXED( hRAMSize ) BYTE *hRAM,
 	
 	/* Calculate SHA512( r || pubKey || message ) = SHA512( R || A || M ) */
 	getHashParameters( CRYPT_ALGO_SHA2, SHA512_HASHSIZE, &hashFunction, 
-					   &hashSize );
+					   &hashSize, NULL );
 	hashFunction( hashInfo, NULL, 0, r, CURVE25519_SIZE, HASH_STATE_START );
 	hashFunction( hashInfo, NULL, 0, pubKey, CURVE25519_SIZE, 
 				  HASH_STATE_CONTINUE );

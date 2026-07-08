@@ -51,6 +51,9 @@ static const char *getSigTypeName( IN_ENUM( SIGNATURE ) \
 		case SIGNATURE_TLS13:
 			return( "TLS" );
 		
+		case SIGNATURE_CMS:
+		case SIGNATURE_CMS_PSS:
+		case SIGNATURE_CRYPTLIB:
 		default:
 			return( "CMS" );
 		}
@@ -172,18 +175,23 @@ static int createDlpSignature( OUT_BUFFER_OPT( bufSize, *length ) \
 			{
 #ifdef USE_PGP
 			case SIGNATURE_PGP:
+				REQUIRES( !checkOverflowMul( 2, ( 2 + sigComponentSize ) ) );
 				*length = 2 * ( 2 + sigComponentSize );
 				break;
 #endif /* USE_PGP */
 
 #ifdef USE_SSH
 			case SIGNATURE_SSH:
+				REQUIRES( !checkOverflowMul( 2, sigComponentSize ) );
 				*length = 2 * sigComponentSize;
 				break;
 #endif /* USE_SSH */
 
 #ifdef USE_INT_ASN1
 			default:
+				REQUIRES( !checkOverflowMul( 2, 
+											 sizeofObject( \
+												sigComponentSize + 1 ) ) );
 				*length = sizeofObject( \
 								( 2 * sizeofObject( \
 										sigComponentSize + 1 ) ) );
@@ -639,7 +647,12 @@ int checkSignature( IN_BUFFER( signatureLength ) const void *signature,
 	/* Extract general information.  The sigFormat setting is an 
 	   approximation based on the general signature type that we've been 
 	   given, it can be modified further down based on what 
-	   readSigFunction() tells us about the signature specifics */
+	   readSigFunction() tells us about the signature specifics.  We don't
+	   have to check for SIGNATURE_TLS13 because it's handled as 
+	   SIGNATURE_TLS, the only reason the distinction is made on signature
+	   creation is that for RSA, SIGNATURE_TLS13 uses PSS rather than PKCS 
+	   #1 while for the signature check the format is encoded in the TLS
+	   signature */
 	sigFormat = ( signatureType == SIGNATURE_TLS ) ? MECHANISM_SIG_TLS : \
 				( signatureType == SIGNATURE_CMS_PSS ) ? \
 				  MECHANISM_SIG_PSS : MECHANISM_SIG_PKCS1;

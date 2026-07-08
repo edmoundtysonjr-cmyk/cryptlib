@@ -354,7 +354,7 @@ int readExtensions( INOUT_PTR STREAM *stream,
 		{
 		TLSHELLO_ACTION_TYPE localActionType;
 		BOOLEAN extErrorInfoSet;
-		const char *description;
+		const char *description = NULL;
 		int type, extLen DUMMY_INIT, minLength, maxLength;
 
 		ENSURES( LOOP_INVARIANT_MED( noExtensions, 0, MAX_EXTENSIONS - 1 ) );

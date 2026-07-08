@@ -601,7 +601,7 @@ int checkKeyexValueLength( const SSH_HANDSHAKE_INFO *handshakeInfo,
 								const KEYEX_CHECK_TYPE checkType,
 						   INOUT_PTR ERROR_INFO *errorInfo );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN checkStrictKEX( IN_BUFFER( packetTraceLen ) BYTE *packetTrace,
+BOOLEAN checkStrictKEX( IN_BUFFER( packetTraceLen ) const BYTE *packetTrace,
 						IN_LENGTH_SHORT const int packetTraceLen,
 						IN_BOOL const BOOLEAN isServer );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
@@ -611,10 +611,10 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int writeExtensionsSSH( INOUT_PTR STREAM *stream );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int createPreauthChallengeResponse( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
-									const ATTRIBUTE_LIST *attributeListPtr );
+									const SESSION_ATTRIBUTE_LIST *attributeListPtr );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int createPreauthResponse( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
-						   const ATTRIBUTE_LIST *attributeListPtr );
+						   const SESSION_ATTRIBUTE_LIST *attributeListPtr );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int checkPreauthResponse( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
 						  INOUT_PTR ERROR_INFO *errorInfo );
@@ -625,7 +625,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4, 6 ) ) \
 int readAlgoString( INOUT_PTR STREAM *stream, 
 					IN_ARRAY( noAlgoStringEntries ) \
 						const ALGO_STRING_INFO *algoInfo,
-					IN_RANGE( 1, 100 ) const int noAlgoStringEntries, 
+					IN_RANGE( 1, 16 ) const int noAlgoStringEntries, 
 					OUT_INT_SHORT_Z int *algoParam, 
 					IN_BOOL const BOOLEAN useFirstMatch, 
 					INOUT_PTR ERROR_INFO *errorInfo );

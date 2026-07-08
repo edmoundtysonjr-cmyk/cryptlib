@@ -550,6 +550,7 @@ static int getFirstItemFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 		retExtObjDirect( status, DEVICE_ERRINFO, 
 						 deviceInfoPtr->iCryptKeyset );
 		}
+	*iCertificate = getnextcertInfo.cryptHandle;
 
 	return( CRYPT_OK );
 	}
@@ -600,6 +601,7 @@ static int getNextItemFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 		retExtObjDirect( status, DEVICE_ERRINFO, 
 						 deviceInfoPtr->iCryptKeyset );
 		}
+	*iCertificate = getnextcertInfo.cryptHandle;
 
 	return( CRYPT_OK );
 	}

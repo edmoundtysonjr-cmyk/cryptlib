@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						 cryptlib ODBC Mapping Routines						*
-*						Copyright Peter Gutmann 1996-2018					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -337,8 +337,8 @@ int dbxInitODBC( void )
 		pSQLGetData == NULL || pSQLGetDiagRec == NULL ||
 		pSQLGetInfo == NULL || pSQLGetStmtAttr == NULL ||
 		pSQLGetTypeInfo == NULL || pSQLPrepare == NULL || 
-		pSQLSetConnectAttr == NULL || pSQLSetEnvAttr == NULL || 
-		pSQLSetStmtAttr == NULL )
+		pSQLRowCount == NULL || pSQLSetConnectAttr == NULL || 
+		pSQLSetEnvAttr == NULL || pSQLSetStmtAttr == NULL )
 		{
 		/* Free the library reference and reset the handle */
 		DynamicUnload( hODBC );
@@ -1292,23 +1292,31 @@ static int getBackendInfo( INOUT_PTR DBMS_STATE_INFO *dbmsInfo )
 
 	assert( isWritePtr( dbmsInfo, sizeof( DBMS_STATE_INFO ) ) );
 
-	/* Check for various back-ends that require special-case handling */
+	/* Check for various back-ends that require special-case handling.  The
+	   returned length value is non-orthogonal, if the data will fit into 
+	   the buffer then it's the number of bytes written (including the null), 
+	   if not it's the number of bytes of storage required with sqlStatus == 
+	   SQL_SUCCESS_WITH_INFO (so still a success status) but sqlState == 
+	   01004, "String data, right truncated".  This means that the data is 
+	   present in truncated form and the length information isn't the actual 
+	   length */
 	sqlStatus = SQLGetInfo( dbmsInfo->hDbc, SQL_DBMS_NAME, buffer, 128 - 1,
 							&bufLen );
-	if( sqlStatusOK( sqlStatus ) && bufLen >= 5 )
-		{
-		buffer[ bufLen ] = '\0';	/* Keep static source anal.tools happy */
-		if( !strCompare( buffer, "MySQL", 5 ) )
-			dbmsInfo->backendType = DBMS_MYSQL;
-		if( bufLen >= 6 && !strCompare( buffer, "Access", 6 ) )
-			dbmsInfo->backendType = DBMS_ACCESS;
-		if( bufLen >= 6 && !strCompare( buffer, "SQLite", 6 ) )
-			dbmsInfo->backendType = DBMS_SQLITE;
-		if( bufLen >= 9 && !strCompare( buffer, "Interbase", 9 ) )
-			dbmsInfo->backendType = DBMS_INTERBASE;
-		if( bufLen >= 12 && !strCompare( buffer, "PostgreSQL", 10 ) )
-			dbmsInfo->backendType = DBMS_POSTGRES;
-		}
+	if( !sqlStatusOK( sqlStatus ) || bufLen < 5 )
+		return( CRYPT_OK );
+	buffer[ min( bufLen, 128 - 1 ) ] = '\0';
+			/* Keep static code analysis tools happy, taking into account 
+			   the non-orthogonal SQL_SUCCESS_WITH_INFO length reporting */
+	if( !strCompare( buffer, "MySQL", 5 ) )
+		dbmsInfo->backendType = DBMS_MYSQL;
+	if( bufLen >= 6 && !strCompare( buffer, "Access", 6 ) )
+		dbmsInfo->backendType = DBMS_ACCESS;
+	if( bufLen >= 6 && !strCompare( buffer, "SQLite", 6 ) )
+		dbmsInfo->backendType = DBMS_SQLITE;
+	if( bufLen >= 9 && !strCompare( buffer, "Interbase", 9 ) )
+		dbmsInfo->backendType = DBMS_INTERBASE;
+	if( bufLen >= 10 && !strCompare( buffer, "PostgreSQL", 10 ) )
+		dbmsInfo->backendType = DBMS_POSTGRES;
 
 	return( CRYPT_OK );
 	}
@@ -1715,6 +1723,19 @@ static int fetchData( const SQLHSTMT hStmt,
 		{
 		return( getErrorInfo( dbmsInfo, SQL_ERRLVL_STMT, hStmt,
 							  CRYPT_ERROR_READ ) );
+		}
+	if( sqlStatus == SQL_SUCCESS_WITH_INFO )
+		{
+		/* This function can return SQL_SUCCESS_WITH_INFO alongside 
+		   SQL_SUCCESS which in most cases is OK but for SQLGetData() will
+		   mean the data was truncated (see the long comment in 
+		   getBackendInfo()).  This should actually never occur since it's
+		   data that we've written and we ask for up to 
+		   MAX_QUERY_RESULT_SIZE back, but we perform a sanity-check for it
+		   and warn if it occurs */
+		DEBUG_DIAG(( "Stored data was larger than MAX_QUERY_RESULT_SIZE" ));
+		assert( DEBUG_WARN );	/* Catch this if it ever occurs */
+		return( CRYPT_ERROR_UNDERFLOW );
 		}
 	REQUIRES( isIntegerRange( length ) );
 	*dataLength = ( int ) length;

@@ -908,7 +908,12 @@ static int readRADIUSEAP( INOUT_PTR STREAM *stream,
 											  ( isReqResp ? 1 : 0 ) ) );
 	length = totalLength - ( EAP_HEADER_LENGTH + ( isReqResp ? 1 : 0 ) );
 	if( length < 0 || length > RADIUS_MAX_PACKET_SIZE - EAP_HEADER_LENGTH )
+		{
+		DEBUG_PRINT(( "    Invalid %s (%d) EAP packet length %d, should be "
+					  "%d...%d.\n", getEAPPacketName( type ), type, length, 
+					  0, RADIUS_MAX_PACKET_SIZE - EAP_HEADER_LENGTH ));
 		return( CRYPT_ERROR_BADDATA );
+		}
 
 	/* The header data is OK, copy it across to the EAP state info.  We
 	   can't just directly read it in as part of the earlier read because 
@@ -937,16 +942,18 @@ static int readRADIUSEAP( INOUT_PTR STREAM *stream,
 				  getEAPSubtypeName( subType ), subType, length, counter ));
 
 	/* Alongside the earlier check that there's at least as much EAP data as 
-	   RADIUS data, we have to have at least as much EAP data present as 
-	   there is RADIUS data.  Since we can only get to here if isReqResp is
-	   true we don't need to perform the previous conditional calculation 
-	   for the header length */
+	   RADIUS data, we have to have no more EAP data than RADIUS data.  
+	   Since we can only get to here if isReqResp is true we don't need to 
+	   perform the previous conditional calculation for the header length */
+#if 0	/* 5/7/26 Theoretically correct but incorrectly truncates lengths 
+				  due to RADIUS packet fragmentation */
 	if( totalLength > radiusEncapsLength )
 		{
 		REQUIRES( !checkOverflowSub( radiusEncapsLength,
 									 EAP_HEADER_LENGTH + 1 ) );
 		length = radiusEncapsLength - ( EAP_HEADER_LENGTH + 1 );
 		}
+#endif /* 0 */
 
 	/* Read any further data */
 	switch( eapInfo->eapSubtypeRead )
@@ -995,8 +1002,7 @@ static int readRADIUSEAP( INOUT_PTR STREAM *stream,
 				eapInfo->eapFlags |= EAP_FLAG_EAPACK;
 				}
 
-			/* Update the EAP state with the checked values, see the comment
-			   earlier */
+			/* Update the EAP state with the adjusted/checked values */
 			eapInfo->eapLength = length;
 			if( flags & EAPTLS_FLAG_MOREFRAGS )
 				eapInfo->eapFlags |= EAP_FLAG_FRAGMENTED;
@@ -1022,8 +1028,10 @@ static int readRADIUSEAP( INOUT_PTR STREAM *stream,
 				   EAP length.  This doesn't actually matter in practice 
 				   since it's a dummy packet that we don't do anything with,
 				   it's done purely so that the accounting is correct */
+#if 0	/* 5/7/26 See earlier comment */
 				assert( eapInfo->eapLength == length );
 				eapInfo->eapLength = length;
+#endif /* 0 */
 
 				break;
 				}

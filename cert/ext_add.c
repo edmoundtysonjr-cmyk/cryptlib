@@ -704,6 +704,7 @@ int addAttributeField( INOUT_PTR DATAPTR_ATTRIBUTE *listHeadPtr,
 	int status;
 
 	assert( isWritePtr( listHeadPtr, sizeof( DATAPTR_ATTRIBUTE ) ) );
+	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
 	assert( isWritePtr( errorLocus, sizeof( CRYPT_ATTRIBUTE_TYPE ) ) );
 	assert( isWritePtr( errorType, sizeof( CRYPT_ERRTYPE_TYPE ) ) );
 
@@ -849,6 +850,7 @@ int addAttributeFieldString( INOUT_PTR DATAPTR_ATTRIBUTE *listHeadPtr,
 
 	assert( isWritePtr( listHeadPtr, sizeof( DATAPTR_ATTRIBUTE ) ) );
 	assert( isReadPtrDynamic( data, dataLength ) );
+	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
 	assert( isWritePtr( errorLocus, sizeof( CRYPT_ATTRIBUTE_TYPE ) ) );
 	assert( isWritePtr( errorType, sizeof( CRYPT_ERRTYPE_TYPE ) ) );
 

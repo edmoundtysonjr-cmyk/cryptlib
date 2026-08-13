@@ -544,7 +544,10 @@ static int connectRTCSDirect( void )
 	status = cryptCreateSession( &cryptSession, CRYPT_UNUSED,
 								 CRYPT_SESSION_RTCS );
 	if( status == CRYPT_ERROR_PARAM3 )	/* RTCS session access not available */
+		{
+		cryptDestroyCert( cryptCert );
 		return( CRYPT_ERROR_NOTAVAIL );
+		}
 #ifdef RTCS_SERVER_NAME
 	status = cryptSetAttributeString( cryptSession,
 								CRYPT_SESSINFO_SERVER_NAME, RTCS_SERVER_NAME,

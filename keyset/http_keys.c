@@ -44,6 +44,9 @@ static const char *getKeyName( IN_KEYID const CRYPT_KEYID_TYPE keyIDtype )
 		case CRYPT_KEYID_URI:
 			return( "uri" );
 
+#if 0	/* The caller only ever uses CRYPT_KEYID_NAME or CRYPT_KEYID_URI, the
+		   following are here only to document the additional possible key
+		   types */
 		case CRYPT_IKEYID_KEYID:
 			return( "sKIDHash" );
 
@@ -52,6 +55,7 @@ static const char *getKeyName( IN_KEYID const CRYPT_KEYID_TYPE keyIDtype )
 
 		case CRYPT_IKEYID_CERTID:
 			return( "certHash" );
+#endif /* 0 */
 		}
 
 	retIntError_Null();
@@ -297,7 +301,7 @@ static int initFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 
 /* Close a previously-opened HTTP connection */
 
-STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int shutdownFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr )
 	{
 	HTTP_INFO *httpInfo = keysetInfoPtr->keysetHTTP;

@@ -8,9 +8,14 @@
 #ifndef ZCONF_H
 #define ZCONF_H
 
-/* Disable use of gz* functions and optional add-ons that we don't need - pcg */
+/* Disable use of gz* functions and optional add-ons that we don't need.
+   However this also enables a pile of other weird behaviour such as
+   preventing HAVE_MEMCPY from being defined, so we explicitly define
+   that here - pcg */
 
 #define Z_SOLO
+#define HAVE_MEMCPY
+#include <string.h>		/* For memXXX() prototypes */
 
 /* Disable unused include handling normally enabled by ./configure - pcg */
 

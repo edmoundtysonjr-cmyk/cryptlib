@@ -22,7 +22,7 @@
 
 /****************************************************************************
 *																			*
-*							CMS Wrap/Unwrap Mechanisms						*
+*								Utility Functions							*
 *																			*
 ****************************************************************************/
 
@@ -89,7 +89,7 @@ int exportCMS( STDC_UNUSED void *dummy,
 	BYTE *keyBlockPtr = ( BYTE * ) mechanismInfo->wrappedData;
 	BYTE dataSample[ 16 + 8 ];
 	CFI_CHECK_TYPE CFI_CHECK_VALUE = CFI_CHECK_INIT;
-	int keySize, padSize, status = CRYPT_OK;
+	int keySize, padSize, status;
 
 	UNUSED_ARG_OPT( dummy );
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_WRAP_INFO ) ) );
@@ -124,7 +124,8 @@ int exportCMS( STDC_UNUSED void *dummy,
 							CMS_KEYBLOCK_HEADERSIZE + keySize + padSize;
 		return( CRYPT_OK );
 		}
-	ANALYSER_HINT( mechanismInfo->wrappedDataLength > ( 2 * 8 ) && \
+	ANALYSER_HINT( mechanismInfo->wrappedDataLength >= CMS_KEYBLOCK_HEADERSIZE + \
+													   MIN_KEYSIZE && \
 				   mechanismInfo->wrappedDataLength < MAX_INTLENGTH_SHORT );
 
 	/* Make sure that the wrapped key data fits in the output */
@@ -254,8 +255,9 @@ int importCMS( STDC_UNUSED void *dummy,
 		   encryption block size */
 		return( CRYPT_ERROR_OVERFLOW );
 		}
-	ANALYSER_HINT( mechanismInfo->wrappedDataLength >= 8 && \
-				   mechanismInfo->wrappedDataLength < CRYPT_MAX_KEYSIZE + 16 );
+	ANALYSER_HINT( mechanismInfo->wrappedDataLength >= MIN_KEYSIZE && \
+				   mechanismInfo->wrappedDataLength <= CRYPT_MAX_KEYSIZE + \
+													   CRYPT_MAX_IVSIZE );
 	dataEndPtr = buffer + mechanismInfo->wrappedDataLength;
 
 	/* Save the current IV for the inner decryption */

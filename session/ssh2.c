@@ -214,23 +214,54 @@ int checkKeyexValueLength( const SSH_HANDSHAKE_INFO *handshakeInfo,
    SSH_MSG_KEXINIT we'll see (server-side) a 30 but don't know whether it's 
    a SSH_MSG_xxx_INIT or an SSH_MSG_KEX_DH_GEX_REQUEST_OLD, or (client-side) 
    a 31 but don't know whether it's a SSH_MSG_xxx_REPLY or 
-   SSH_MSG_KEX_DH_GEX_GROUP.  To deal with this we look ahead one packet and 
-   treat a 30 as a SSH_MSG_KEX_DH_GEX_REQUEST_OLD and a 31 as a 
-   SSH_MSG_KEX_DH_GEX_GROUP if they're followed by a 
-   SSH_MSG_KEXDH_INIT/REPLY.
+   SSH_MSG_KEX_DH_GEX_GROUP.  We could look ahead one packet and modify our
+   view of what we're seeing based on that, but a much simpler way to do it
+   is to have an allowlist of permitted traces and check the submitted trace
+   against that.
    
-   Note that the following could actually be replaced by a simple loop that 
-   just looks for packets < 30 or > 34 since the protocol ladder-diagram 
-   implementation enforces the correct packet sequencing, this is just a 
-   belt-and-suspenders check on the packets, alongside an exercise in 
-   documenting the message flow */
+   Note that the following could in theory be replaced by a simple loop that 
+   just looks for packets < 30 or > 34 bracketed by the INIT/NEWKEYS since 
+   the protocol ladder-diagram implementation enforces the correct packet 
+   sequencing, but we perform the full check as belt-and-suspenders as well 
+   as an exercise in documenting the message flow.
+   
+   In a way, this is *really* strict KEX */
+
+typedef struct {
+	BUFFER_FIXED( traceLength ) \
+	const BYTE trace[ 6 ];
+	const int traceLength;
+	} KEYEX_TRACE_INFO;
+	
+static const KEYEX_TRACE_INFO clientKeyexTrace[] = {
+	/* Trace of allowable packets as read by the client.  The first one 
+	   covers all of the 20, 31 variants (DH, ECDH, hybrid), the remainder
+	   the negotiated DH variants 20, 31, 33 */
+	{ { SSH_MSG_KEXINIT, SSH_MSG_KEXDH_REPLY, SSH_MSG_NEWKEYS }, 3 },
+	{ { SSH_MSG_KEXINIT, SSH_MSG_KEX_DH_GEX_GROUP, SSH_MSG_KEX_DH_GEX_REPLY, SSH_MSG_NEWKEYS }, 4 },
+		{ { 0 }, 0 }, { { 0 }, 0 }
+	};
+static const KEYEX_TRACE_INFO serverKeyexTrace[] = {
+	/* Trace of allowable packets as read by the server.  The first one
+	   covers all of the 20, 30 variants (DH, ECDH, hybrid), the remainder
+	   the negotiated DH variants 20, 34, 32 or 20, 30, 32 */
+	{ { SSH_MSG_KEXINIT, SSH_MSG_KEXDH_INIT, SSH_MSG_NEWKEYS }, 3 },
+	{ { SSH_MSG_KEXINIT, SSH_MSG_KEX_DH_GEX_REQUEST, SSH_MSG_KEX_DH_GEX_INIT, SSH_MSG_NEWKEYS }, 4 },
+	{ { SSH_MSG_KEXINIT, SSH_MSG_KEX_DH_GEX_REQUEST_OLD, SSH_MSG_KEX_DH_GEX_INIT, SSH_MSG_NEWKEYS }, 4 },
+		{ { 0 }, 0 }, { { 0 }, 0 }
+	};
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN checkStrictKEX( IN_BUFFER( packetTraceLen ) const BYTE *packetTrace,
 						IN_LENGTH_SHORT const int packetTraceLen,
 						IN_BOOL const BOOLEAN isServer )
 	{
-	int gexOffset = 0;
+	const KEYEX_TRACE_INFO *keyexTraceTbl = isServer ? \
+				serverKeyexTrace : clientKeyexTrace;
+	const int keyexTraceTblSize = isServer ? \
+				FAILSAFE_ARRAYSIZE( serverKeyexTrace, KEYEX_TRACE_INFO ) : \
+				FAILSAFE_ARRAYSIZE( clientKeyexTrace, KEYEX_TRACE_INFO );
+	LOOP_INDEX i;
 	
 	assert( isReadPtrDynamic( packetTrace, packetTraceLen ) );
 	
@@ -240,55 +271,26 @@ BOOLEAN checkStrictKEX( IN_BUFFER( packetTraceLen ) const BYTE *packetTrace,
 	/* We need at least three packets in the trace */
 	if( packetTraceLen < 3 )
 		return( FALSE );
-	
-	/* The first packet must be a SSH_MSG_KEXINIT */
-	if( packetTrace[ 0 ] != SSH_MSG_KEXINIT )
-		return( FALSE );
-	if( isServer )
+
+	/* Check whether the packet trace matches one of the permitted ones */
+	LOOP_SMALL( i = 0, i < keyexTraceTblSize && \
+					   keyexTraceTbl[ i ].traceLength != 0, i++ )
 		{
-		/* Optional DH parameter negotiation */
-		if( packetTrace[ 1 ] == SSH_MSG_KEX_DH_GEX_REQUEST || \
-			( packetTrace[ 1 ] == SSH_MSG_KEX_DH_GEX_REQUEST_OLD && \
-			  packetTrace[ 2 ] == SSH_MSG_KEX_DH_GEX_INIT ) )
+		ENSURES( LOOP_INVARIANT_SMALL( i, 0, keyexTraceTblSize - 1 ) );
+		
+		if( keyexTraceTbl[ i ].traceLength != packetTraceLen )
+			continue;
+		if( !memcmp( keyexTraceTbl[ i ].trace, packetTrace, 
+					 packetTraceLen ) )
 			{
-			if( packetTraceLen < 4 )
-				return( FALSE );
-			if( packetTrace[ 2 ] != SSH_MSG_KEX_DH_GEX_INIT )
-				return( FALSE );
-			gexOffset = 1;
-			}
-		else
-			{
-			/* Just a straight SSH_MSG_xxx_INIT */
-			if( packetTrace[ 1 ] != SSH_MSG_KEXDH_INIT )
-				return( FALSE );
+			DEBUG_PRINT(( "Strict KEX check passed.\n" ));
+			return( TRUE );
 			}
 		}
-	else
-		{
-		/* Optional DH parameter negotiation.  The second check of
-		   packetTrace[ 2 ] below is redundant but is present to document
-		   what's going on */
-		if( packetTrace[ 1 ] == SSH_MSG_KEX_DH_GEX_GROUP && \
-			packetTrace[ 2 ] == SSH_MSG_KEX_DH_GEX_REPLY )
-			{
-			if( packetTraceLen < 4 )
-				return( FALSE );
-			if( packetTrace[ 2 ] != SSH_MSG_KEX_DH_GEX_REPLY )
-				return( FALSE );
-			gexOffset = 1;
-			}
-		else
-			{
-			/* Just a straight SSH_MSG_KEXDH_REPLY */
-			if( packetTrace[ 1 ] != SSH_MSG_KEXDH_REPLY )
-				return( FALSE );
-			}
-		}
-	if( packetTrace[ 2 + gexOffset ] != SSH_MSG_NEWKEYS )
-		return( FALSE );
-	
-	return( TRUE );
+	ENSURES( LOOP_BOUND_OK );
+
+	DEBUG_PRINT(( "Strict KEX violation detected.\n" ));
+	return( FALSE );
 	}
 
 /****************************************************************************

@@ -4656,7 +4656,7 @@ static int cmsEnvelopeSign( const BOOLEAN useDatasize,
 				 ( !isPGP ? \
 				   ( useDatasize ? "smi_sig_detached" : \
 								   "smi_sig_detached_ndef" ) : \
-				   "pgp_gig_detached.pgp" ) : \
+				   "pgp_sig_detached.pgp" ) : \
 			   useExtAttributes ? \
 				 ( useDatasize ? "smi_sig_attr" : "smi_sig_attr_ndef" ) : \
 			   useTimestamp ? \
@@ -5835,8 +5835,11 @@ int testPGPEnvelopeSignedDataImport( void )
 
 	/* Process the PGP 2.x signed data.  Create with:
 
-		pgp -s +secring="secring.pgp" +pubring="pubring.pgp" -u test test.txt */
-#ifdef USE_PGP2
+		pgp -s +secring="secring.pgp" +pubring="pubring.pgp" -u test test.txt
+		
+	   This file uses MD5 which was disabled in cryptlib 3.4.9.4 outside of TLS 
+	   1.1 use */
+#if defined( USE_PGP2 ) && defined( USE_MD5 ) && 0
 	count = readFileFromTemplate( PGP_SIG_FILE_TEMPLATE, 1, 
 								  "PGP 2.x signed data", globalBuffer,
 								  BUFFER_SIZE );
@@ -5851,7 +5854,7 @@ int testPGPEnvelopeSignedDataImport( void )
 					  globalBuffer, count ) )
 		return( FALSE );
 	fputs( "Import of PGP 2.x signed data succeeded.\n\n", outputStream );
-#endif /* USE_PGP2 */
+#endif /* USE_PGP2 && USE_MD5 */
 
 #if 0	/* Disabled because it uses a 512-bit sig and there doesn't appear to
 		   be any way to create a new file in this format */
@@ -5936,8 +5939,8 @@ int testPGPEnvelopeSignedDataImport( void )
 	   packet versions.  The files are:
 
 		Signed-5: Version 4 + Version 4 signature.
-		Signed-6: Version 4 + Version n+1 signature.
-		Signed-7: Version n+1 + Version 4 signature.
+		Signed-6: Version 4 + Version 7 signature.
+		Signed-7: Version 7 + Version 4 signature.
 		
 	   Again, we have to use the partially-completed hash value for the
 	   signatures */
@@ -5956,7 +5959,7 @@ int testPGPEnvelopeSignedDataImport( void )
 	if( count <= 0 )
 		return( FALSE );
 	count = readFileFromTemplate( PGP_SIG_FILE_TEMPLATE, 6, 
-								  "OpenPGP detached v4+v5 signature", 
+								  "OpenPGP detached v4+v7 signature", 
 								  globalBuffer, BUFFER_SIZE );
 	if( count <= 0 )
 		return( FALSE );
@@ -5970,7 +5973,7 @@ int testPGPEnvelopeSignedDataImport( void )
 	if( count <= 0 )
 		return( FALSE );
 	count = readFileFromTemplate( PGP_SIG_FILE_TEMPLATE, 7, 
-								  "OpenPGP detached v5+v4 signature", 
+								  "OpenPGP detached v7+v4 signature", 
 								  globalBuffer, BUFFER_SIZE );
 	if( count <= 0 )
 		return( FALSE );

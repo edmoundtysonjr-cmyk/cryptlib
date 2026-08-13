@@ -5,19 +5,15 @@
 *																			*
 ****************************************************************************/
 
-#if defined( INC_ALL )
-  #include "crypt.h"
-#else
-  #include "crypt.h"
-#endif /* Compiler-specific includes */
+#include "crypt.h"
 
 /* The minimum size of an attribute-list element (in this case for 
    sessions), used for error checking in debug mode.  The values are various 
    ints and pointers, and the 'previous' and 'next' pointer for the list 
    itself */
 
-#define MIN_ATTRLIST_SIZE	( ( 7 * sizeof( int ) ) + \
-							  ( 2 * sizeof( void * ) ) )
+#define MIN_ATTRLIST_SIZE	( ( 6 * sizeof( int ) ) + \
+							  ( 2 * sizeof( DATAPTR ) ) )
 
 /* Movement codes for the attribute cursor */
 
@@ -716,7 +712,7 @@ const void *attributeMoveCursor( IN_PTR_OPT const void *currentCursor,
    standard functions */
 
 CHECK_RETVAL_DATAPTR STDC_NONNULL_ARG( ( 2 ) ) \
-DATAPTR dataptrAttributeFind( IN_PTR_OPT const DATAPTR attributePtr,
+DATAPTR dataptrAttributeFind( IN_DATAPTR_OPT const DATAPTR attributePtr,
 							  IN_PTR GETATTR_FUNCTION getAttrFunction,
 							  IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE attributeID )
 	{
@@ -734,7 +730,7 @@ DATAPTR dataptrAttributeFind( IN_PTR_OPT const DATAPTR attributePtr,
 	}
 
 CHECK_RETVAL_DATAPTR STDC_NONNULL_ARG( ( 2 ) ) \
-DATAPTR dataptrAttributeFindEx( IN_PTR_OPT const DATAPTR attributePtr,
+DATAPTR dataptrAttributeFindEx( IN_DATAPTR_OPT const DATAPTR attributePtr,
 								IN_PTR GETATTR_FUNCTION getAttrFunction,
 								IN_ENUM_OPT( CRYPT_ATTRIBUTE ) \
 									const CRYPT_ATTRIBUTE_TYPE groupID,
@@ -758,7 +754,7 @@ DATAPTR dataptrAttributeFindEx( IN_PTR_OPT const DATAPTR attributePtr,
 	}
 
 CHECK_RETVAL_DATAPTR STDC_NONNULL_ARG( ( 2 ) ) \
-DATAPTR dataptrAttributeFindNextInstance( IN_PTR_OPT DATAPTR attributePtr,
+DATAPTR dataptrAttributeFindNextInstance( IN_DATAPTR_OPT DATAPTR attributePtr,
 										  IN_PTR GETATTR_FUNCTION getAttrFunction )
 	{
 	DATAPTR attributeData;
@@ -775,7 +771,7 @@ DATAPTR dataptrAttributeFindNextInstance( IN_PTR_OPT DATAPTR attributePtr,
 	}
 
 CHECK_RETVAL_DATAPTR STDC_NONNULL_ARG( ( 2 ) ) \
-DATAPTR dataptrAttributeMoveCursor( IN_PTR_OPT const DATAPTR currentCursor,
+DATAPTR dataptrAttributeMoveCursor( IN_DATAPTR_OPT const DATAPTR currentCursor,
 									IN_PTR GETATTR_FUNCTION getAttrFunction,
 									IN_ATTRIBUTE \
 										const CRYPT_ATTRIBUTE_TYPE attributeMoveType,

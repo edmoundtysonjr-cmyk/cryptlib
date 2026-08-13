@@ -644,7 +644,7 @@ static BOOLEAN checkAttributeRangeSpecial( const int rangeType,
 CHECK_RETVAL_RANGE( 0, INT_MAX ) STDC_NONNULL_ARG( ( 1 ) ) \
 static int getWideChar( const BYTE *string )
 	{
-	long value = 0;
+	int value = 0;
 #ifdef DATA_LITTLEENDIAN
 	int shiftAmount = 0;
 #endif /* DATA_LITTLEENDIAN */
@@ -656,18 +656,22 @@ static int getWideChar( const BYTE *string )
 	/* Read a widechar value from a byte string */
 	LOOP_SMALL( i = 0, i < sizeof( wchar_t ), i++ )
 		{
-		ENSURES_EXT( LOOP_INVARIANT_SMALL( i, 0, sizeof( wchar_t ) - 1 ), 0 );
+		ENSURES_EXT( LOOP_INVARIANT_SMALL( i, 0, sizeof( wchar_t ) - 1 ), \
+					 INT_MAX );
 
-		value |= ( ( long ) ( string[ i ] ) << shiftAmount );
+		REQUIRES_EXT( !checkOverflowShift( byteToInt( string[ i ] ), \
+										   shiftAmount ), INT_MAX );
+		value |= byteToInt( string[ i ] ) << shiftAmount;
 		shiftAmount += 8;
 		}
-
 #else
 	/* Read a widechar value from a byte string */
 	LOOP_SMALL( i = 0, i < sizeof( wchar_t ), i++ )
 		{
-		ENSURES_EXT( LOOP_INVARIANT_SMALL( i, 0, sizeof( wchar_t ) - 1 ), 0 );
+		ENSURES_EXT( LOOP_INVARIANT_SMALL( i, 0, sizeof( wchar_t ) - 1 ), \
+					 INT_MAX );
 
+		REQUIRES_EXT( !checkOverflowShift( value, 8 ), INT_MAX );
 		value = ( value << 8 ) | string[ i ];
 		}
 #endif /* Endianness-specific wchar_t extraction */

@@ -7,10 +7,10 @@
 
 /* Under Windows debug mode everything is enabled by default when building 
    cryptlib, so we also enable the required options here.  Under Unix it'll
-   need to be enabled manually by adding '-DUSE_EAP -DUSE_DES' to the build 
-   command.  Note that this needs to be done via the build process even if
-   it's already defined in config.h since that only applies to cryptlib, not
-   to this module */
+   need to be enabled manually by using 'make XCFLAGS="-DUSE_EAP"' or adding 
+   '-DUSE_EAP -DUSE_DES' to the build command.  Note that this needs to be 
+   done via the build process even if it's already defined in config.h since 
+   that only applies to cryptlib, not to this module */
 
 #if defined( _MSC_VER ) && !defined( NDEBUG )
   #define USE_EAP
@@ -262,7 +262,7 @@ static int testEAPSubprotocol( const PROTOCOL_TYPE protocolType,
 	switch( protocolType )
 		{
 		case PROTOCOL_RADIUSPING:
-			/* N2, FreeRADIUS */
+			/* N2 or XU4, FreeRADIUS, RFC 5997 RADIUS ping */
 			serverName = "odroid.n2.lan:1812";
 			user = "[ping]";
 			password = "testing123";
@@ -516,27 +516,27 @@ static int testEAPSubprotocol( const PROTOCOL_TYPE protocolType,
 
 int testEAP( void )
 	{
-#if 1
+#if 0	/* RADIUS ping */
 	testEAPSubprotocol( PROTOCOL_RADIUSPING, AUTH_PAP, TEST_NORMAL, FALSE );
-#endif /* RADIUS ping */
-#if 0
+#endif 
+#if 0	/* EAP-TTLS / XU4 */
 	testEAPSubprotocol( PROTOCOL_EAPTTLS, AUTH_PAP, TEST_NORMAL, FALSE );
 	testEAPSubprotocol( PROTOCOL_EAPTTLS, AUTH_PAP, TEST_WRONGUSER, FALSE );
 	testEAPSubprotocol( PROTOCOL_EAPTTLS, AUTH_PAP, TEST_WRONGPASSWORD, FALSE );
 	testEAPSubprotocol( PROTOCOL_EAPTTLS, AUTH_CHAP, TEST_NORMAL, FALSE );
 	testEAPSubprotocol( PROTOCOL_EAPTTLS, AUTH_MSCHAPV2, TEST_NORMAL, FALSE );
 	testEAPSubprotocol( PROTOCOL_EAPTTLS, AUTH_MSCHAPV2, TEST_WRONGPASSWORD, FALSE );
-#endif /* EAP-TTLS */
-#if 0
+#endif /* 0 */
+#if 0	/* PEAP, N2 */
 	testEAPSubprotocol( PROTOCOL_PEAP, AUTH_MSCHAPV2, TEST_NORMAL, FALSE );
 	testEAPSubprotocol( PROTOCOL_PEAP, AUTH_MSCHAPV2, TEST_WRONGUSER, FALSE );
 	testEAPSubprotocol( PROTOCOL_PEAP, AUTH_MSCHAPV2, TEST_WRONGPASSWORD, FALSE );
-#endif /* PEAP */
-#if 0
+#endif /* 0 */
+#if 0	/* PEAP to Windows NPS */
 	testEAPSubprotocol( PROTOCOL_PEAP_NPS, AUTH_MSCHAPV2, TEST_NORMAL, FALSE );
 	testEAPSubprotocol( PROTOCOL_PEAP_NPS, AUTH_MSCHAPV2, TEST_WRONGUSER, FALSE );
 	testEAPSubprotocol( PROTOCOL_PEAP_NPS, AUTH_MSCHAPV2, TEST_WRONGPASSWORD, FALSE );
-#endif /* PEAP to Windows NPS */
+#endif /* 0 */
 
 	return( TRUE );
 	}

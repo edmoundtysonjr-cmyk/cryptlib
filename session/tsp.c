@@ -288,11 +288,11 @@ static int readTSPRequest( INOUT_PTR STREAM *stream,
 				( CRYPT_ERROR_BADDATA, errorInfo, 
 				  "Invalid TSP request additional information fields" ) );
 		}
-	CFI_CHECK_UPDATE( "processAddiotionalFields" );
+	CFI_CHECK_UPDATE( "processAdditionalFields" );
 
 	ENSURES( CFI_CHECK_SEQUENCE_3( "readMessageImprint", 
 								   "processMessageImprint", 
-								   "processAddiotionalFields" ) );
+								   "processAdditionalFields" ) );
 
 	return( CRYPT_OK );
 	}
@@ -805,7 +805,7 @@ static int sendServerResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   that signTSToken() gets suspicious of very large buffer sizes, for 
 	   example when the user has specified the use of a huge send buffer */
 	status = signTSToken( sessionInfoPtr->receiveBuffer + 9,
-						  min( sessionInfoPtr->receiveBufSize, \
+						  min( sessionInfoPtr->receiveBufSize - 9, \
 							   MAX_INTLENGTH_SHORT - 1 ), &responseLength, 
 						  protocolInfo->hashAlgo, tstBuffer, tstLength, 
 						  sessionInfoPtr->privateKey, 

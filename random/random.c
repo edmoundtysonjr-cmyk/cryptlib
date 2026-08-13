@@ -152,6 +152,12 @@ static BOOLEAN sanityCheckRandom( const RANDOM_INFO *randomInfo )
 		DEBUG_PUTS(( "sanityCheckRandom: Mix count" ));
 		return( FALSE );
 		}
+	if( randomInfo->prevOutputIndex < 0 || \
+		randomInfo->prevOutputIndex >= RANDOMPOOL_SAMPLES )
+		{
+		DEBUG_PUTS(( "sanityCheckRandom: Output sampling" ));
+		return( FALSE );
+		}
 
 	return( TRUE );
 	}
@@ -224,9 +230,13 @@ static int mixRandomPool( INOUT_PTR RANDOM_INFO *randomInfo )
 
 	assert( isWritePtr( randomInfo, sizeof( RANDOM_INFO ) ) );
 
+	static_assert( RANDOMPOOL_SIZE % 32 == 0,
+				   "Random pool size isn't a multuple of SHA-2 hash size" );
+
 	REQUIRES( sanityCheckRandom( randomInfo ) );
 
-	getHashAtomicParameters( PRNG_ALGO, 0, &hashFunctionAtomic, &hashSize );
+	getHashAtomicParameters( CRYPT_ALGO_SHA2, 0, &hashFunctionAtomic, 
+							 &hashSize );
 
 	/* Stir up the entire pool.  We can't check the return value of the
 	   hashing call because there isn't one, however the hashing code has 
@@ -242,7 +252,8 @@ static int mixRandomPool( INOUT_PTR RANDOM_INFO *randomInfo )
 		ENSURES( LOOP_INVARIANT_MED_XXX( hashIndex, 0, RANDOMPOOL_SIZE - 1 ) );
 
 		/* Precondition: We're processing hashSize bytes at a time */
-		REQUIRES( hashIndex % hashSize == 0 );
+		REQUIRES( !checkOverflowDiv( hashIndex, hashSize ) && \
+				  hashIndex % hashSize == 0 );
 
 		/* If we're at the start of the pool then the first block that we hash
 		   is at the end of the pool, otherwise it's the block immediately
@@ -294,9 +305,9 @@ static int mixRandomPool( INOUT_PTR RANDOM_INFO *randomInfo )
 
 		/* Hash the data in the circular pool, depositing the result at position 
 		   p...p + hashSize */
-		REQUIRES( !checkOverflowSub( RANDOMPOOL_ALLOCSIZE, hashIndex ) );
+		REQUIRES( !checkOverflowSub( RANDOMPOOL_SIZE, hashIndex ) );
 		hashFunctionAtomic( randomInfo->randomPool + hashIndex,
-							RANDOMPOOL_ALLOCSIZE - hashIndex, 
+							RANDOMPOOL_SIZE - hashIndex, 
 							dataBuffer, dataBufIndex );
 		}
 	ENSURES( LOOP_BOUND_OK );
@@ -395,12 +406,19 @@ static int tryGetRandomOutput( INOUT_PTR RANDOM_INFO *randomInfo,
 			  exportedRandomInfo->randomPoolMixes == 0 && \
 			  exportedRandomInfo->x917Inited == FALSE );
 
+	/* A second precondition, we're using the X9.17 interpretation of the
+	   generator, making it a CSPRNG, rather than the X9.31 one, a pure 
+	   PRNG (see the long comment in random/rand_x917.c for details).  It
+	   wouldn't be fatal to use the PRNG form, it's just not as good as 
+	   the CSPRNG so we always prefer that */
+	REQUIRES( randomInfo->useX931 == FALSE );
+
 	/* Copy the contents of the main pool across to the export pool,
 	   transforming it as we go by flipping all of the bits */
-	LOOP_EXT( i = 0, i < RANDOMPOOL_ALLOCSIZE, i++, RANDOMPOOL_ALLOCSIZE + 1 )
+	LOOP_EXT( i = 0, i < RANDOMPOOL_SIZE, i++, RANDOMPOOL_SIZE + 1 )
 		{
-		ENSURES( LOOP_INVARIANT_EXT( i, 0, RANDOMPOOL_ALLOCSIZE - 1,
-									 RANDOMPOOL_ALLOCSIZE + 1 ) );
+		ENSURES( LOOP_INVARIANT_EXT( i, 0, RANDOMPOOL_SIZE - 1,
+									 RANDOMPOOL_SIZE + 1 ) );
 
 		exportedRandomInfo->randomPool[ i ] = \
 					intToByte( randomInfo->randomPool[ i ] ^ 0xFF );
@@ -411,8 +429,8 @@ static int tryGetRandomOutput( INOUT_PTR RANDOM_INFO *randomInfo,
 	/* Postcondition for the bit-flipping: The two pools differ, and the
 	   difference is in the flipped bits */
 	ENSURES( memcmp( randomInfo->randomPool, exportedRandomInfo->randomPool,
-					 RANDOMPOOL_ALLOCSIZE ) );
-	FORALL( i, 0, RANDOMPOOL_ALLOCSIZE, \
+					 RANDOMPOOL_SIZE ) );
+	FORALL( i, 0, RANDOMPOOL_SIZE, \
 			randomInfo->randomPool[ i ] == \
 							( exportedRandomInfo->randomPool[ i ] ^ 0xFF ) );
 
@@ -432,7 +450,7 @@ static int tryGetRandomOutput( INOUT_PTR RANDOM_INFO *randomInfo,
 	   is more than just the bit flipping (this has a ~1e-14 chance of a false
 	   positive, which should be safe) */
 	ENSURES( memcmp( randomInfo->randomPool, exportedRandomInfo->randomPool,
-					 RANDOMPOOL_ALLOCSIZE ) );
+					 RANDOMPOOL_SIZE ) );
 	ENSURES( randomInfo->randomPool[ 0 ] != \
 					( exportedRandomInfo->randomPool[ 0 ] ^ 0xFF ) ||
 			 randomInfo->randomPool[ 8 ] != \
@@ -477,7 +495,7 @@ static int tryGetRandomOutput( INOUT_PTR RANDOM_INFO *randomInfo,
 
 	/* Process the exported pool with the X9.17 generator */
 	status = generateX917( randomInfo, exportedRandomInfo->randomPool,
-						   RANDOMPOOL_ALLOCSIZE );
+						   RANDOMPOOL_SIZE );
 	if( cryptStatusError( status ) )
 		{
 		endRandomPool( exportedRandomInfo );
@@ -491,17 +509,28 @@ static int tryGetRandomOutput( INOUT_PTR RANDOM_INFO *randomInfo,
 	   140 requires an absolute failure if there's a duplicate rather than
 	   simply signalling a problem and letting the higher layer handle it.
 	   Because this will lead to false positives even for a perfect 
-	   generator we provide a custom check in which if we get a match in the 
-	   first 32 bits then we perform a backup check on the full 
-	   RANDOMPOOL_SAMPLE_SIZE bytes and return a hard failure if all of the 
-	   bits match.
+	   generator we check the full RANDOMPOOL_SAMPLE_SIZE bytes and return a 
+	   hard failure if all of the bits match.
 
 	   There's an implied additional requirement in the sampling process in 
 	   which the zero'th iteration of the X9.17 generator doesn't have a 
 	   previous sample to compare to and therefore can't meet the 
 	   requirements for previous-sample checking, however this is handled by
 	   having the generator cranked twice on init/reinit in 
-	   getRandomOutput(), which provides the necessary zero'th sample */
+	   getRandomOutput(), which provides the necessary zero'th sample (this
+	   doesn't happen for the self-test, but that's only handling fixed test
+	   vectors, not actual data).
+	   
+	   First, we check for a repeat of an entire previous sample (hard 
+	   fail), then for a repeat of RANDOMPOOL_SAMPLES smaller samples (soft 
+	   fail) */
+	if( !memcmp( randomInfo->x917OutputSample, 
+				 exportedRandomInfo->randomPool, RANDOMPOOL_SAMPLE_SIZE ) )
+		{
+		endRandomPool( exportedRandomInfo );
+		DEBUG_DIAG(( "X.917 PRNG failure, output is repeating" ));
+		retIntError();
+		}
 	sample = mget32( x917SamplePtr );
 	LOOP_EXT( i = 0, i < RANDOMPOOL_SAMPLES, i++, RANDOMPOOL_SAMPLES + 1 )
 		{
@@ -510,17 +539,6 @@ static int tryGetRandomOutput( INOUT_PTR RANDOM_INFO *randomInfo,
 
 		if( randomInfo->x917PrevOutput[ i ] == sample )
 			{
-			/* If we've failed on the first sample and the full match also
-			   fails, return a hard error */
-			if( i == 0 && \
-				!memcmp( randomInfo->x917OutputSample,
-						 exportedRandomInfo->randomPool,
-						 RANDOMPOOL_SAMPLE_SIZE ) )
-				{
-				endRandomPool( exportedRandomInfo );
-				retIntError();
-				}
-
 			/* We're repeating previous output, tell the caller to try
 			   again */
 			endRandomPool( exportedRandomInfo );
@@ -573,9 +591,29 @@ static int getRandomOutput( INOUT_PTR RANDOM_INFO *randomInfo,
 	   or have reached their use-by date, set the generator key and seed from
 	   the pool contents, then mix the pool and crank the generator twice to
 	   obscure the data that was used.  This also provides the zero'th sample
-	   of output required by the FIPS 140 tests */
+	   of output required by the FIPS 140 tests.
+	   
+	   The maximum retry count is quite complex, we can't just check for
+	   X917_MAX_CYCLES because we can do up to RANDOMPOOL_RETRIES in the 
+	   (incredibly unlikely) case that the first tryGetRandomOutput() fails
+	   and if we're close to the limit before we get there then the retries 
+	   can trigger an internal consistency check failure.  So we have to 
+	   reseed before we get within 
+	   RANDOMPOOL_RETRIES * ( RANDOMPOOL_SIZE / X917_POOLSIZE ) of the 
+	   X917_MAX_CYCLES limit.  With current settings from 
+	   random/random_int.h this works out to:
+
+		( RANDOMPOOL_RETRIES * ( RANDOMPOOL_SIZE / X917_POOLSIZE ) ) )
+				5			 * (		256		 /		16		 ) = 80
+	   
+	   Again with the current setting of X917_MAX_CYCLES = 256 this means 
+	   that we reseed every 176 cycles */
+	#define X917_CYCLE_MARGIN	( RANDOMPOOL_RETRIES * \
+								  ( RANDOMPOOL_SIZE / X917_POOLSIZE ) )
+	static_assert( X917_MAX_CYCLES - X917_CYCLE_MARGIN >= 64,
+				   "X9.17 reseed margin vs. reseed cost" );	
 	if( !randomInfo->x917Inited || \
-		randomInfo->x917Count >= X917_MAX_CYCLES )
+		randomInfo->x917Count >= X917_MAX_CYCLES - X917_CYCLE_MARGIN )
 		{
 		status = mixRandomPool( randomInfo );
 		if( cryptStatusOK( status ) )
@@ -589,14 +627,14 @@ static int getRandomOutput( INOUT_PTR RANDOM_INFO *randomInfo,
 		if( cryptStatusOK( status ) )
 			{
 			status = generateX917( randomInfo, randomInfo->randomPool,
-								   RANDOMPOOL_ALLOCSIZE );
+								   RANDOMPOOL_SIZE );
 			}
 		if( cryptStatusOK( status ) )
 			status = mixRandomPool( randomInfo );
 		if( cryptStatusOK( status ) )
 			{
 			status = generateX917( randomInfo, randomInfo->randomPool,
-								   RANDOMPOOL_ALLOCSIZE );
+								   RANDOMPOOL_SIZE );
 			}
 		if( cryptStatusError( status ) )
 			return( status );
@@ -639,7 +677,7 @@ static int getRandomOutput( INOUT_PTR RANDOM_INFO *randomInfo,
 		endRandomPool( &exportedRandomInfo );
 
 		/* Postcondition: Nulla vestigia retrorsum */
-		FORALL( i, 0, RANDOMPOOL_ALLOCSIZE, \
+		FORALL( i, 0, RANDOMPOOL_SIZE, \
 				exportedRandomInfo.randomPool[ i ] == 0 );
 
 		/* We can't trust the pool data any more so we set its content
@@ -696,7 +734,7 @@ static int getRandomOutput( INOUT_PTR RANDOM_INFO *randomInfo,
 	CFI_CHECK_UPDATE( "endRandomPool" );
 
 	/* Postcondition: Nulla vestigia retrorsum */
-	FORALL( i, 0, RANDOMPOOL_ALLOCSIZE, \
+	FORALL( i, 0, RANDOMPOOL_SIZE, \
 			exportedRandomInfo.randomPool[ i ] == 0 );
 
 	ENSURES( sanityCheckRandom( randomInfo ) );
@@ -717,6 +755,7 @@ int getRandomData( INOUT_PTR TYPECAST( RANDOM_INFO * ) struct RI *randomInfoPtr,
 	BYTE *bufPtr = buffer;
 	BOOLEAN randomInfoOK = FALSE;
 	CFI_CHECK_TYPE CFI_CHECK_VALUE = CFI_CHECK_INIT;
+	CFI_CHECK_TYPE savedCFIValue;
 	int randomQuality, count, retryCount = 0;
 	LOOP_INDEX iterationCount;
 	int status;
@@ -790,7 +829,8 @@ int getRandomData( INOUT_PTR TYPECAST( RANDOM_INFO * ) struct RI *randomInfoPtr,
 		return( status );
 
 	/* Re-check the random information */
-	if( !sanityCheckRandom( randomInfo ) || !checksumRandomPool( randomInfo ) )
+	if( !sanityCheckRandom( randomInfo ) || \
+		!checksumRandomPool( randomInfo ) )
 		{
 		krnlExitMutex( MUTEX_RANDOM );
 		retIntError();
@@ -842,6 +882,7 @@ int getRandomData( INOUT_PTR TYPECAST( RANDOM_INFO * ) struct RI *randomInfoPtr,
 	   anyone faced with this level of attack has bigger things to worry 
 	   about than RNG state rollback */
 	( void ) forkCheck( FALSE );
+	savedCFIValue = CFI_CHECK_VALUE;
 restartPoint:
 
 	/* Prepare to get data from the randomness pool.  Before we do this we
@@ -903,15 +944,18 @@ restartPoint:
 		const int outputBytes = min( length - count, RANDOM_OUTPUTSIZE );
 		ORIGINAL_PTR( bufPtr );
 
-		ENSURES( LOOP_INVARIANT_MED_XXX( count, 0, length - 1 ) );
+		ENSURES_KRNLMUTEX( LOOP_INVARIANT_MED_XXX( count, 0, length - 1 ),
+						   MUTEX_RANDOM );
 
-		REQUIRES( !checkOverflowSub( length, count ) );
+		REQUIRES_KRNLMUTEX( !checkOverflowSub( length, count ),
+							MUTEX_RANDOM );
 
 		/* Precondition for output quantity: Either we're on the last output
 		   block or we're producing the maximum-size output quantity, and
 		   we're never trying to use more than half the pool contents */
 		REQUIRES_KRNLMUTEX( length - count < RANDOM_OUTPUTSIZE || \
-							outputBytes == RANDOM_OUTPUTSIZE, MUTEX_RANDOM );
+							outputBytes == RANDOM_OUTPUTSIZE, 
+							MUTEX_RANDOM );
 		REQUIRES_KRNLMUTEX( outputBytes <= RANDOMPOOL_SIZE / 2, \
 							MUTEX_RANDOM );
 
@@ -937,7 +981,8 @@ restartPoint:
 
 	/* Postcondition: We filled the output buffer with the required amount
 	   of output */
-	ENSURES_KRNLMUTEX( bufPtr == ( BYTE * ) buffer + length, MUTEX_RANDOM );
+	ENSURES_KRNLMUTEX( bufPtr == ( BYTE * ) buffer + length, 
+					   MUTEX_RANDOM );
 
 	/* Check whether the process forked while we were generating output.  If
 	   it did, force a complete remix of the pool and restart the output
@@ -953,6 +998,17 @@ restartPoint:
 		/* Reset the pool mix count and fix up the pool checksum */
 		randomInfo->randomPoolMixes = 0;
 		( void ) checksumRandomPool( randomInfo );
+
+		/* We're about to go back to a previous state, make sure that we 
+		   ended up here correctly and then reset the CFI value to the 
+		   restart point */
+		ENSURES_KRNLMUTEX( \
+			CFI_CHECK_SEQUENCE_6( "sanityCheckRandom", "slowPoll", 
+								  "waitforRandomCompletion", 
+								  "sanityCheckRandom", "mixRandomPool", 
+								  "getRandomOutput" ),
+			MUTEX_RANDOM );
+		CFI_CHECK_VALUE = savedCFIValue;
 
 		/* Try again with the buffer contents */
 		bufPtr = buffer;
@@ -983,26 +1039,18 @@ restartPoint:
 
 /* Test vectors for the PRNG */
 
-#ifdef USE_SHA1_PRNG
-  #define PRNG_OUTPUT_STEP1	"\xF6\x8F\x30\xEE\x52\x13\x3E\x40\x06\x06\xA6\xBE\x91\xD2\xD9\x82"
-  #define PRNG_OUTPUT_STEP2	"\xAE\x94\x3B\xF2\x86\x5F\xCF\x76\x36\x2B\x80\xD5\x73\x86\x9B\x69"
-  #define PRNG_OUTPUT_STEP3	"\xBC\x2D\xC1\x03\x8C\x78\x6D\x04\xA8\xBD\xD5\x51\x80\xCA\x42\xF4"
-  #define PRNG_OUTPUT_FINAL	"\x6B\x59\x1D\xCD\xE1\xB3\xA8\x50\x32\x84\x8C\x8D\x93\xB0\x74\xD7"
-  #define PRNG_OUTPUT_FINAL_LEN		16
+#define PRNG_OUTPUT_STEP1	"\x2E\xA9\xAB\x91\x98\xD1\x63\x80\x07\x40\x0C\xD2\xC3\xBE\xF1\xCC"
+#define PRNG_OUTPUT_STEP1_64	"\x96\xAB\x81\xE9\xFB\x55\x5A\x0F\x05\x82\x8D\x76\xC1\xF7\xC1\x86"
+#define PRNG_OUTPUT_STEP2	"\xD2\xA7\x07\x01\x24\x92\x81\x16\x2B\x23\xCC\x0A\x94\xDC\x00\x28"
+#define PRNG_OUTPUT_STEP3	"\xE1\xBF\xAF\x2B\x56\xA0\xE3\xFA\xB2\x42\xD8\x33\x6E\x94\x70\x78"
+#ifdef USE_3DES_X917
+  #define PRNG_OUTPUT_FINAL	"\x8F\xCB\x4D\x50\x44\xFE\x67\xC8\x6D\xBC\x85\x8C\xC5\x6E\xBE\xE1"
+  #define PRNG_OUTPUT_FINAL_LEN	16
 #else
-  #define PRNG_OUTPUT_STEP1	"\x2E\xA9\xAB\x91\x98\xD1\x63\x80\x07\x40\x0C\xD2\xC3\xBE\xF1\xCC"
-  #define PRNG_OUTPUT_STEP1_64	"\x96\xAB\x81\xE9\xFB\x55\x5A\x0F\x05\x82\x8D\x76\xC1\xF7\xC1\x86"
-  #define PRNG_OUTPUT_STEP2	"\xD2\xA7\x07\x01\x24\x92\x81\x16\x2B\x23\xCC\x0A\x94\xDC\x00\x28"
-  #define PRNG_OUTPUT_STEP3	"\xE1\xBF\xAF\x2B\x56\xA0\xE3\xFA\xB2\x42\xD8\x33\x6E\x94\x70\x78"
-  #ifdef USE_3DES_X917
-	#define PRNG_OUTPUT_FINAL	"\x8F\xCB\x4D\x50\x44\xFE\x67\xC8\x6D\xBC\x85\x8C\xC5\x6E\xBE\xE1"
-	#define PRNG_OUTPUT_FINAL_LEN	16
-  #else
-	#define PRNG_OUTPUT_FINAL	"\x2A\xFD\x1F\xB3\x93\x36\xE9\xA5\x9E\xBC\xA8\xC0\xAA\xA6\xE5\x0C" \
-								"\x73\x24\x15\xA6\x76\x25\xEC\x6E\xF1\x1B\xF6\x65\xEB\x7F\x27\x8F"
-	#define PRNG_OUTPUT_FINAL_LEN	32
-  #endif /* USE_3DES_X917 */
-#endif /* SHA-1 vs. SHA-2 PRNG */
+  #define PRNG_OUTPUT_FINAL	"\x2A\xFD\x1F\xB3\x93\x36\xE9\xA5\x9E\xBC\xA8\xC0\xAA\xA6\xE5\x0C" \
+  							"\x73\x24\x15\xA6\x76\x25\xEC\x6E\xF1\x1B\xF6\x65\xEB\x7F\x27\x8F"
+  #define PRNG_OUTPUT_FINAL_LEN	32
+#endif /* USE_3DES_X917 */
 
 /* Initialise the randomness subsystem */
 
@@ -1023,9 +1071,9 @@ int initRandomInfo( INOUT_PTR TYPECAST( RANDOM_INFO * ) struct RI *randomInfoPtr
 	ENSURES( cryptStatusOK( status ) );
 
 	/* The underlying crypto is OK, check that the cryptlib PRNG is working
-	   correctly.  Since the input of the first mixRandomPool() is an all-
-	   zero block, we compare a second test block 64 bytes in which is the
-	   result of hashing non-zero values */
+	   correctly using an isolated testRandomInfo.  Since the input of the 
+	   first mixRandomPool() is an all-zero block, we compare a second test 
+	   block 64 bytes in which is the result of hashing non-zero values */
 	initRandomPool( &testRandomInfo );
 	status = mixRandomPool( &testRandomInfo );
 	if( cryptStatusOK( status ) && \
@@ -1092,11 +1140,18 @@ int initRandomInfo( INOUT_PTR TYPECAST( RANDOM_INFO * ) struct RI *randomInfoPtr
 	endRandomPool( &testRandomInfo );
 #endif /* CONFIG_NO_SELFTEST */
 
-	/* Initialise the random pool */
+	/* Initialise the random pool and other information */
 	initRandomPool( randomInfoPtr );
 
 	/* Initialise any helper routines that may be needed */
 	initRandomPolling();
+
+	/* Make absolutely sure that we're using the X9.17 CSPRNG interpretation 
+	   rather than the X9.31 PRNG one (see the long comment in 
+	   random/rand_x917.c for details).  This has already been set to FALSE
+	   by initRandomPool(), but this makes it explicit that we're not using
+	   X9.31 */
+	( ( RANDOM_INFO * ) randomInfoPtr )->useX931 = FALSE;
 
 	/* Mix the fixed seed into the pool if there's one defined */
 #ifdef FIXED_SEED
@@ -1159,7 +1214,7 @@ int addEntropyData( INOUT_PTR TYPECAST( RANDOM_INFO * ) struct RI *randomInfoPtr
 					IN_DATALENGTH const int length )
 	{
 	RANDOM_INFO *randomInfo = ( RANDOM_INFO * ) randomInfoPtr;
-	const BYTE *bufPtr = ( BYTE * ) buffer;
+	const BYTE *bufPtr = ( const BYTE * ) buffer;
 	LOOP_INDEX count;
 	int status;
 #if 0	/* See comment in addEntropyQuality */
@@ -1227,7 +1282,8 @@ int addEntropyData( INOUT_PTR TYPECAST( RANDOM_INFO * ) struct RI *randomInfoPtr
 							randomInfo->randomPoolPos < RANDOMPOOL_SIZE, \
 							MUTEX_RANDOM );
 
-		REQUIRES( !checkOverflowInc( randomInfo->randomPoolPos ) );
+		REQUIRES_KRNLMUTEX( !checkOverflowInc( randomInfo->randomPoolPos ),
+							MUTEX_RANDOM );
 		randomInfo->randomPool[ randomInfo->randomPoolPos++ ] ^= bufPtr[ count ];
 
 		STORE_ORIGINAL_INT( newPoolVal,
@@ -1349,7 +1405,9 @@ int addEntropyQuality( INOUT_PTR TYPECAST( RANDOM_INFO * ) struct RI *randomInfo
 		{
 		/* Update the quality count, making sure that it stays within 
 		   bounds */
-		REQUIRES( !checkOverflowAdd( randomInfo->randomQuality, quality ) );
+		REQUIRES_KRNLMUTEX( !checkOverflowAdd( randomInfo->randomQuality, \
+											   quality ),
+							MUTEX_RANDOM );
 		if( randomInfo->randomQuality + quality > 100 )
 			randomInfo->randomQuality = 100;
 		else
@@ -1371,7 +1429,9 @@ int addEntropyQuality( INOUT_PTR TYPECAST( RANDOM_INFO * ) struct RI *randomInfo
 
 /* Add entropy data from a stored seed value.  This is called with 
    MUTEX_RANDOM held so we don't need to perform any explicit mutex 
-   management here */
+   management here, however it does rely on the kernel mutexes being
+   recursive since addEntropyData()/addEntropyQuality() also acquire
+   MUTEX_RANDOM */
 
 #define RANDSEED_MAX_SIZE	1024
 
@@ -1395,8 +1455,9 @@ static void addStoredSeedData( INOUT_PTR RANDOM_INFO *randomInfo )
 		{
 		/* The file path functions are normally used with krnlSendMessage()
 		   which takes { data, length } parameters, since we've calling
-		   the low-level function sFileOpen() directly we have to null-
-		   terminate the string */
+		   the low-level function sFileOpen() directly we have to use a
+		   null-terminated string which fileBuildCryptlibPath() does for 
+		   us */
 		status = sFileOpen( &stream, seedFilePath, FILE_FLAG_READ );
 		}
 	if( cryptStatusError( status ) )
@@ -1419,7 +1480,7 @@ static void addStoredSeedData( INOUT_PTR RANDOM_INFO *randomInfo )
 	status = length = sread( &stream, seedBuffer, RANDSEED_MAX_SIZE );
 	sFileClose( &stream );
 	zeroise( streamBuffer, SAFEBUFFER_SIZE( STREAM_BUFSIZE ) );
-	if( cryptStatusError( status ) || length <= 16 )
+	if( cryptStatusError( status ) || length < 16 )
 		{
 		/* The seed data is present but we can't read it or there's not 
 		   enough present to use, don't try and access it again */
@@ -1427,6 +1488,7 @@ static void addStoredSeedData( INOUT_PTR RANDOM_INFO *randomInfo )
 		DEBUG_DIAG(( "Error reading random seed file, status %s, length %d",
 					 getStatusName( status ), length ));
 		assert( DEBUG_WARN );
+		zeroise( seedBuffer, RANDSEED_MAX_SIZE );
 		return;
 		}
 	ENSURES_V( length >= 16 && length <= RANDSEED_MAX_SIZE );
@@ -1454,10 +1516,14 @@ static void addStoredSeedData( INOUT_PTR RANDOM_INFO *randomInfo )
 	ENSURES_V( LOOP_BOUND_MED_REV_OK );
 
 	/* There were at least 128 bits of entropy present in the seed, set the 
-	   entropy quality to the user-provided value */
+	   entropy quality to the user-provided value and remember that we're 
+	   done */
 	status = addEntropyQuality( randomInfo, CONFIG_RANDSEED_QUALITY );
 	ENSURES_V( cryptStatusOK( status ) );
+	randomInfo->seedProcessed = TRUE;
 
+	/* This is ridiculously unnecessary given that we're reading the data 
+	   from a permanent file stored on disk, but try telling an SAST that */
 	zeroise( seedBuffer, RANDSEED_MAX_SIZE );
 
 	/* Postcondition: Nulla vestigia retrorsum */
@@ -1622,7 +1688,19 @@ int endRandomData( INOUT_PTR TYPECAST( RANDOM_STATE_INFO * ) void *statePtr,
 
 	/* If we're in an error state, don't try and do anything */
 	if( cryptStatusError( state->updateStatus ) )
-		return( state->updateStatus );
+		{
+		const int errorState = state->updateStatus;
+		
+		/* If we're in an error state (but see also the comment in 
+		   addRandomData()) then in theory we don't know how reliable the
+		   buffer pointer is, so we just clear the overall state and then
+		   reset the error status again.  None of this information is
+		   critical, RANDOM_STATE_INFO is just accounting information and
+		   the buffer contains entropy-poll data rather than CSPRNG state or
+		   anything similar */
+		zeroise( state, sizeof( RANDOM_STATE_INFO ) );
+		return( errorState );
+		}
 
 	/* If there's data still in the accumulator send it through to the 
 	   system device.  A failure at this point is a should-never-occur 

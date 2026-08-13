@@ -152,7 +152,7 @@ static int selfTest( void )
 /* Return context subtype-specific information */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type, 
+static int getInfo( IN_ENUM( CONTEXT_INFO ) const CONTEXT_INFO_TYPE type, 
 					INOUT_PTR_OPT CONTEXT_INFO *contextInfoPtr,
 					OUT_PTR void *data, 
 					IN_INT_Z const int length )
@@ -162,11 +162,11 @@ static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type,
 	assert( ( length == 0 && isWritePtr( data, sizeof( int ) ) ) || \
 			( length > 0 && isWritePtrDynamic( data, length ) ) );
 
-	REQUIRES( isEnumRange( type, CAPABILITY_INFO ) );
+	REQUIRES( isEnumRange( type, CONTEXT_INFO ) );
 	REQUIRES( ( contextInfoPtr == NULL ) || \
 			  sanityCheckContext( contextInfoPtr ) );
 
-	if( type == CAPABILITY_INFO_STATESIZE )
+	if( type == CONTEXT_INFO_STATESIZE )
 		{
 		int *valuePtr = ( int * ) data;
 
@@ -191,14 +191,19 @@ static int hash( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				 IN_BUFFER( noBytes ) BYTE *buffer, 
 				 IN_LENGTH_Z int noBytes )
 	{
-	MAC_INFO *macInfo = contextInfoPtr->ctxMAC;
-	SHA_CTX *shaInfo = &( ( SHA1_MAC_STATE * ) macInfo->macInfo )->macState;
+	MAC_INFO *macInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	SHA_CTX *shaInfo;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( noBytes == 0 || isReadPtrDynamic( buffer, noBytes ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRange( noBytes ) );
+	REQUIRES( macInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	shaInfo = &( ( SHA1_MAC_STATE * ) macInfo->macInfo )->macState;
 
 	/* If the hash state was reset to allow another round of MAC'ing, copy
 	   the initial MAC state over into the current MAC state */
@@ -258,8 +263,8 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					IN_BUFFER( keyLength ) const void *key, 
 					IN_LENGTH_SHORT const int keyLength )
 	{
-	MAC_INFO *macInfo = contextInfoPtr->ctxMAC;
-	SHA_CTX *shaInfo = &( ( SHA1_MAC_STATE * ) macInfo->macInfo )->macState;
+	MAC_INFO *macInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	SHA_CTX *shaInfo;
 	BYTE hashBuffer[ SHA_CBLOCK + 8 ];
 	LOOP_INDEX i;
 
@@ -269,6 +274,11 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isShortIntegerRangeMin( keyLength, 4 ) );
 			  /* The self-test uses very short keys */
+	REQUIRES( macInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	shaInfo = &( ( SHA1_MAC_STATE * ) macInfo->macInfo )->macState;
 
 	SHA1_Init( shaInfo );
 

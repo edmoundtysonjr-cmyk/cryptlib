@@ -296,7 +296,7 @@ static const EXT_CHECK_INFO extCheckInfoTbl[] = {
 
 	/* Record size limit, RFC 8449.  Allows limiting the maximum record size 
 	   to less than the default 16K, invented by people for whom the
-	   TLS_EXT_MAX_FRAGMENT_LENTH extension that everything ignored wasn't
+	   TLS_EXT_MAX_FRAGMENT_LENGTH extension that everything ignored wasn't
 	   cromulent enough so they created a new one for everything to ignore.
 
 		uint16		recordSizeLimit */
@@ -331,7 +331,7 @@ static const EXT_CHECK_INFO extCheckInfoTbl[] = {
 	   essentially a certificate but encoded in TLS format and with custom
 	   signature-handling rules because why use a standard when you can 
 	   reinvent it badly yourself? */
-	{ TLS_EXT_DELEGATED_CREDENIALS, DESCRIPTION( "delegated credentials" )
+	{ TLS_EXT_DELEGATED_CREDENTIALS, DESCRIPTION( "delegated credentials" )
 	  UINT16_SIZE + UINT16_SIZE, 32, MAX_EXTENSION_SIZE },
 
 	/* Session ticket, RFC 4507/5077.  The client can send a zero-length 

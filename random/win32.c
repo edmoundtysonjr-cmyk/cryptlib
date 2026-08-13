@@ -2174,6 +2174,7 @@ static void slowPollWindows( void )
 							 &msgData, CRYPT_IATTRIBUTE_ENTROPY );
 			}
 		NetApiBufferFree( lpBuffer );
+		lpBuffer = NULL;
 		}
 #if VC_GE_2010( _MSC_VER )
 	#pragma warning( pop )

@@ -11,10 +11,6 @@
 
 #ifdef USE_SCVP
 
-/* Various SCVP constants */
-
-#define SCVP_NONCE_SIZE			16
-
 /* SCVP protocol-specific flags that augment the general session flags.  These
    are:
 

@@ -492,6 +492,7 @@ void safeBufferInit( INOUT_BUFFER_FIXED( bufSize ) void *buffer,
 					 IN_DATALENGTH const int bufSize );
 CHECK_RETVAL_PTR \
 void *safeBufferAlloc( IN_DATALENGTH const int size );
+STDC_NONNULL_ARG( ( 1 ) ) \
 void safeBufferFree( const void *buffer );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN safeBufferCheck( IN_BUFFER( bufSize ) const void *buffer, 
@@ -646,7 +647,7 @@ typedef unsigned int ACCESS_TOKEN;
 
 #ifndef CONFIG_CONSERVE_MEMORY_EXTRA
 
-#define FNV_PRIME		0x01000193 
+#define CFI_PRIME		0x01000193		/* 32-bit FNV prime */
 
 typedef unsigned int CFI_CHECK_TYPE;
 #define CFI_CHECK_VALUE				cfiCheckValue
@@ -662,7 +663,7 @@ typedef unsigned int CFI_CHECK_TYPE;
 #endif /* Sun braindamage */
 #define CFI_CHECK_INIT				CFI_FUNCTION_NAME
 #define CFI_CHECK_UPDATE( label ) \
-		cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + MK_TOKEN( label )
+		cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + MK_TOKEN( label )
 #define CFI_CHECK_SEQUENCE_1( label1 ) \
 		( cfiCheckValue == \
 		  cfiCheckSequence3( CFI_FUNCTION_NAME, MK_TOKEN( label1 ), \
@@ -1074,6 +1075,7 @@ typedef unsigned int CFI_CHECK_TYPE;
 #define LOOP_BOUND_LARGE_REV_OK		LOOP_BOUND_EXT_REV_OK( FAILSAFE_ITERATIONS_LARGE )
 #define LOOP_BOUND_MAX_REV_OK		LOOP_BOUND_EXT_REV_OK( FAILSAFE_ITERATIONS_MAX )
 
+#define LOOP_BOUND_SMALL_REV_OK_ALT	LOOP_BOUND_EXT_REV_OK_ALT( FAILSAFE_ITERATIONS_SMALL )
 #define LOOP_BOUND_MED_REV_OK_ALT	LOOP_BOUND_EXT_REV_OK_ALT( FAILSAFE_ITERATIONS_MED )
 #define LOOP_BOUND_LARGE_REV_OK_ALT	LOOP_BOUND_EXT_REV_OK_ALT( FAILSAFE_ITERATIONS_LARGE )
 #define LOOP_BOUND_MAX_REV_OK_ALT	LOOP_BOUND_EXT_REV_OK_ALT( FAILSAFE_ITERATIONS_MAX )
@@ -1147,6 +1149,8 @@ typedef unsigned int CFI_CHECK_TYPE;
 								LOOP_EXT_REV( a, b, c, FAILSAFE_ITERATIONS_LARGE )
 #define LOOP_MAX_REV( a, b, c ) \
 								LOOP_EXT_REV( a, b, c, FAILSAFE_ITERATIONS_MAX )
+#define LOOP_SMALL_REV_ALT( a, b, c ) \
+								LOOP_EXT_REV_ALT( a, b, c, FAILSAFE_ITERATIONS_SMALL )
 #define LOOP_LARGE_REV_ALT( a, b, c ) \
 								LOOP_EXT_REV_ALT( a, b, c, FAILSAFE_ITERATIONS_LARGE )
 #define LOOP_LARGE_REV_ALT2( a, b, c ) \
@@ -1330,7 +1334,9 @@ typedef unsigned int CFI_CHECK_TYPE;
 
 /* Loops where the index variable counts downwards are slightly different 
    since the secondary index starts from zero rather than the loop bound, so 
-   there's only one way of expressing the invariant */ 
+   there's only one way of expressing the invariant.  Note that the bound is
+   still given as { lower, upper }, so a loop that counts down from 10 to 1
+   would give the bounds as { 1, 10 } not { 10, 1 } */ 
 
 #define LOOP_INVARIANT_REV( index, lowerBound, upperBound ) \
 		( ( index ) >= ( lowerBound ) && ( index ) <= ( upperBound ) && \
@@ -2370,6 +2376,11 @@ typedef struct {
    simplifies the division check, which would normally be 
    b == 0 || a == INT_MIN && b == -1.
    
+   The shift overflow check uses INT_MAX as the bound since we're moving by
+   whole bit positions rather than numeric ranges.  Note that we check for
+   a shift amount >= INT_WIDTH - 1 rather than just > INT_WIDTH - 1, since
+   the former also catches shifts into the sign bit.
+   
    In a few locations a value can legitimately be allowed to go negative
    because it's then checked and reported as an error condition.  To make
    it explicit that we're actively checking for this condition, we use the
@@ -2399,6 +2410,17 @@ typedef struct {
 #define checkOverflowInc( a )			( ( a ) < 0 || \
 										  ( a ) >= MAX_INTLENGTH - 1 )
 #define checkOverflowDec( a )			( ( a ) <= 0 )
+#if !defined( INT_WIDTH ) && defined( CHAR_BIT )
+  #define INT_WIDTH		( CHAR_BIT * sizeof( int ) )
+#endif /* !INT_WIDTH && CHAR_BIT */
+#ifdef INT_WIDTH
+  #define checkOverflowShift( a, b )	( ( a ) < 0 || ( b ) < 0 || \
+										  ( b ) >= INT_WIDTH - 1 || \
+										  ( a ) >= ( INT_MAX >> ( b ) ) )
+#else
+  #define checkOverflowShift( a, b )	( ( a ) < 0 || ( b ) < 0 || \
+										  ( a ) >= ( INT_MAX >> ( b ) ) )
+#endif /* INT_WIDTH */
 
 #define UNDERFLOW_MARKER				-1
 

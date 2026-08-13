@@ -159,6 +159,8 @@ static const void *getAttrFunction( IN_PTR_OPT \
 	{
 	SESSION_ATTRIBUTE_LIST *attributeListPtr = \
 					( SESSION_ATTRIBUTE_LIST * ) attributePtr;
+					/* Needed because ATTRACCESS_FUNCTION requires 
+					   non-const pointers */
 	BOOLEAN subGroupMove;
 	int value, status;
 
@@ -174,7 +176,8 @@ static const void *getAttrFunction( IN_PTR_OPT \
 
 	REQUIRES_N( isEnumRange( attrGetType, ATTR ) );
 
-	/* Clear return values */
+	/* Clear return values.  The instanceID isn't used for sessions so we just
+	   set it to cleared in case the caller has asked for it */
 	if( groupID != NULL )
 		*groupID = CRYPT_ATTRIBUTE_NONE;
 	if( attributeID != NULL )
@@ -273,16 +276,21 @@ static const void *getAttrFunction( IN_PTR_OPT \
 
 /* Lock ephemeral attributes so that they can't be deleted any more by
    resetEphemeralAttributes().  This just clears the ephemeral flag so that
-   they're treated as normal attributes */
+   they're treated as normal attributes.
+   
+   Note that we can't safely use STDC_NONNULL_ARG( ( 1 ) ) on this because
+   of the usual compiler braindamage, there's no guarantee that gcc won't
+   restructure the loop to not check for NULL on the first iteration, 
+   converting it from a for() into a do/while() and dereferencing a NULL
+   pointer */
 
-STDC_NONNULL_ARG( ( 1 ) ) \
 void lockEphemeralAttributes( INOUT_PTR \
 								SESSION_ATTRIBUTE_LIST *attributeListHead )
 	{
 	LOOP_INDEX_PTR SESSION_ATTRIBUTE_LIST *attributeListCursor;
 
 	assert( isWritePtr( attributeListHead, \
-						sizeof( SESSION_ATTRIBUTE_LIST * ) ) );
+						sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	/* Clear the ATTR_FLAG_EPHEMERAL flag on all attributes */
 	LOOP_MAX( attributeListCursor = attributeListHead, 
@@ -301,21 +309,26 @@ void lockEphemeralAttributes( INOUT_PTR \
    whether each username has a corresponding password) aren't possible 
    until all of the attributes are present */
 
-CHECK_RETVAL_ENUM( CRYPT_ATTRIBUTE ) \
-CRYPT_ATTRIBUTE_TYPE checkMissingInfo( IN_PTR_OPT \
-											const SESSION_ATTRIBUTE_LIST *attributeListHead,
-									   IN_BOOL const BOOLEAN isServer )
+CHECK_RETVAL \
+int checkMissingInfo( IN_PTR_OPT \
+							const SESSION_ATTRIBUTE_LIST *attributeListHead,
+					  OUT_ATTRIBUTE_Z CRYPT_ATTRIBUTE_TYPE *missingInfoType,
+					  IN_BOOL const BOOLEAN isServer )
 	{
 	const SESSION_ATTRIBUTE_LIST *attributeListPtr = attributeListHead;
 
 	assert( attributeListHead == NULL || \
 			isReadPtr( attributeListHead, \
-					   sizeof( SESSION_ATTRIBUTE_LIST * ) ) );
+					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
+	assert( isWritePtr( missingInfoType, sizeof( CRYPT_ATTRIBUTE_TYPE ) ) );
 
 	REQUIRES( isBooleanValue( isServer ) );
 
+	/* Clear return value */
+	*missingInfoType = CRYPT_ATTRIBUTE_NONE;
+
 	if( attributeListPtr == NULL )
-		return( CRYPT_ATTRIBUTE_NONE );
+		return( CRYPT_OK );
 
 	/* Make sure that every username attribute is paired up with a 
 	   corresponding authentication attribute.  This only applies to 
@@ -329,14 +342,12 @@ CRYPT_ATTRIBUTE_TYPE checkMissingInfo( IN_PTR_OPT \
 							attributeFind( attributeListPtr, getAttrFunction, 
 										   CRYPT_SESSINFO_USERNAME ) ) != NULL )
 			{
-			ENSURES_EXT( LOOP_INVARIANT_MAX_GENERIC(),
-						 CRYPT_ATTRIBUTE_NONE );
+			ENSURES( LOOP_INVARIANT_MAX_GENERIC() );
 
 			/* Make sure that there's a matching authentication attribute,
 			   either a password or an authentication token like a TOTP 
 			   seed */
-			REQUIRES_EXT( DATAPTR_ISVALID( attributeListPtr->next ), \
-						  CRYPT_ATTRIBUTE_NONE );
+			REQUIRES( DATAPTR_ISVALID( attributeListPtr->next ) );
 			attributeListPtr = DATAPTR_GET( attributeListPtr->next );
 			if( attributeListPtr == NULL || \
 				( attributeListPtr->attributeID != CRYPT_SESSINFO_PASSWORD && \
@@ -345,18 +356,18 @@ CRYPT_ATTRIBUTE_TYPE checkMissingInfo( IN_PTR_OPT \
 				/* We report the missing attribute as a password, which is 
 				   more likely and more understandable than a missing 
 				   authentication token */
-				return( CRYPT_SESSINFO_PASSWORD );
+				*missingInfoType = CRYPT_SESSINFO_PASSWORD;
+				return( CRYPT_ERROR_NOTINITED );
 				}
 
 			/* Move on to the next attribute */
-			REQUIRES_EXT( DATAPTR_ISVALID( attributeListPtr->next ), \
-						  CRYPT_ATTRIBUTE_NONE );
+			REQUIRES( DATAPTR_ISVALID( attributeListPtr->next ) );
 			attributeListPtr = DATAPTR_GET( attributeListPtr->next );
 			}
-		ENSURES_EXT( LOOP_BOUND_OK, CRYPT_SESSINFO_ACTIVE );
+		ENSURES( LOOP_BOUND_OK );
 		}
 
-	return( CRYPT_ATTRIBUTE_NONE );
+	return( CRYPT_OK );
 	}
 
 /****************************************************************************
@@ -383,7 +394,7 @@ int getSessionAttributeCursor( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( attributeListCursor == NULL || \
 			isReadPtr( attributeListCursor, \
 					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
-	assert( isWritePtr( valuePtr, sizeof( int ) ) );
+	assert( isWritePtr( valuePtr, sizeof( CRYPT_ATTRIBUTE_TYPE ) ) );
 
 	REQUIRES( sanityCheckSession( sessionInfoPtr ) );
 	REQUIRES( sessionInfoType == CRYPT_ATTRIBUTE_CURRENT || \
@@ -418,7 +429,7 @@ int getSessionAttributeCursor( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		/* If it's a single-attribute group, return the attribute type */
 		if( !TEST_FLAG( attributeListCursor->flags, 
 						ATTR_FLAG_COMPOSITE ) )
-			*valuePtr = attributeListCursor->groupID;
+			*valuePtr = attributeListCursor->attributeID;
 		else
 			{
 			const ATTRACCESS_FUNCTION accessFunction = \
@@ -535,6 +546,7 @@ const SESSION_ATTRIBUTE_LIST *findSessionInfo( const SESSION_INFO *sessionInfoPt
 			isReadPtr( attributeListPtr, \
 					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
+	REQUIRES_N( sanityCheckSession( sessionInfoPtr ) );
 	REQUIRES_N( attributeID > CRYPT_SESSINFO_FIRST && \
 				attributeID < CRYPT_SESSINFO_LAST );
 	REQUIRES_N( DATAPTR_ISVALID( sessionInfoPtr->attributeList ) );
@@ -601,7 +613,8 @@ const SESSION_ATTRIBUTE_LIST *findSessionInfoEx( const SESSION_INFO *sessionInfo
 
 		if( attributeListCursor->attributeID == attributeID && \
 			attributeListCursor->valueLength == valueLength && \
-			!memcmp( attributeListCursor->value, value, valueLength ) )
+			compareDataConstTime( attributeListCursor->value, value, \
+								  valueLength ) == TRUE )
 			break;
 		}
 	ENSURES_N( LOOP_BOUND_OK );
@@ -708,8 +721,13 @@ static int addInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{
 		assert( isReadPtrDynamic( data, dataLength ) );
 
+		REQUIRES( rangeCheck( dataLength, 1, dataMaxLength ) );
 		memcpy( newElement->value, data, dataLength );
 		newElement->valueLength = dataLength;
+		
+		/* Mark the numeric portion of the attribute as an invalid value in
+		   case something tries to work with it */
+		newElement->intValue = CRYPT_ERROR;	
 		}
 	insertDoubleListElement( &sessionInfoPtr->attributeList, insertPoint, 
 							 newElement, SESSION_ATTRIBUTE_LIST );
@@ -741,6 +759,9 @@ int addSessionInfoS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					 IN_BUFFER( dataLength ) const void *data, 
 					 IN_LENGTH_SHORT const int dataLength )
 	{
+	const PROTOCOL_INFO *protocolInfo = \
+					DATAPTR_GET( sessionInfoPtr->protocolInfo );
+
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isReadPtrDynamic( data, dataLength ) );
 
@@ -748,6 +769,15 @@ int addSessionInfoS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	REQUIRES( attributeID > CRYPT_SESSINFO_FIRST && \
 			  attributeID < CRYPT_SESSINFO_LAST );
 	REQUIRES( isShortIntegerRangeNZ( dataLength ) );
+	REQUIRES( protocolInfo != NULL );
+#if 0	/* Due to be rewritten for 3.5 */
+	REQUIRES( !( ( protocolInfo->flags & \
+							SESSION_PROTOCOL_FIXEDSIZECREDENTIALS ) && \
+				 ( attributeID == CRYPT_SESSINFO_USERNAME || \
+				   attributeID == CRYPT_SESSINFO_PASSWORD ) ) );
+			  /* If we're using fixed-size credentials then they need to be
+			     added via addSessionInfoEx() */
+#endif /* 0 */
 
 	/* Pre-3.3 kludge: Set the groupID to the attributeID since groups 
 	   aren't defined yet */
@@ -774,6 +804,12 @@ int addSessionInfoEx( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	REQUIRES( isFlagRangeZ( flags, ATTR ) );
 	REQUIRES( ( flags & ~( ATTR_FLAG_NONE | ATTR_FLAG_ENCODEDVALUE | \
 						   ATTR_FLAG_MULTIVALUED ) ) == 0 );
+
+	/* This is a special-case form of addSessionInfoS() that adds a value as
+	   a fixed-length value, so the data is { data, dataLength } but the 
+	   storage allocated is dataMaxLength.  This is used for attributes like
+	   CRYPT_SESSINFO_USERNAME and CRYPT_SESSINFO_PASSWORD which can be
+	   updated in place as the values are received from the peer */
 
 	/* Pre-3.3 kludge: Set the groupID to the attributeID since groups 
 	   aren't defined yet */
@@ -843,30 +879,31 @@ int updateSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	REQUIRES( !( flags & ATTR_FLAG_MULTIVALUED ) );
 	REQUIRES( DATAPTR_ISVALID( sessionInfoPtr->attributeList ) );
 
+	/* Although in theory we're updating a general attribute, in practice
+	   the only thing that we can update is a username or password string 
+	   attribute, when the SESSION_PROTOCOL_FIXEDSIZECREDENTIALS flag is
+	   set */
+	REQUIRES( attributeID == CRYPT_SESSINFO_USERNAME || \
+			  attributeID == CRYPT_SESSINFO_PASSWORD );
+
 	/* Find the first attribute of this type */
 	attributeListPtr = attributeFind( attributeListPtr, getAttrFunction, 
 									  attributeID );
 
-	/* If the attribute is already present, update the value */
+	/* If the attribute is already present, update the value.  This is a 
+	   like-with-like replacement so we only update the data value, leaving
+	   metadata like flags untouched */
 	if( attributeListPtr != NULL )
 		{
 		REQUIRES( attributeListPtr->attributeID == attributeID );
-		REQUIRES( ( attributeListPtr->valueLength == 0 && \
-					!memcmp( attributeListPtr->value, \
-							 "\x00\x00\x00\x00", 4 ) ) || \
-				  isShortIntegerRangeNZ( attributeListPtr->valueLength ) );
 
-		assert( isReadPtrDynamic( data, dataLength ) );
-
-		if( attributeListPtr->valueLength > 0 )
-			{
-			REQUIRES( isShortIntegerRangeNZ( attributeListPtr->valueLength ) ); 
-			zeroise( attributeListPtr->value, attributeListPtr->valueLength );
-			}
+		REQUIRES( isShortIntegerRangeNZ( attributeListPtr->valueLength ) );
+		zeroise( attributeListPtr->value, attributeListPtr->valueLength );
 		REQUIRES( rangeCheck( dataLength, 1, 
 							  sizeofVarStructStorage( attributeListPtr ) ) );
 		memcpy( attributeListPtr->value, data, dataLength );
 		attributeListPtr->valueLength = dataLength;
+
 		return( CRYPT_OK );
 		}
 
@@ -883,7 +920,7 @@ int updateSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 /* Delete one, or a complete set of, session attributes */
 
-STDC_NONNULL_ARG( ( 1, 2 ) ) \
+RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int deleteSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					   INOUT_PTR SESSION_ATTRIBUTE_LIST *attributeListPtr )
 	{
@@ -941,7 +978,7 @@ int deleteSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{
 		krnlSendNotifier( attributeListPtr->intValue, 
 						  IMESSAGE_DECREFCOUNT );
-		attributeListPtr->intValue = CRYPT_ERROR;
+		attributeListPtr->intValue = CRYPT_ERROR;	/* Just to doc.that it's gone */
 		}
 	endVarStruct( attributeListPtr, SESSION_ATTRIBUTE_LIST );
 	clFree( "deleteSessionInfo", attributeListPtr );

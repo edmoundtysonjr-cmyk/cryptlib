@@ -71,26 +71,36 @@ static BOOLEAN sanityCheckPKCS15( const PKCS15_INFO *pkcs15infoPtr )
 		DEBUG_PUTS(( "sanityCheckPKCS15: Label" ));
 		return( FALSE );
 		}
-	if( pkcs15infoPtr->type == PKCS15_SUBTYPE_SECRETKEY || \
-		pkcs15infoPtr->type == PKCS15_SUBTYPE_DATA )
+	switch( pkcs15infoPtr->type )
 		{
-		if( pkcs15infoPtr->iDlength != 0 || \
-			pkcs15infoPtr->keyIDlength != 0 )
-			{
-			DEBUG_PUTS(( "sanityCheckPKCS15: Spurious ID" ));
-			return( FALSE );
-			}
-		}
-	else
-		{
-		if( !rangeCheck( pkcs15infoPtr->iDlength, 
-						 1, CRYPT_MAX_HASHSIZE ) || \
-			!rangeCheck( pkcs15infoPtr->keyIDlength, 
-						 1, CRYPT_MAX_HASHSIZE ) )
-			{
-			DEBUG_PUTS(( "sanityCheckPKCS15: IDs" ));
-			return( FALSE );
-			}
+		case PKCS15_SUBTYPE_NORMAL:
+		case PKCS15_SUBTYPE_CERT:
+			if( !rangeCheck( pkcs15infoPtr->iDlength, 
+							 1, CRYPT_MAX_HASHSIZE ) || \
+				!rangeCheck( pkcs15infoPtr->keyIDlength, 
+							 1, CRYPT_MAX_HASHSIZE ) )
+				{
+				DEBUG_PUTS(( "sanityCheckPKCS15: IDs" ));
+				return( FALSE );
+				}
+			break;
+
+		case PKCS15_SUBTYPE_SECRETKEY:
+		case PKCS15_SUBTYPE_DATA:
+			if( pkcs15infoPtr->iDlength != 0 || \
+				pkcs15infoPtr->keyIDlength != 0 )
+				{
+				DEBUG_PUTS(( "sanityCheckPKCS15: Spurious ID" ));
+				return( FALSE );
+				}
+			break;
+
+		case PKCS15_SUBTYPE_UNRECOGNISED:
+			/* An unknown type may or may not have IDs associated with it */
+			break;
+			
+		default:
+			retIntError();
 		}
 
 	/* Check that the ID fields have reasonable values.  This is a general 
@@ -393,6 +403,14 @@ PKCS15_INFO *findEntry( IN_ARRAY( noPkcs15objects ) const PKCS15_INFO *pkcs15inf
 	   (sol lucet omnibus) */
 	if( keyIDtype == CRYPT_IKEYID_PGPKEYID )
 		{
+		/* This is somewhat redundant since a caller shouldn't be passing us 
+		   a CRYPT_IKEYID_PGPKEYID that isn't PGP_KEYID_SIZE bytes long, 
+		   since this is a fixed/implicit-length field in PGP data we always 
+		   read it as exactly PGP_KEYID_SIZE bytes so the following check 
+		   is just to prevent an overread in the memcmp() if there's some
+		   corruption of the value somewhere */
+		REQUIRES_N( keyIDlength == PGP_KEYID_SIZE );
+		
 		LOOP_MED( i = 0, i < noPkcs15objects, i++ )
 			{
 			const PKCS15_INFO *pkcs15infoPtr;
@@ -576,7 +594,7 @@ static int readPkcs15EncapsHeader( INOUT_PTR STREAM *stream,
 		tag == MAKE_CTAG( 1 ) )
 		status = readUniversal( stream );
 	if( cryptStatusError( status ) )
-		return( status );
+		return( status );	/* Residual error from peekTag() */
 
 	/* We've made our way past the AuthData information, try again for
 	   encapsulated PKCS #15 content */
@@ -688,9 +706,9 @@ static int readPkcs15header( INOUT_PTR STREAM *stream,
 		tag == MAKE_CTAG( 0 ) )
 		{
 		status = readUniversal( stream );
-		if( cryptStatusError( status ) )
-			return( status );
 		}
+	if( cryptStatusError( status ) )
+		return( status );	/* Residual error from peekTag() */
 	status = readLongSequence( stream, NULL );
 	if( cryptStatusError( status ) )
 		return( status );

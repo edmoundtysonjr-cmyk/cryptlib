@@ -712,6 +712,10 @@ int checkPolicyConstraints( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 								const POLICY_TYPE policyType,
 							IN_PTR_OPT const POLICY_INFO *policyInfo,
 							IN_BOOL const BOOLEAN allowMappedPolicies );
+#if !defined( CONFIG_CONSERVE_MEMORY_EXTRA ) 
+CHECK_RETVAL_BOOL \
+BOOLEAN checkNameMatch( void );
+#endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 #endif /* USE_CERTLEVEL_PKIX_FULL */
 #ifdef USE_CERTLEVEL_PKIX_PARTIAL
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \

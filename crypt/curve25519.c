@@ -5733,7 +5733,7 @@ ossl_ed25519_public_from_private(OSSL_LIB_CTX *ctx, uint8_t out_public_key[32],
 
 /* Utility define to make operations easier to understand */
 
-#define fe_iszero( value )	!fe_isnonzero( value )
+#define fe_iszero( value )	( !fe_isnonzero( value ) )
 
 /* Check whether a value, typically a public key but also the R value from a
    signature, has small order, and whether a public key is valid.  Since 
@@ -5754,7 +5754,7 @@ int clib_ed25519_has_small_order( const uint8_t value[ 32 ] )
 	fe_mul( y, A.Y, recip );
 	if( fe_iszero( y ) )
 		return( TRUE );
-	fe_neg( x_neg, A.X );
+	fe_neg( x_neg, x );
 	fe_mul( y_sqrtm1, y, sqrtm1 );
 	fe_sub( c, y_sqrtm1, x );
 	if( fe_iszero( c ) )
@@ -5952,7 +5952,7 @@ fe x, x_neg, y, y_sqrtm1, recip, c;
 	fe_mul( y, edPoint.Y, recip );
 	if( fe_iszero( y ) )
 		return( FALSE );
-	fe_neg( x_neg, edPoint.X );
+	fe_neg( x_neg, x );
 	fe_mul( y_sqrtm1, y, sqrtm1 );
 	fe_sub( c, y_sqrtm1, x );
 	if( fe_iszero( c ) )
@@ -5961,7 +5961,7 @@ fe x, x_neg, y, y_sqrtm1, recip, c;
 	if( fe_iszero( c ) )
 		return( FALSE );
 }
-#endif /* 0 */
+#endif /* 1 */
 
 	return( TRUE );
 	}
@@ -5976,7 +5976,9 @@ ossl_x25519(uint8_t out_shared_key[32], const uint8_t private_key[32],
 #if 0	/* The != 0 is redundant and confusing - pcg */
     return CRYPTO_memcmp(kZeros, out_shared_key, 32) != 0;
 #else
-	return( !compareDataConstTime( out_shared_key, kZeros, 32 ) );
+	/* We want a non-match for the all-zero value */
+	return( compareDataConstTime( out_shared_key, kZeros, 32 ) != FALSE ? \
+			FALSE : TRUE );
 #endif /* 0 */
 }
 
@@ -6000,6 +6002,9 @@ ossl_x25519_public_from_private(uint8_t out_public_value[32],
      * The map is u=(y+1)/(1-y). Since y=Y/Z, this gives
      * u=(Z+Y)/(Z-Y).
      */
+    /* zminusy can't be zero here since that requires y == 1, i.e. [e]B as 
+       the identity.  Otherwise 'if( fe_iszero( zminusy ) )' would add the 
+       required check for this - pcg */
     fe_add(zplusy, A.Z, A.Y);
     fe_sub(zminusy, A.Z, A.Y);
     fe_invert(zminusy_inv, zminusy);

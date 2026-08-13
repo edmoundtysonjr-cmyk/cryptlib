@@ -376,7 +376,7 @@ int setPKCinfo( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	BYTE keyDataBuffer[ ( CRYPT_MAX_PKCSIZE * 4 ) + 8 ];
 	MESSAGE_DATA msgData;
 	int keyDataSize DUMMY_INIT, status;
@@ -384,6 +384,7 @@ int setPKCinfo( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( pkcInfo != NULL );
 
 	assert( ( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_RSA && \
 			  isReadPtr( keyInfo, sizeof( CRYPT_PKCINFO_RSA ) ) ) || \
@@ -514,12 +515,14 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int rsaGetComponents( const CONTEXT_INFO *contextInfoPtr, 
 							 CRYPT_PKCINFO_RSA *rsaKeyInfo )
 	{
-	const PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( rsaKeyInfo, sizeof( CRYPT_PKCINFO_RSA ) ) );
 	
+	REQUIRES( pkcInfo != NULL );
+
 	memset( rsaKeyInfo, 0, sizeof( CRYPT_PKCINFO_RSA ) );
 	if( TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_ISPUBLICKEY ) )
 		rsaKeyInfo->isPublicKey = TRUE; 
@@ -582,11 +585,13 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int dlpGetComponents( const CONTEXT_INFO *contextInfoPtr, 
 							 CRYPT_PKCINFO_DLP *dlpKeyInfo )
 	{
-	const PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( dlpKeyInfo, sizeof( CRYPT_PKCINFO_DLP ) ) );
+
+	REQUIRES( pkcInfo != NULL );
 
 	memset( dlpKeyInfo, 0, sizeof( CRYPT_PKCINFO_DLP ) );
 	if( TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_ISPUBLICKEY ) )
@@ -632,11 +637,13 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int eccGetComponents( const CONTEXT_INFO *contextInfoPtr, 
 							 CRYPT_PKCINFO_ECC *eccKeyInfo )
 	{
-	const PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( eccKeyInfo, sizeof( CRYPT_PKCINFO_ECC ) ) );
+
+	REQUIRES( pkcInfo != NULL );
 
 	memset( eccKeyInfo, 0, sizeof( CRYPT_PKCINFO_ECC ) );
 	if( TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_ISPUBLICKEY ) )

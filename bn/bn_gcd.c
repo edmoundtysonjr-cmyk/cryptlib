@@ -111,6 +111,11 @@
 
 /* Changes for cryptlib - pcg */
 
+/* BN_gcd() isn't constant-time but is only used in keygen where it doesn't
+   matter.  BN_mod_inverse_no_branch() isn't entirely no-branch because of 
+   the while loop but cryptlib defends against this at higher levels, and 
+   see also the threat model documentation */
+
 #if defined( INC_ALL )
   #include "bn_lcl.h"
 #else
@@ -594,6 +599,7 @@ static BIGNUM *BN_mod_inverse_no_branch(BIGNUM *in,
          * Turn BN_FLG_CONSTTIME flag on, so that when BN_div is invoked,
          * BN_div_no_branch will be called eventually.
          */
+        BN_init( &local_B );	/* pcg */
         pB = &local_B;
         local_B.flags = 0;
         BN_with_flags(pB, B, BN_FLG_CONSTTIME);
@@ -622,6 +628,7 @@ static BIGNUM *BN_mod_inverse_no_branch(BIGNUM *in,
          * Turn BN_FLG_CONSTTIME flag on, so that when BN_div is invoked,
          * BN_div_no_branch will be called eventually.
          */
+        BN_init( &local_A );	/* pcg */
         pA = &local_A;
         local_A.flags = 0;
         BN_with_flags(pA, A, BN_FLG_CONSTTIME);

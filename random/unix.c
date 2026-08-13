@@ -1922,8 +1922,9 @@ static int getEGDdata( void )
 
 		memset( &sockAddr, 0, sizeof( struct sockaddr_un ) );
 		sockAddr.sun_family = AF_UNIX;
-		strlcpy_s( sockAddr.sun_path, sizeof( sockAddr.sun_path ),
-				   egdSources[ egdIndex ] );
+		status = strlcpy_s( sockAddr.sun_path, sizeof( sockAddr.sun_path ),
+							egdSources[ egdIndex ] );
+		ENSURES( cryptStatusOK( status ) );
 		if( connect( sockFD, ( struct sockaddr * ) &sockAddr,
 					 sizeof( struct sockaddr_un ) ) >= 0 )
 			break;

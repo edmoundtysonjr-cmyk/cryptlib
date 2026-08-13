@@ -46,14 +46,21 @@ static const BYTE randomTestData[ 128 ] = \
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 static BOOLEAN pairwiseConsistencyTest( CONTEXT_INFO *contextInfoPtr )
 	{
-	const CAPABILITY_INFO *capabilityInfoPtr = getRSACapability();
+	const CAPABILITY_INFO *capabilityInfoPtr = \
+								DATAPTR_GET( contextInfoPtr->capabilityInfo );
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	BYTE buffer[ CRYPT_MAX_PKCSIZE + 8 ];
-	const int length = bitsToBytes( contextInfoPtr->ctxPKC->keySizeBits );
-	int status;
+	BYTE origBuffer[ CRYPT_MAX_PKCSIZE + 8 ];
+	int length, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES_B( sanityCheckContext( contextInfoPtr ) );
+	REQUIRES_B( capabilityInfoPtr != NULL );
+	REQUIRES_B( pkcInfo != NULL );
+
+	length = bitsToBytes( pkcInfo->keySizeBits );
+	ENSURES_B( rangeCheck( length, MIN_PKCSIZE, CRYPT_MAX_PKCSIZE ) );
 
 	/* Encrypt with the public key */
 	memset( buffer, 0, CRYPT_MAX_PKCSIZE );
@@ -70,6 +77,7 @@ static BOOLEAN pairwiseConsistencyTest( CONTEXT_INFO *contextInfoPtr )
 	if( length > 384 )
 		memcpy( buffer + 384, randomTestData, min( 128, length - 384 ) );
 #endif /* CRYPT_MAX_PKCSIZE >= 512 */
+	memcpy( origBuffer, buffer, length );
 	status = capabilityInfoPtr->encryptFunction( contextInfoPtr, 
 												 buffer, length );
 	if( cryptStatusError( status ) )
@@ -83,7 +91,7 @@ static BOOLEAN pairwiseConsistencyTest( CONTEXT_INFO *contextInfoPtr )
 
 	/* Make sure that we're recovered the original, including correct
 	   handling of leading zeroes */
-	return( !memcmp( buffer, randomTestData, 128 ) );
+	return( !memcmp( buffer, origBuffer, length ) );
 	}
 
 #ifndef CONFIG_NO_SELFTEST
@@ -292,6 +300,8 @@ static int selfTest( void )
 	PKC_INFO contextData, *pkcInfo = &contextData;
 	const CAPABILITY_INFO *capabilityInfoPtr;
 	BYTE buffer[ CRYPT_MAX_PKCSIZE + 8 ];
+	BN_ULONG value;
+	LOOP_INDEX i;
 	int status;
 
 	/* Initialise the key components */
@@ -314,13 +324,7 @@ static int selfTest( void )
 	/* Try it again with side-channel protection/blinding enabled.  Note 
 	   that this uses the randomness subsystem, which can significantly slow 
 	   down the self-test if it's being performed before the polling has 
-	   completed.
-	   
-	   Since we're still using the same key but changing the way that it's
-	   used, we have to call initKeyFunction() on the existing data, which
-	   isn't normally done.  Because the re-init with blinding changed the
-	   bignum state, we reset the checksums to force them to be re-
-	   calculated */
+	   completed	*/
 	memset( buffer, 0, CRYPT_MAX_PKCSIZE );
 	memcpy( buffer, randomTestData, 128 );
 	status = initContext( &contextInfo, pkcInfo );
@@ -365,7 +369,7 @@ static int selfTest( void )
 		}
 
 	/* The checking for memory faults is performed at the 
-	   MESSAGE_CTX_ENCRYPT level, so it won't be detected when we call the
+	   MESSAGE_CTX_ENCRYPT level so it won't be detected when we call the
 	   function directly via an internal code pointer */
 #if 0
 	/* Finally, make sure that the memory fault-detection is working */
@@ -380,14 +384,24 @@ static int selfTest( void )
 		return( CRYPT_ERROR_FAILED );
 		}
 #else
-	/* Emulation of what the above code would do */
-	pkcInfo->rsaParam_n.d[ 8 ] ^= 0x0100;
-	status = checksumContextData( pkcInfo, TRUE );
-	if( !cryptStatusError( status ) )
+	/* Make sure that we can detect single-bit errors at various bit 
+	   positions */
+	value = pkcInfo->rsaParam_n.d[ 8 ];
+	LOOP_MED( i = 0, i < 31, i++ )
 		{
-		staticDestroyContext( &contextInfo );
-		return( CRYPT_ERROR_FAILED );
+		ENSURES( LOOP_INVARIANT_MED( i, 0, 30 ) );
+		
+		pkcInfo->rsaParam_n.d[ 8 ] = value ^ ( ( BN_ULONG ) 1 << i );
+		status = checksumContextData( pkcInfo, TRUE );
+		if( !cryptStatusError( status ) )
+			{
+			/* If the check didn't return an error status due to corrupted data,
+			   this is a test failure */
+			staticDestroyContext( &contextInfo );
+			return( CRYPT_ERROR_FAILED );
+			}
 		}
+	ENSURES( LOOP_BOUND_OK );
 #endif /* 0 */
 
 	/* Clean up */
@@ -414,18 +428,24 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					  INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					  IN_LENGTH_SHORT int noBytes )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
-	const BIGNUM *n = &pkcInfo->rsaParam_n, *e = &pkcInfo->rsaParam_e;
-	BIGNUM *data = &pkcInfo->tmp1;
-	const int length = bitsToBytes( pkcInfo->keySizeBits );
-	int offset, dummy, bnStatus = BN_STATUS, status;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const BIGNUM *n, *e;
+	BIGNUM *data;
+	int length, offset, dummy, bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
-	assert( isWritePtrDynamic( buffer, length ) );
+	assert( isWritePtrDynamic( buffer, noBytes ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( noBytes == length );
 	REQUIRES( isShortIntegerRangeNZ( noBytes ) );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	n = &pkcInfo->rsaParam_n; e = &pkcInfo->rsaParam_e; 
+	data = &pkcInfo->tmp1;
+	length = bitsToBytes( pkcInfo->keySizeBits );
+	REQUIRES( noBytes == length );
 
 	/* Move the data from the buffer into a bignum */
 	status = importBignum( data, buffer, length, 
@@ -450,7 +470,7 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		{
 		/* If the resulting value has more than 128 bits of leading zeroes
 		   then there's something wrong */
-		if( offset > 16 )
+		if( offset > bitsToBytes( 128 ) )
 			return( CRYPT_ERROR_BADDATA );
 		REQUIRES( rangeCheck( offset, 1, 16 ) );
 		memset( buffer, 0, offset );
@@ -540,22 +560,28 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					  INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					  IN_LENGTH_SHORT int noBytes )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
-	const BIGNUM *p = &pkcInfo->rsaParam_p, *q = &pkcInfo->rsaParam_q;
-	const BIGNUM *u = &pkcInfo->rsaParam_u, *e1 = &pkcInfo->rsaParam_exponent1;
-	const BIGNUM *e2 = &pkcInfo->rsaParam_exponent2;
-	BIGNUM *data = &pkcInfo->tmp1, *p2 = &pkcInfo->tmp2, *q2 = &pkcInfo->tmp3;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const BIGNUM *p, *q, *u, *e1, *e2;
+	BIGNUM *data, *p2, *q2;
 	BOOLEAN dummyAdd = TRUE;
-	const int length = bitsToBytes( pkcInfo->keySizeBits );
+	int length, offset, dummy, status;
 	LOOP_INDEX bnStatus = BN_STATUS;
-	int offset, dummy, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
-	assert( isWritePtrDynamic( buffer, length ) );
+	assert( isWritePtrDynamic( buffer, noBytes ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( noBytes == length );
 	REQUIRES( isShortIntegerRangeNZ( noBytes ) );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	p = &pkcInfo->rsaParam_p; q = &pkcInfo->rsaParam_q; 
+	u = &pkcInfo->rsaParam_u; e1 = &pkcInfo->rsaParam_exponent1;
+	e2 = &pkcInfo->rsaParam_exponent2; data = &pkcInfo->tmp1; 
+	p2 = &pkcInfo->tmp2; q2 = &pkcInfo->tmp3;
+	length = bitsToBytes( pkcInfo->keySizeBits );
+	REQUIRES( noBytes == length );
 
 	/* Move the data from the buffer into a bignum.  We need to make an 
 	   unfortunate exception to the valid-length check for SSL's weird 
@@ -601,7 +627,7 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 		p2 = ( ( C mod p ) ** exponent1 ) mod p
 		q2 = ( ( C mod q ) ** exponent2 ) mod q */
-	REQUIRES( BN_cmp( p, q ) > 0 );		/* Precondition for CRT shortcut */
+	REQUIRES( BN_cmp( p, q ) > 0 );		/* Guaranteed by the key-load code */
 	CK( BN_mod( p2, data, p,			/* p2 = C mod p  */
 				&pkcInfo->bnCTX ) );
 	CK( BN_mod_exp_mont( p2, p2, e1, p, &pkcInfo->bnCTX,
@@ -654,6 +680,7 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		const BIGNUM *n = &pkcInfo->rsaParam_n;
 		BIGNUM *k = &pkcInfo->rsaParam_blind_k;
 		BIGNUM *kInv = &pkcInfo->rsaParam_blind_kInv;
+		BIGNUM *kTmp = p2, *kInvTmp = q2;	/* Reuse dead variables */
 
 		CK( BN_mod_mul( data, data, kInv, n, &pkcInfo->bnCTX ) );
 		if( bnStatusError( bnStatus ) )
@@ -671,9 +698,24 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		   and the values derived from it, but it seems unlikely that they 
 		   can do much with this and leads to problems of its own since the
 		   process of calculating the new blinding value is itself 
-		   susceptible to side-channel attacks */
-		CK( BN_mod_mul( k, k, k, n, &pkcInfo->bnCTX ) );
-		CK( BN_mod_mul( kInv, kInv, kInv, n, &pkcInfo->bnCTX ) );
+		   susceptible to side-channel attacks.
+		   
+		   We also have to be careful with how we do this because we're now
+		   updating key-related data in pkcInfo, so a failure halfway 
+		   through would leave it corrupted.  While this is incredibly 
+		   unlikely (it would require memory corruption of bignums, which
+		   means we've lost already), we can at least try and mitigate it by
+		   computing the results into the now-unused p2 and q2 values and 
+		   only replacing k/kInv if the operation succeeds.  There's still 
+		   the BN_copy() failing to consider, but that's just a dressed-up 
+		   memcpy() so if the mod-mul is OK with the bignums than the copy
+		   should be as well */
+		CK( BN_mod_mul( kTmp, k, k, n, &pkcInfo->bnCTX ) );
+		CK( BN_mod_mul( kInvTmp, kInv, kInv, n, &pkcInfo->bnCTX ) );
+		if( bnStatusError( bnStatus ) )
+			return( getBnStatus( bnStatus ) );
+		CKPTR( BN_copy( k, kTmp ) );
+		CKPTR( BN_copy( kInv, kInvTmp ) );
 		if( bnStatusError( bnStatus ) )
 			return( getBnStatus( bnStatus ) );
 		}
@@ -732,9 +774,11 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   internal bignums unless we're doing an internal load */
 	if( key != NULL )
 		{
-		PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
 		const CRYPT_PKCINFO_RSA *rsaKey = ( CRYPT_PKCINFO_RSA * ) key;
+		PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 		int status;
+
+		REQUIRES( pkcInfo != NULL );
 
 		if( rsaKey->isPublicKey )
 			SET_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_ISPUBLICKEY );
@@ -815,7 +859,8 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
-						IN_LENGTH_SHORT_MIN( MIN_PKCSIZE * 8 ) \
+						IN_RANGE( bytesToBits( MIN_KEYSIZE ),
+								  bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
 							const int keySizeBits )
 	{
 	int status;
@@ -827,11 +872,7 @@ static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			  keySizeBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
 
 	status = generateRSAkey( contextInfoPtr, keySizeBits );
-	if( cryptStatusOK( status ) &&
-#ifndef USE_FIPS140
-		TEST_FLAG( contextInfoPtr->flags, 
-				   CONTEXT_FLAG_SIDECHANNELPROTECTION ) &&
-#endif /* USE_FIPS140 */
+	if( cryptStatusOK( status ) && \
 		!pairwiseConsistencyTest( contextInfoPtr ) )
 		{
 		DEBUG_DIAG(( "Consistency check of freshly-generated RSA key "

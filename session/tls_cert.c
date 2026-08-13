@@ -250,7 +250,13 @@ int checkHostNameTLS( IN_HANDLE const CRYPT_CERTIFICATE iCryptCert,
 					 ( MESSAGE_CAST ) &nameValue, CRYPT_ATTRIBUTE_CURRENT );
 					 /* Re-select the subject DN */
 
-	/* Get the CN and check it against the host name */
+	/* Get the CN and check it against the host name.  Note that RFC 6125,
+	   alongside a bunch of other crazy, requires (section 6.4.4) that "a 
+	   client MUST NOT seek a match for a reference identifier of CN-ID if 
+	   the presented identifiers include a DNS-ID, SRV-ID, URI-ID, or any 
+	   application-specific identifier types supported by the client",
+	   nicely breaking decades of industry practice of putting DNS names in
+	   the CN field.  Like everyone else, we ignore this requirement */
 	setMessageData( &msgData, certName, MAX_DNS_SIZE );
 	status = krnlSendMessage( iCryptCert, IMESSAGE_GETATTRIBUTE_S, 
 							  &msgData, CRYPT_CERTINFO_COMMONNAME );
@@ -260,7 +266,7 @@ int checkHostNameTLS( IN_HANDLE const CRYPT_CERTIFICATE iCryptCert,
 		status = matchName( serverName, serverNameLength, certName,
 							certNameLength, iCryptCert, errorInfo );
 		if( cryptStatusOK( status ) )
-			return( status );
+			return( CRYPT_OK );
 
 		/* If this was the only name that's present then we can't go any 
 		   further (the extended error information will have been provided 

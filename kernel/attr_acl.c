@@ -599,11 +599,16 @@ static const ATTRIBUTE_ACL optionACL[] = {
 		ROUTE( OBJECT_TYPE_USER ),
 		RANGE( FALSE, FALSE ) ),
 
-	MKACL_B(	/* Algorithm self-test status */
-		CRYPT_OPTION_SELFTESTOK, 
+	MKACL(	/* Algorithm self-test status */
+		/* Another special-case attribute that can only be set to TRUE which
+		   triggers a self-test.  cryptlib then leaves it at TRUE or sets it
+		   to FALSE depending on the self-test status */
+		CRYPT_OPTION_SELFTESTOK, ATTRIBUTE_VALUE_BOOLEAN,
 		ST_NONE, ST_NONE, ST_USER_ANY, 
-		MKPERM( RWx_RWx ), 
-		ROUTE( OBJECT_TYPE_USER ) ),
+		MKPERM( RWx_RWx ), 0,
+		ROUTE( OBJECT_TYPE_USER ),
+		RANGE( TRUE, TRUE ) ),
+
 	MKACL_END(), MKACL_END()
 	};
 
@@ -4312,7 +4317,7 @@ static const ATTRIBUTE_ACL internalACL[] = {
 		ST_CTX_CONV, ST_NONE, ST_NONE, 
 		MKPERM_INT( Rxx_xxx ),
 		ROUTE( OBJECT_TYPE_CONTEXT ),
-		RANGE( 12, CRYPT_MAX_HASHSIZE ) ),
+		RANGE( MIN_ICV_SIZE, MAX_ICV_SIZE ) ),
 	MKACL_S(	/* Rekey for AEAD modes */
 		CRYPT_IATTRIBUTE_REKEY,
 		ST_CTX_MAC, ST_NONE, ST_NONE, 

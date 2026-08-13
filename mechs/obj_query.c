@@ -78,8 +78,12 @@ static int getObjectInfo( INOUT_PTR STREAM *stream,
 		return( CRYPT_ERROR_UNDERFLOW );
 
 	/* Get the object's length and make sure that its encoding is valid, 
-	   which also checks that all of the object's data is present */
+	   which also checks that all of the object's data is present.
+	   getStreamObjectLength() guarantees that the length is a nonzero
+	   integer, but we make the check explicit here */
 	status = getStreamObjectLength( stream, &length, 16 );
+	if( cryptStatusOK( status ) && !isIntegerRangeNZ( length ) )
+		status = CRYPT_ERROR_OVERFLOW;
 	if( cryptStatusOK( status ) )
 		{
 		void *objectPtr;
@@ -280,7 +284,8 @@ static int getObjectInfo( INOUT_PTR STREAM *stream,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int getPgpPacketInfo( INOUT_PTR STREAM *stream, 
 					  OUT_PTR QUERY_INFO *queryInfo,
-					  const QUERYOBJECT_TYPE objectTypeHint )
+					  IN_ENUM( QUERYOBJECT ) \
+							const QUERYOBJECT_TYPE objectTypeHint )
 	{
 	const int startPos = stell( stream );
 	int ctb, version, length, offset, status;
@@ -321,7 +326,18 @@ int getPgpPacketInfo( INOUT_PTR STREAM *stream,
 	length--;		/* We've skipped the version number */
 
 	/* If the caller has specified that a particular type of object is 
-	   expected, make sure that it's the right type */
+	   expected, make sure that it's the right type.  The PGP object 
+	   versioning is a complete muddle, with different versions across
+	   different packet types (so an SKE version 4 might correspond to a PKE 
+	   version 3) and discontinuities among the versioning.  RFC 9580 seems 
+	   to have finally resolved this by calling everything version 6, 
+	   creating some of the gaps just mentioned.  Because of this
+	   discontinuous versioning we can't use the n + 1 range extension used
+	   for CMS because the next version could be anywhere past the current
+	   one, however we speculate that, because of the unification of version
+	   numbers in RFC 9580, the next one might be a consistent version 7.  
+	   See https://www.iana.org/assignments/openpgp#openpgp-key-signature-versions
+	   for the currently defined versions */
 	if( objectTypeHint == QUERYOBJECT_KEYEX )
 		{
 		switch( pgpGetPacketType( ctb ) )
@@ -329,15 +345,14 @@ int getPgpPacketInfo( INOUT_PTR STREAM *stream,
 			case PGP_PACKET_SKE:
 				if( version == PGP_VERSION_OPENPGP )
 					{
+					/* RFC 2440, version 4 SKE */
 					queryInfo->type = CRYPT_OBJECT_ENCRYPTED_KEY;
 					queryInfo->version = PGP_VERSION_OPENPGP;
 					break;
 					}
-				if( version == PGP_VERSION_OPENPGP + 1 || \
-					version == PGP_VERSION_OPENPGP + 2 )
+				if( version == 6 || version == 7 )
 					{
-					/* Assume that it's a new type of SKE packet and no-op 
-					   out the read */
+					/* RFC 9580, version 6 SKE, no-op out the read */
 					queryInfo->optType = CRYPT_OBJECT_ENCRYPTED_KEY;
 					break;
 					}
@@ -348,20 +363,20 @@ int getPgpPacketInfo( INOUT_PTR STREAM *stream,
 				   expected VERSION_OPENPGP */
 				if( version == PGP_VERSION_2 )
 					{
+					/* RFC 2440, version 2 PKE */
 					queryInfo->type = CRYPT_OBJECT_PKCENCRYPTED_KEY;
 					break;
 					}
 				if( version == PGP_VERSION_3 )
 					{
+					/* RFC 4880, version 3 PKE */
 					queryInfo->type = CRYPT_OBJECT_PKCENCRYPTED_KEY;
 					queryInfo->version = PGP_VERSION_OPENPGP;
 					break;
 					}
-				if( version == PGP_VERSION_3 + 1 || \
-					version == PGP_VERSION_3 + 2 )
+				if( version == 6 || version == 7 )
 					{
-					/* Assume that it's a new type of PKE packet and no-op 
-					   out the read */
+					/* RFC 9580, version 6 PKE, no-op out the read */
 					queryInfo->optType = CRYPT_OBJECT_PKCENCRYPTED_KEY;
 					break;
 					}
@@ -383,20 +398,20 @@ int getPgpPacketInfo( INOUT_PTR STREAM *stream,
 			case PGP_PACKET_SIGNATURE:
 				if( version == PGP_VERSION_3 )
 					{
+					/* RFC 2440, version 3 signature */
 					queryInfo->type = CRYPT_OBJECT_SIGNATURE;
 					break;
 					}
 				if( version == PGP_VERSION_OPENPGP )
 					{
+					/* RFC 2440, version 4 signature */
 					queryInfo->type = CRYPT_OBJECT_SIGNATURE;
 					queryInfo->version = PGP_VERSION_OPENPGP;
 					break;
 					}
-				if( version == PGP_VERSION_OPENPGP + 1 || \
-					version == PGP_VERSION_OPENPGP + 2 )
+				if( version == 6 || version == 7 )
 					{
-					/* Assume that it's a new type of signature packet and 
-					   no-op out the read */
+					/* RFC 9580, version 6 signature, no-op out the read */
 					queryInfo->optType = CRYPT_OBJECT_SIGNATURE;
 					break;
 					}
@@ -574,8 +589,14 @@ int queryAsn1Object( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 			}
 
 		case CRYPT_OBJECT_NONE:
-			/* New, unrecognised object type */
-			status = readUniversal( stream );
+			/* New, unrecognised object type.  getObjectInfo() has already 
+			   guaranteed that the size is an integer range, we restrict it 
+			   even further here because we shouldn't be seeing gigantic 
+			   keyex/signature objects */
+			if( !isShortIntegerRangeNZ( basicQueryInfo.size ) )
+				status = CRYPT_ERROR_OVERFLOW;
+			else
+				status = readUniversal( stream );
 			break;
 
 		default:
@@ -643,10 +664,12 @@ int queryPgpObject( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 	ENSURES( queryInfo->type != CRYPT_OBJECT_NONE || \
 			 queryInfo->optType != CRYPT_OBJECT_NONE );
 
-	/* Call the appropriate routine to find out more about the object.  The
-	   subtype-specific functions also call getPgpPacketInfo() (because 
-	   they're shared with other code) so the queryInfo is re-populated on
-	   each call */
+	/* Call the appropriate routine to find out more about the object.  
+	   We've already reset the stream above after which the subtype-specific 
+	   functions will call getPgpPacketInfo() themselves (because they're 
+	   shared with other code), so the queryInfo is re-populated on each 
+	   call.  The first getPgpPacketInfo() above is really just to get the 
+	   object type so we know what to do with it here */
 	switch( queryInfo->type )
 		{
 		case CRYPT_OBJECT_ENCRYPTED_KEY:
@@ -754,7 +777,7 @@ C_RET cryptQueryObject( C_IN void C_PTR objectData,
 	{
 	QUERY_INFO queryInfo DUMMY_INIT_STRUCT;	/* If USE_PGP undef'd */
 	STREAM stream;
-	int value, length = objectDataLength, status;
+	int value, status;
 
 	/* Perform basic error checking and clear the return value */
 	if( objectDataLength < MIN_CRYPT_OBJECTSIZE || \
@@ -770,7 +793,7 @@ C_RET cryptQueryObject( C_IN void C_PTR objectData,
 	   query functions.  Note that we use sPeek() rather than peekTag() 
 	   because we want to continue processing (or at least checking for) PGP 
 	   data if it's not ASN.1 */
-	sMemConnect( &stream, ( void * ) objectData, length );
+	sMemConnect( &stream, ( void * ) objectData, objectDataLength );
 	status = value = sPeek( &stream );
 	if( cryptStatusError( status ) )
 		{
@@ -779,8 +802,12 @@ C_RET cryptQueryObject( C_IN void C_PTR objectData,
 		}
 	if( value == BER_SEQUENCE || value == MAKE_CTAG( CTAG_RI_PASSWORD ) )
 		{
+#ifdef USE_INT_CMS 
 		status = queryAsn1Object( &stream, &queryInfo, 
 								  QUERYOBJECT_UNKNOWN );
+#else
+		status = CRYPT_ERROR_BADDATA;
+#endif /* USE_INT_CMS */
 		}
 	else
 		{
@@ -794,6 +821,18 @@ C_RET cryptQueryObject( C_IN void C_PTR objectData,
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
+
+	/* Some object types are used internally by cryptlib and aren't 
+	   meaningful to an external caller, an example being the header of a 
+	   PGP one-pass signature which is used by the enveloping code but has
+	   no meaning outside of the PGP enveloped data that it accompanies.  
+	   If we've encountered one of these object types we deny knowledge of 
+	   it to an external caller */
+	if( !isEnumRange( queryInfo.type, CRYPT_OBJECT ) )
+		{
+		zeroise( &queryInfo, sizeof( QUERY_INFO ) );
+		return( CRYPT_ERROR_BADDATA );
+		}
 
 	/* Copy the externally-visible fields across */
 	cryptObjectInfo->objectType = queryInfo.type;
@@ -813,6 +852,7 @@ C_RET cryptQueryObject( C_IN void C_PTR objectData,
 		if( queryInfo.keySetupAlgo != CRYPT_ALGO_NONE )
 			cryptObjectInfo->hashAlgo = queryInfo.keySetupAlgo;
 		}
+	zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 
 	return( CRYPT_OK );
 	}

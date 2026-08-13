@@ -75,10 +75,15 @@ BOOLEAN pointerBoundsCheck( IN_PTR_OPT const void *data,
 		return( TRUE );
 		}
 
-	/* Make sure that the inner data is contained within the outer data */
-	if( innerData < data || \
-		( ( BYTE * ) innerData + innerDataLength > \
-										( BYTE * ) data + dataLength ) )
+	/* Make sure that the inner data is contained within the outer data.  
+	   This has to remain a best-effort check because the C standard says 
+	   that comparing two values in the same linear address space is UB.
+	   All known commercial compilers get this right, and so far even gcc
+	   hasn't decided to take advantage of the standard allowing it to 
+	   gratuitously break the code that implements this no-brainer check */
+	if( ( const BYTE * ) innerData < ( const BYTE * ) data || \
+		( ( const BYTE * ) innerData + innerDataLength > \
+										( const BYTE * ) data + dataLength ) )
 		return( FALSE );
 
 	return( TRUE );
@@ -104,11 +109,11 @@ CFI_CHECK_TYPE cfiCheckSequence3( const CFI_CHECK_TYPE initValue,
 	{
 	CFI_CHECK_TYPE cfiCheckValue = initValue;
 
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label1Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label1Value;
 	if( label2Value != ( CFI_CHECK_TYPE ) -1 )
-		cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label2Value;
+		cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label2Value;
 	if( label3Value != ( CFI_CHECK_TYPE ) -1 )
-		cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label3Value;
+		cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label3Value;
 
 	return( cfiCheckValue );
 	}
@@ -123,14 +128,14 @@ CFI_CHECK_TYPE cfiCheckSequence6( const CFI_CHECK_TYPE initValue,
 	{
 	CFI_CHECK_TYPE cfiCheckValue = initValue;
 
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label1Value;
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label2Value;
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label3Value;
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label4Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label1Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label2Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label3Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label4Value;
 	if( label5Value != ( CFI_CHECK_TYPE ) -1 )
-		cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label5Value;
+		cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label5Value;
 	if( label6Value != ( CFI_CHECK_TYPE ) -1 )
-		cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label6Value;
+		cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label6Value;
 
 	return( cfiCheckValue );
 	}
@@ -148,21 +153,21 @@ CFI_CHECK_TYPE cfiCheckSequence9( const CFI_CHECK_TYPE initValue,
 	{
 	CFI_CHECK_TYPE cfiCheckValue = initValue;
 
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label1Value;
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label2Value;
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label3Value;
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label4Value;
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label5Value;
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label6Value;
-	cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label7Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label1Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label2Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label3Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label4Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label5Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label6Value;
+	cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label7Value;
 	if( label8Value != ( CFI_CHECK_TYPE ) -1 )
-		cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label8Value;
+		cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label8Value;
 	if( label9Value != ( CFI_CHECK_TYPE ) -1 )
-		cfiCheckValue = ( cfiCheckValue * FNV_PRIME ) + label9Value;
+		cfiCheckValue = ( cfiCheckValue * CFI_PRIME ) + label9Value;
 
 	return( cfiCheckValue );
 	}
-#endif /* CONFIG_CONSERVE_MEMORY_EXTRA */
+#endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 /* Copy a string attribute to external storage, with various range checks
    to follow the cryptlib semantics (these will already have been done by
@@ -221,13 +226,16 @@ int attributeCopyParams( OUT_BUFFER_OPT( destMaxLength, \
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int attributeCopy( INOUT_PTR MESSAGE_DATA *msgData, 
 				   IN_BUFFER( attributeLength ) const void *attribute, 
-				   IN_LENGTH_SHORT_Z const int attributeLength )
+				   IN_LENGTH_SHORT const int attributeLength )
 	{
 	assert( isWritePtr( msgData, sizeof( MESSAGE_DATA ) ) );
-	assert( attributeLength == 0 || \
-			isReadPtrDynamic( attribute, attributeLength ) );
+	assert( isReadPtrDynamic( attribute, attributeLength ) );
 
-	REQUIRES( isShortIntegerRange( attributeLength ) );
+	REQUIRES( ( msgData->data == NULL && \
+				msgData->length == 0 ) || \
+			  ( msgData->data != NULL && \
+				isShortIntegerRangeNZ( msgData->length ) ) );
+	REQUIRES( isShortIntegerRangeNZ( attributeLength ) );
 
 	return( attributeCopyParams( msgData->data, msgData->length, 
 								 &msgData->length, attribute, 
@@ -243,21 +251,39 @@ BOOLEAN algoAvailable( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 
 	REQUIRES_B( isEnumRange( cryptAlgo, CRYPT_ALGO ) );
 
-	/* Short-circuit check for always-available algorithms.  The kernel 
-	   won't initialise without the symmetric and hash algorithms being 
-	   present (and SHA-x implies HMAC-SHAx) so it's safe to hardcode them 
-	   in here */
-	if( cryptAlgo == CRYPT_ALGO_AES || \
-		cryptAlgo == CRYPT_ALGO_SHA1 || \
-		cryptAlgo == CRYPT_ALGO_HMAC_SHA1 || \
-		cryptAlgo == CRYPT_ALGO_SHA2 || \
-		cryptAlgo == CRYPT_ALGO_HMAC_SHA2 || \
-		cryptAlgo == CRYPT_ALGO_RSA )
-		return( TRUE );
-#ifdef USE_3DES
-	if( cryptAlgo == CRYPT_ALGO_3DES )
-		return( TRUE );
-#endif /* USE_3DES */
+	/* Short-circuit check for frequently-queried and/or always-available 
+	   algorithms */
+	switch( cryptAlgo )
+		{
+		/* The kernel won't initialise without the symmetric and hash 
+		   algorithms being present (SHA-x implies HMAC-SHAx) so it's safe 
+		   to hardcode them in here */
+		case CRYPT_ALGO_AES:
+		case CRYPT_ALGO_SHA1:
+		case CRYPT_ALGO_HMAC_SHA1:
+		case CRYPT_ALGO_SHA2:
+		case CRYPT_ALGO_HMAC_SHA2:
+			return( TRUE );
+			
+		/* Frequently-queried algorithms.  These are present as native
+		   implementations but may not be present if a custom hardware 
+		   profile is being used */
+#if !defined( CONFIG_CRYPTO_HW1 ) && !defined( CONFIG_CRYPTO_HW2 )
+		case CRYPT_ALGO_RSA:
+  #ifdef USE_ECDSA
+		case CRYPT_ALGO_ECDSA:
+  #endif /* USE_ECDSA */
+  #ifdef USE_3DES
+		case CRYPT_ALGO_3DES:
+  #endif /* USE_3DES */
+			return( TRUE );
+#endif /* !CONFIG_CRYPTO_HW1 && !CONFIG_CRYPTO_HW2 */
+
+		default:
+			/* Everything else ends up here and gets routed via the (slower) 
+			   kernel check */
+			break;
+		}
 		
 	return( cryptStatusOK( krnlSendMessage( SYSTEM_OBJECT_HANDLE,
 									IMESSAGE_DEV_QUERYCAPABILITY, &queryInfo,
@@ -330,7 +356,8 @@ BOOLEAN isStrongerHash( IN_ALGO const CRYPT_ALGO_TYPE algorithm1,
    cryptographically strong, so all that we do is cache the data from 
    CRYPT_IATTRIBUTE_RANDOM_NONCE and pull out a small integer's worth on 
    each call.  For the same reason, we don't care that the function isn't
-   thread-safe */
+   thread-safe (and in any case cryptlib is very rarely run non-single-
+   threaded) */
 
 #define RANDOM_BUFFER_SIZE	64
 
@@ -341,6 +368,8 @@ int getRandomInteger( void )
 	static int nonceIndex = 0;
 	int returnValue, status;
 
+	REQUIRES_EXT( rangeCheck( nonceIndex, 0, RANDOM_BUFFER_SIZE - 2 ), 0 );
+				  /* -2 because we're reading two bytes at a time */
 	REQUIRES_EXT( !( nonceIndex & 1 ), 0 );
 
 	/* Initialise/reinitialise the nonce data if necessary.  See the long 
@@ -358,11 +387,13 @@ int getRandomInteger( void )
 			return( ( int ) getTime( GETTIME_NOFAIL ) & 0x7FFF );
 		}
 
-	/* Extract the next random integer value from the buffered data */
+	/* Extract the next random integer value from the buffered data.  We're
+	   only extracting 16 bits so we don't have to bother with 
+	   checkOverflowShift() */
 	returnValue = ( byteToInt( nonceData[ nonceIndex ] ) << 8 ) | \
 					byteToInt( nonceData[ nonceIndex + 1 ] );
 	nonceIndex = ( nonceIndex + 2 ) % RANDOM_BUFFER_SIZE;
-	ENSURES_EXT( nonceIndex >= 0 && nonceIndex < RANDOM_BUFFER_SIZE, 0 );
+	ENSURES_EXT( rangeCheck( nonceIndex, 0, RANDOM_BUFFER_SIZE - 2 ), 0 );
 
 	/* Return the value constrained to lie within the range 0...32767 */
 	return( returnValue & 0x7FFF );
@@ -384,18 +415,18 @@ int mapValue( IN_INT_SHORT_Z const int srcValue,
 	assert( isReadPtr( mapTbl, mapTblSize * sizeof( MAP_TABLE ) ) );
 
 	REQUIRES( isShortIntegerRange( srcValue ) );
-	REQUIRES( mapTblSize > 0 && mapTblSize < 100 );
+	REQUIRES( mapTblSize >= 1 && mapTblSize <= 100 );
 	REQUIRES( mapTbl[ mapTblSize - 1 ].source == CRYPT_ERROR );
 
 	/* Clear return value */
 	*destValue = 0;
 
-	/* Convert the hash algorithm into the equivalent HMAC algorithm */
-	LOOP_LARGE( i = 0, 
-				i < mapTblSize && mapTbl[ i ].source != CRYPT_ERROR, 
-				i++ )
+	/* Convert the given value into the equivalent mapped value */
+	LOOP_MED( i = 0, 
+			  i < mapTblSize && mapTbl[ i ].source != CRYPT_ERROR, 
+			  i++ )
 		{
-		ENSURES( LOOP_INVARIANT_LARGE( i, 0, mapTblSize - 1 ) );
+		ENSURES( LOOP_INVARIANT_MED( i, 0, mapTblSize - 1 ) );
 
 		if( mapTbl[ i ].source == srcValue )
 			{
@@ -442,6 +473,8 @@ const char *getObjectName( IN_ARRAY( objectNameInfoSize ) \
 		}
 	ENSURES_EXT( LOOP_BOUND_OK, "<Internal error>" );
 	ENSURES_EXT( i < objectNameInfoSize, "<Internal error>" );
+	ENSURES_EXT( objectNameInfo[ i ].objectName != NULL, 
+				 "<Internal error>" );
 
 	return( objectNameInfo[ i ].objectName );
 	}
@@ -512,9 +545,9 @@ CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN checkEntropy( IN_BUFFER( dataLength ) const BYTE *data, 
 					  IN_LENGTH_SHORT_MIN( MIN_KEYSIZE ) const int dataLength )
 	{
-	const int minCount = ( dataLength / 2 ) - ( dataLength <= 16 ? 1 : 0 );
+	const int minCount = dataLength / 4;
 	LOOP_INDEX i;
-	int bitCount[ 4 + 8 ], noOnes, exceptionCount = 0, errorCount = 0;
+	int bitCount[ 4 + 8 ], noOnes, errorCount = 0;
 
 	assert( isReadPtrDynamic( data, dataLength ) );
 
@@ -524,6 +557,8 @@ BOOLEAN checkEntropy( IN_BUFFER( dataLength ) const BYTE *data,
 	if( !checkNontrivialKey( data, dataLength ) )
 		return( FALSE );
 
+	/* Count the number of two-bit pairs in each byte, giving a total of
+	   ( 4 * dataLength ) samples */
 	memset( bitCount, 0, 4 * sizeof( int ) );
 	LOOP_LARGE( i = 0, i < dataLength, i++ )
 		{
@@ -551,28 +586,20 @@ BOOLEAN checkEntropy( IN_BUFFER( dataLength ) const BYTE *data,
 	/* Poker test (almost): Make sure that each bit pair is present at least
 	   1/16 of the time.  The FIPS 140 version uses 4-bit values but the
 	   number of samples available from the keys is far too small for this so
-	   we can only use 2-bit values.
-
-	   Even then the small sample size leads to unacceptable FP rates so for
-	   short samples (<= 128 bits) we adjust the count by one and in addition
-	   allow a single value to be one below that in order to avoid getting too
-	   many FPs */	
+	   we can only use 2-bit values.  The FP rate for this for minimum-length
+	   values of 128 bits is P( bitCount[ n ] <= 3 ) ~= 0.002% per bin and
+	   ~0.007% per key across all the bins */	
 	LOOP_SMALL( i = 0, i < 4, i++ )
 		{
 		ENSURES_B( LOOP_INVARIANT_SMALL( i, 0, 3 ) );
 
-		if( bitCount[ i ] == minCount - 1 )
-			exceptionCount++;
-		else
-			{
-			if( bitCount[ i ] < minCount - 1 )
-				errorCount++;
-			}
+		if( bitCount[ i ] < minCount )
+			errorCount++;
 		}
 	ENSURES_B( LOOP_BOUND_OK );
 	zeroise( bitCount, 4 * sizeof( int ) );
 
-	return( ( errorCount > 0 || exceptionCount > 1 ) ? FALSE : TRUE );
+	return( ( errorCount > 0 ) ? FALSE : TRUE );
 	}
 
 /* Check a bignum for suspicious patterns.  This is very vaguely-defined and 
@@ -661,7 +688,10 @@ BOOLEAN isEmptyData( IN_BUFFER_C( 8 ) const BYTE data[ 8 ],
 			value |= srcPtr[ i ] ^ destPtr[ i ];
 
 		return( value ? 0x12345 : 0 );
-		} */
+		} 
+
+   Note that this function has different semantics than memcmp(), returning 
+   a pure boolean TRUE = same, FALSE = not the same */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 BOOLEAN compareDataConstTime( IN_BUFFER( length ) const void *src,
@@ -710,8 +740,8 @@ BOOLEAN compareDataConstTime( IN_BUFFER( length ) const void *src,
 		} */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN checkZeroConstTime( IN_BUFFER( strLen ) const void *data,
-						IN_LENGTH_SHORT const int length )
+BOOLEAN checkZeroConstTime( IN_BUFFER( length ) const void *data,
+							IN_LENGTH_SHORT const int length )
 	{
 	const BYTE *dataPtr = data;
 	LOOP_INDEX i;
@@ -738,25 +768,38 @@ BOOLEAN checkZeroConstTime( IN_BUFFER( strLen ) const void *data,
 *																			*
 ****************************************************************************/
 
-/* Calculate a 16-bit Fletcher-like checksum for a block of data.  This 
-   isn't a true Fletcher checksum (and like the CFI hashing it ignores
-   overflows, for the same reason) but this isn't a big deal since all we 
-   need is consistent results for identical data, the value itself is never 
-   communicated externally.  In cases where it's used in critical checks 
-   it's merely used as a quick pre-check for a full hash-based check, so it 
-   doesn't have to be perfect.  In addition it's not in any way 
-   cryptographically secure for the same reason, there's no particular need 
-   for it to be secure.  If a requirement for at least some sort of 
-   unpredictability did arise then something like Pearson hashing could be 
-   substituted transparently */
+/* Calculate a Fowler/Noll/Vo FNV-1a checksum (hash) as per RFC 9923.  As per 
+   the RFC "their good dispersion makes them particularly well suited for 
+   hashing nearly identical strings" which is exactly what we'd get in the
+   presence of bit flips and similar corruption.  It truncates (slightly) the
+   result to fit an integer but this isn't a big deal since all we need is 
+   consistent results for identical data, the value itself is never 
+   communicated externally.
+   
+   In the few cases where it's used in critical checks it's merely used as 
+   a quick pre-check for a full hash-based check, so it doesn't have to be 
+   perfect.  In addition it's not in any way cryptographically secure for 
+   the same reason, there's no particular need for it to have that 
+   property */
 
-RETVAL_RANGE( MAX_ERROR, 0x7FFFFFFF ) STDC_NONNULL_ARG( ( 1 ) ) \
-int checksumData( IN_BUFFER( dataLength ) const void *data, 
-				  IN_DATALENGTH const int dataLength )
+#if UINT_MAX > 0xFFFFFFFFUL
+  #define FNV1A_INIT	0xCBF29CE484222325ULL
+  #define FNV_PRIME		0x100000001B3ULL
+#else
+  #define FNV1A_INIT	0x811C9DC5
+  #define FNV_PRIME		0x01000193
+#endif /* 32 vs. 64-bit int */
+
+RETVAL_RANGE( 0, INT_MAX ) STDC_NONNULL_ARG( ( 1 ) ) \
+int checksumDataExt( IN_BUFFER( dataLength ) const void *data,
+					 IN_DATALENGTH const int dataLength,
+					 const unsigned int initialValue )
 	{
 	const BYTE *dataPtr = data;
 	LOOP_INDEX i;
-	int sum1 = 1, sum2 = 0;
+	unsigned int hashValue = \
+					( initialValue == CHECKSUMDATA_INIT_VALUE ) ? \
+					  FNV1A_INIT : initialValue;
 
 	assert( isReadPtrDynamic( data, dataLength ) );
 
@@ -767,12 +810,20 @@ int checksumData( IN_BUFFER( dataLength ) const void *data,
 		{
 		ENSURES( LOOP_INVARIANT_MAX( i, 0, dataLength - 1 ) );
 
-		sum1 += dataPtr[ i ];
-		sum2 += sum1;
+		hashValue ^= byteToInt( dataPtr[ i ] );
+		hashValue *= FNV_PRIME;
 		}
 	ENSURES( LOOP_BOUND_OK );
 
-	return( ( ( sum2 & 0x7FFF ) << 16 ) | ( sum1 & 0xFFFF ) );
+	return( hashValue & INT_MAX );
+	}
+
+RETVAL_RANGE( 0, INT_MAX ) STDC_NONNULL_ARG( ( 1 ) ) \
+int checksumData( IN_BUFFER( dataLength ) const void *data,
+				  IN_DATALENGTH const int dataLength )
+	{
+	return( checksumDataExt( data, dataLength, 
+							 CHECKSUMDATA_INIT_VALUE ) );
 	}
 
 /* Calculate the hash of a block of data.  We use SHA-1 because it's the 
@@ -786,9 +837,9 @@ void hashData( OUT_BUFFER_FIXED( hashMaxLength ) BYTE *hash,
 			   IN_BUFFER( dataLength ) const void *data, 
 			   IN_DATALENGTH const int dataLength )
 	{
-	HASH_FUNCTION_ATOMIC hashFunctionAtomic;
+	HASH_FUNCTION_ATOMIC hashFunctionAtomic = NULL;
 	BYTE hashBuffer[ CRYPT_MAX_HASHSIZE + 8 ];
-	int hashSize;
+	int hashSize = 0;
 
 	assert( isWritePtrDynamic( hash, hashMaxLength ) );
 	assert( hashMaxLength >= MIN_HASHSIZE && \
@@ -796,7 +847,10 @@ void hashData( OUT_BUFFER_FIXED( hashMaxLength ) BYTE *hash,
 	assert( isReadPtrDynamic( data, dataLength ) );
 	assert( isBufsizeRangeNZ( dataLength ) );
 
-	/* Get the hash algorithm information if necessary */
+	/* Get the hash algorithm information necessary.  
+	   getHashAtomicParameters() always initialises its output parameters so 
+	   the setting to dummy values above is just to keep code analysers 
+	   happy */
 	getHashAtomicParameters( CRYPT_ALGO_SHA1, 0, &hashFunctionAtomic, 
 							 &hashSize );
 
@@ -817,7 +871,8 @@ void hashData( OUT_BUFFER_FIXED( hashMaxLength ) BYTE *hash,
 			{
 			/* This is a shouldn't-occur on top of a shouldn't-occur, the 
 			   best that we can do is zero at least 64 bits */
-			memset( hash, 0, 8 );
+			ENSURES_V( isShortIntegerRangeNZ( hashMaxLength ) );
+			memset( hash, 0, min( 8, hashMaxLength ) );
 			}
 		else
 			{
@@ -875,7 +930,8 @@ static int exportAttr( INOUT_PTR STREAM *stream,
 	REQUIRES( ( length == CRYPT_UNUSED ) || \
 			  isShortIntegerRangeMin( length, 8 ) );
 
-	/* Get access to the stream buffer if required */
+	/* Get access to the stream buffer if required.  If it's a size check 
+	   via a NULL stream then we continue with msgData = { NULL, 0 } */
 	if( !sIsNullStream( stream ) )
 		{
 		if( length != CRYPT_UNUSED )
@@ -927,7 +983,7 @@ int exportVarsizeAttributeToStream( INOUT_PTR TYPECAST( STREAM * ) struct ST *st
 									IN_HANDLE const CRYPT_HANDLE cryptHandle,
 									IN_LENGTH_FIXED( CRYPT_IATTRIBUTE_RANDOM_NONCE ) \
 										const CRYPT_ATTRIBUTE_TYPE attributeType,
-									IN_RANGE( 8, 1024 ) \
+									IN_RANGE( 8, MAX_ATTRIBUTE_SIZE ) \
 										const int attributeDataLength )
 	{
 	assert( isWritePtr( streamPtr, sizeof( STREAM ) ) );
@@ -1064,7 +1120,7 @@ static int checkKeyLength( INOUT_PTR STREAM *stream,
 		{
 		status = readBitStringHole( stream, &keyLength, 
 									MIN_PKCSIZE_BERNSTEIN, DEFAULT_TAG );
-		if( cryptStatusOK( status ) && keyLength < MIN_PKCSIZE_BERNSTEIN )
+		if( cryptStatusOK( status ) && keyLength != MIN_PKCSIZE_BERNSTEIN )
 			status = CRYPT_ERROR_NOSECURE;
 		if( cryptStatusError( status ) )
 			return( status );
@@ -1073,14 +1129,16 @@ static int checkKeyLength( INOUT_PTR STREAM *stream,
 		}
 
 	/* ECC algorithms are a complete mess to handle because of the arbitrary
-	   manner in which the algorithm parameters can be represented.  To deal
-	   with this we skip the parameters and read the public key value, which 
-	   is a point on a curve stuffed in a variety of creative ways into an 
-	   BIT STRING.  Since this contains two values (the x and y coordinates) 
-	   we divide the lengths used by two to get an approximation of the 
-	   nominal key size */
+	   manner in which the algorithm parameters can be represented.  To deal 
+	   with this we skip the (always-present) parameters and read the public 
+	   key value, which is a point on a curve stuffed in a variety of 
+	   creative ways into an BIT STRING.  Since this contains two values 
+	   (the x and y coordinates) we divide the lengths used by two to get an 
+	   approximation of the nominal key size */
 	if( isEccAlgo( cryptAlgo ) )
 		{
+		if( !hasAlgoParameters )
+			return( CRYPT_ERROR_BADDATA );
 		readUniversal( stream );	/* Skip algorithm parameters */
 		status = readBitStringHole( stream, &keyLength, 
 									MIN_PKCSIZE_ECCPOINT_THRESHOLD, 
@@ -1137,7 +1195,7 @@ int iCryptReadSubjectPublicKey( INOUT_PTR TYPECAST( STREAM * ) struct ST *stream
 	const int startPos = stell( stream );
 	int spkiLength, status;
 
-	assert( isReadPtr( stream, sizeof( STREAM ) ) );
+	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( iPubkeyContext, sizeof( CRYPT_CONTEXT ) ) );
 
 #if defined( CONFIG_CRYPTO_HW1 ) || defined( CONFIG_CRYPTO_HW2 )
@@ -1253,7 +1311,8 @@ int iCryptReadSubjectPublicKey( INOUT_PTR TYPECAST( STREAM * ) struct ST *stream
 *																			*
 ****************************************************************************/
 
-#if defined( USE_HTTP ) || defined( USE_BASE64 ) || defined( USE_SSH )
+#if defined( USE_HTTP ) || defined( USE_BASE64 ) || \
+	defined( USE_SCEP ) || defined( USE_SSH )
 
 /* Read a line of text data ending in an EOL.  If we get more data than will 
    fit into the read buffer we discard it until we find an EOL.  As a 
@@ -1293,7 +1352,7 @@ static int exitTextLineError( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( format, 4 ) );
 	assert( localError == NULL || \
-			isReadPtr( localError, sizeof( BOOLEAN ) ) );
+			isWritePtr( localError, sizeof( BOOLEAN ) ) );
 
 	REQUIRES( cryptStatusError( status ) );
 
@@ -1322,15 +1381,23 @@ static int networkReadCharFunction( INOUT_PTR TYPECAST( STREAM * ) \
 	{
 	STREAM *stream = streamPtr;
 	BYTE ch;
-	int status;
+	int length, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
 	/* This readChar function is necessary because sgetc() only works on 
-	   file and memory streams, so we emulate a network-stream sgetc()
-	   here */
-	status = sread( stream, &ch, 1 );
-	return( cryptStatusError( status ) ? status : byteToInt( ch ) );
+	   file and memory streams, so we emulate a network-stream sgetc() here.  
+	   We check for potential zero-length reads, which shouldn't actually 
+	   occur because they'll be converted into an error status but in theory
+	   there are some special-case conditions where we could make the stream 
+	   nonblocking and/or allow partial reads for speculative read-ahead 
+	   where this could lead to a zero-byte read count.  This shouldn't
+	   actually happen to a stream on which readTextLine() is called but to
+	   be safe we catch and convert the condition into an error */
+	status = length = sread( stream, &ch, 1 );
+	if( cryptStatusError( status ) )
+		return( status );
+	return( ( length <= 0 ) ? CRYPT_ERROR_UNDERFLOW : byteToInt( ch ) );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
@@ -1343,10 +1410,7 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 				  IN_PTR_OPT READCHAR_FUNCTION readCharFunctionOpt, 
 				  IN_ENUM_OPT( READTEXT ) const READTEXT_TYPE options )
 	{
-	READCHAR_FUNCTION readCharFunction = \
-		( readCharFunctionOpt != NULL ) ? readCharFunctionOpt : \
-		( streamPtr->type == STREAM_TYPE_NETWORK ) ? \
-		  networkReadCharFunction : sgetc;
+	READCHAR_FUNCTION readCharFunction;
 	BOOLEAN seenWhitespace, seenContinuation = FALSE;
 	LOOP_INDEX totalChars;
 	int bufPos = 0;
@@ -1366,6 +1430,16 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 	*lineBufferSize = 0;
 	if( localError != NULL )
 		*localError = FALSE;
+
+	/* Set up the appropriate read function */
+	if( readCharFunctionOpt != NULL )
+		readCharFunction = readCharFunctionOpt;
+	else
+		{
+		readCharFunction = ( streamPtr->type == STREAM_TYPE_NETWORK ) ? \
+						   networkReadCharFunction : sgetc;
+		}
+	ENSURES( readCharFunction != NULL );
 
 	/* Set the seen-whitespace flag initially to strip leading whitespace */
 	seenWhitespace = TRUE;
@@ -1406,7 +1480,7 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 			}                 
 
 		/* If it's an EOL and we're returning raw data, don't perform any 
-		   further processing such as stripping of trailing whitespace */
+		   further processing such as stripping off trailing whitespace */
 		if( options == READTEXT_RAW && ch == '\n' )
 			break;
 
@@ -1431,7 +1505,8 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 			ENSURES( LOOP_BOUND_LARGE_REV_OK_ALT );
 			}
 
-		/* Process EOL */
+		/* Process EOL.  This is handled for any read option including 
+		   READTEXT_RAW */
 		if( ch == '\n' )
 			{
 			/* If we've seen a continuation marker, the line continues on 
@@ -1446,7 +1521,9 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 			break;
 			}
 
-		/* Ignore any additional decoration that may accompany EOLs */
+		/* Ignore any additional decoration that may accompany EOLs.  As for 
+		   '\n', this is handled for any read option including 
+		   READTEXT_RAW */
 		if( ch == '\r' )
 			continue;
 
@@ -1500,7 +1577,7 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 		REQUIRES( !checkOverflowInc( bufPos ) );
 		lineBuffer[ bufPos++ ] = intToByte( ch );
 		ENSURES( bufPos > 0 && bufPos <= totalChars + 1 && \
-				 bufPos < MAX_LINE_LENGTH );
+				 bufPos <= MAX_LINE_LENGTH );
 				 /* The 'totalChars + 1' is because totalChars is the loop
 				    iterator and won't have been incremented yet at this 
 					point */
@@ -1527,7 +1604,7 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 
 	return( CRYPT_OK );
 	}
-#endif /* USE_HTTP || USE_BASE64 || USE_SSH */
+#endif /* USE_HTTP || USE_BASE64 || USE_SCEP || USE_SSH */
 
 /****************************************************************************
 *																			*
@@ -1539,14 +1616,13 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 
 #ifndef CONFIG_CONSERVE_MEMORY_EXTRA
 
-#if defined( USE_HTTP ) || defined( USE_BASE64 ) || defined( USE_SSH )
-
-#include "io/stream.h"
+#if defined( USE_HTTP ) || defined( USE_BASE64 ) || \
+	defined( USE_SCEP ) || defined( USE_SSH )
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 3 ) ) \
-static BOOLEAN testReadLine( IN_BUFFER( dataInLength ) char *dataIn,
+static BOOLEAN testReadLine( IN_BUFFER( dataInLength ) const char *dataIn,
 							 IN_LENGTH_SHORT_MIN( 2 ) const int dataInLength, 
-							 IN_BUFFER( dataOutLength ) char *dataOut,
+							 IN_BUFFER( dataOutLength ) const char *dataOut,
 							 IN_LENGTH_SHORT_MIN( 1 ) const int dataOutLength,
 							 IN_ENUM_OPT( READTEXT ) const READTEXT_TYPE options,
 							 IN_BOOL const BOOLEAN testTruncation )
@@ -1559,8 +1635,8 @@ static BOOLEAN testReadLine( IN_BUFFER( dataInLength ) char *dataIn,
 	assert( isReadPtrDynamic( dataOut, dataOutLength ) );
 
 	REQUIRES_B( isShortIntegerRangeMin( dataInLength, 2 ) );
-	REQUIRES_B( isShortIntegerRangeMin( dataOutLength, 1 ) && \
-				dataOutLength <= 32 );
+	REQUIRES_B( ( !testTruncation && rangeCheck( dataOutLength, 1, 32 ) ) || \
+				( testTruncation && rangeCheck( dataOutLength, 16, 32 ) ) );
 	REQUIRES_B( isEnumRangeOpt( options, READTEXT ) );
 	REQUIRES_B( isBooleanValue( testTruncation ) );
 
@@ -1573,18 +1649,19 @@ static BOOLEAN testReadLine( IN_BUFFER( dataInLength ) char *dataIn,
 	status = readTextLine( &stream, buffer, 
 						   testTruncation ? dataOutLength : 32, &length, 
 						   NULL, NULL, options );
+	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( FALSE );
 	if( length != dataOutLength || memcmp( buffer, dataOut, dataOutLength ) )
 		return( FALSE );
-	sMemDisconnect( &stream );
 
 	return( TRUE );
 	}
-#endif /* USE_HTTP || USE_BASE64 || USE_SSH */
+#endif /* USE_HTTP || USE_BASE64 || USE_SCEP || USE_SSH */
 
 #if defined( USE_BASE64 ) 
 
+CHECK_RETVAL_BOOL \
 static BOOLEAN testBase64( void )
 	{
 	const char *base64string = "aaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1646,7 +1723,7 @@ BOOLEAN testIntAPI( void )
 							"\x14\xF3\x3C\x5A\xB8\x63\x13\xFB\x5B\xAF", 30 ) )
 		return( FALSE );
 
-	/* Test the entropy-check code */
+	/* Test the entropy-check code, same values as above */
 	if( !checkEntropy( "\x2E\x19\x76\x57\xDB\x30\xE6\x26\x83\x76\x6B\xAE\xDA\x5C\x46\x28", 16 ) || \
 		!checkEntropy( "\x14\xF3\x3C\x5A\xB8\x63\x13\xFB\x5B\xAF\xC4\xBA\x4F\xC8\x7F\x74", 16 ) || \
 		!checkEntropy( "\x7B\xE0\xE4\x14\x5C\x7C\x2C\x07\x02\xD9\x2D\xD7\x83\x5C\x4E\xAD", 16 ) || \
@@ -1676,10 +1753,10 @@ BOOLEAN testIntAPI( void )
 	/* Test the constant-time mechanisms.  We can't actually test the timing
 	   resistance on these without external instrumentation so all this is
 	   doing is making sure that it works as expected */
-	if( !compareDataConstTime( "\x2E\x19\x76\x57\xDB\x30\xE6\x26\x83\x76",
-							   "\x2E\x19\x76\x57\xDB\x30\xE6\x26\x83\x76", 10 ) || \
+	if( compareDataConstTime( "\x2E\x19\x76\x57\xDB\x30\xE6\x26\x83\x76",
+							  "\x2E\x19\x76\x57\xDB\x30\xE6\x26\x83\x76", 10 ) != TRUE || \
 		compareDataConstTime( "\x2E\x19\x76\x57\xDB\x30\xE7\x26\x83\x76",
-							  "\x2E\x19\x76\x57\xDB\x30\xE6\x26\x83\x76", 10 ) || \
+							  "\x2E\x19\x76\x57\xDB\x30\xE6\x26\x83\x76", 10 ) != FALSE || \
 		!checkZeroConstTime( "\x00\x00\x00\x00\x00\x00\x00\x00", 8 ) || \
 		checkZeroConstTime( "\x00\x00\x00\x00\x00\x01\x00\x00", 8 ) )
 		return( FALSE );
@@ -1691,7 +1768,8 @@ BOOLEAN testIntAPI( void )
 #endif /* USE_BASE64 */
 
 	/* Test the text-line read code */
-#if defined( USE_HTTP ) || defined( USE_BASE64 ) || defined( USE_SSH )
+#if defined( USE_HTTP ) || defined( USE_BASE64 ) || \
+	defined( USE_SCEP ) || defined( USE_SSH )
 	if( !testReadLine( "abcdefgh\n", 9, "abcdefgh", 8, READTEXT_NONE, 
 					   FALSE ) || \
 		!testReadLine( "abcdefghijklmnopq\n", 18, 
@@ -1752,7 +1830,7 @@ BOOLEAN testIntAPI( void )
 		testReadLine( "abcdefgh;\n \n", 12, "", 1, READTEXT_MULTILINE, 
 					  FALSE ) )
 		return( FALSE );
-#endif /* USE_HTTP || USE_BASE64 || USE_SSH */
+#endif /* USE_HTTP || USE_BASE64 || USE_SCEP || USE_SSH */
 
 	return( TRUE );
 	}

@@ -10,10 +10,12 @@
    reference code is wrapped in higher-level cryptlib-like wrappers 
    beginning with 'eap' to try to make the whole mess more comprehensible */
 
-/* Define the following to use cryptlib-native DES.  This was removed in 
-   3.4.5 so we provide our own implementation if native DES isn't present */
+/* Define the following to use cryptlib-native DES and MD5.  This was 
+   removed in 3.4.5 so we provide our own implementation if DES and MD5 
+   aren't present */
 
 /* #define USE_CRYPTLIB_DES */
+/* #define USE_CRYPTLIB_MD5 */
 
 /* Under Windows debug mode everything is enabled by default when building 
    cryptlib, so we also enable the required options here.  Under Unix it'll
@@ -134,7 +136,7 @@ static int convertToUnicode( BYTE *unicodePassword,
 
 /****************************************************************************
 *																			*
-*					Obsolete Crypto Algorithms for MS-CHAP					*
+*							MS-CHAP Museum-grade Crypto						*
 *																			*
 ****************************************************************************/
 
@@ -376,6 +378,268 @@ MD4Transform(unsigned long state[4], const BYTE block[MD4_BLOCK_LENGTH])
         state[3] += d;
 }
 /* ===== end - public domain MD4 implementation ===== */
+
+/* All of the MD5 code out there is so old that it predates 64-bit CPUs, so 
+   we need to explicitly size the data types to make sure that everything 
+   gets truncated at 32 bits */
+
+#ifndef __WINDOWS__
+  #include <stdint.h>
+  typedef uint32_t UWORD32;
+  typedef uint8_t md5byte;
+#else
+  /* MSVC didn't have stdint for a long time, but it's LLP64 so long is 
+     32-bit */
+  typedef unsigned long UWORD32;
+  typedef unsigned char md5byte;
+#endif /* Windows */
+#define os_memcpy memcpy
+#define os_memset memset
+#undef F1
+#undef F2
+#undef F3
+struct MD5Context {
+	UWORD32 buf[ 4 ];
+	UWORD32 bytes[ 2 ];
+	UWORD32 in[ 16 ];
+	};
+
+/* ===== start - public domain MD5 implementation ===== */
+/*
+ * This code implements the MD5 message-digest algorithm.
+ * The algorithm is due to Ron Rivest.  This code was
+ * written by Colin Plumb in 1993, no copyright is claimed.
+ * This code is in the public domain; do with it what you wish.
+ *
+ * Equivalent code is available from RSA Data Security, Inc.
+ * This code has been tested against that, and is equivalent,
+ * except that you don't need to include two pages of legalese
+ * with every copy.
+ *
+ * To compute the message digest of a chunk of bytes, declare an
+ * MD5Context structure, pass it to MD5Init, call MD5Update as
+ * needed on buffers full of bytes, and then call MD5Final, which
+ * will fill a supplied 16-byte array with the digest.
+ *
+ * Changed so as no longer to depend on Colin Plumb's `usual.h' header
+ * definitions; now uses stuff from dpkg's config.h.
+ *  - Ian Jackson <ian@chiark.greenend.org.uk>.
+ * Still in the public domain.
+ */
+
+void	/* A no-op on little-endian hardware - pcg */
+byteSwap(UWORD32 *buf, unsigned words)
+{
+        md5byte *p = (md5byte *)buf;
+
+        do {
+                *buf++ = (UWORD32)((unsigned)p[3] << 8 | p[2]) << 16 |
+                        ((unsigned)p[1] << 8 | p[0]);
+                p += 4;
+        } while (--words);
+}
+
+/* The four core functions - F1 is optimized somewhat */
+
+/* #define F1(x, y, z) (x & y | ~x & z) */
+#define F1(x, y, z) (z ^ (x & (y ^ z)))
+#define F2(x, y, z) F1(z, x, y)
+#define F3(x, y, z) (x ^ y ^ z)
+#define F4(x, y, z) (y ^ (x | ~z))
+
+/* This is the central step in the MD5 algorithm. */
+#define MD5STEP(f,w,x,y,z,in,s) \
+         (w += f(x,y,z) + in, w = (w<<s | w>>(32-s)) + x)
+
+/*
+ * The core of the MD5 algorithm, this alters an existing MD5 hash to
+ * reflect the addition of 16 longwords of new data.  MD5Update blocks
+ * the data and converts bytes into longwords for this routine.
+ */
+void
+MD5Transform(UWORD32 buf[4], UWORD32 const in[16])
+{
+        register UWORD32 a, b, c, d;
+
+        a = buf[0];
+        b = buf[1];
+        c = buf[2];
+        d = buf[3];
+
+        MD5STEP(F1, a, b, c, d, in[0] + 0xd76aa478, 7);
+        MD5STEP(F1, d, a, b, c, in[1] + 0xe8c7b756, 12);
+        MD5STEP(F1, c, d, a, b, in[2] + 0x242070db, 17);
+        MD5STEP(F1, b, c, d, a, in[3] + 0xc1bdceee, 22);
+        MD5STEP(F1, a, b, c, d, in[4] + 0xf57c0faf, 7);
+        MD5STEP(F1, d, a, b, c, in[5] + 0x4787c62a, 12);
+        MD5STEP(F1, c, d, a, b, in[6] + 0xa8304613, 17);
+        MD5STEP(F1, b, c, d, a, in[7] + 0xfd469501, 22);
+        MD5STEP(F1, a, b, c, d, in[8] + 0x698098d8, 7);
+        MD5STEP(F1, d, a, b, c, in[9] + 0x8b44f7af, 12);
+        MD5STEP(F1, c, d, a, b, in[10] + 0xffff5bb1, 17);
+        MD5STEP(F1, b, c, d, a, in[11] + 0x895cd7be, 22);
+        MD5STEP(F1, a, b, c, d, in[12] + 0x6b901122, 7);
+        MD5STEP(F1, d, a, b, c, in[13] + 0xfd987193, 12);
+        MD5STEP(F1, c, d, a, b, in[14] + 0xa679438e, 17);
+        MD5STEP(F1, b, c, d, a, in[15] + 0x49b40821, 22);
+
+        MD5STEP(F2, a, b, c, d, in[1] + 0xf61e2562, 5);
+        MD5STEP(F2, d, a, b, c, in[6] + 0xc040b340, 9);
+        MD5STEP(F2, c, d, a, b, in[11] + 0x265e5a51, 14);
+        MD5STEP(F2, b, c, d, a, in[0] + 0xe9b6c7aa, 20);
+        MD5STEP(F2, a, b, c, d, in[5] + 0xd62f105d, 5);
+        MD5STEP(F2, d, a, b, c, in[10] + 0x02441453, 9);
+        MD5STEP(F2, c, d, a, b, in[15] + 0xd8a1e681, 14);
+        MD5STEP(F2, b, c, d, a, in[4] + 0xe7d3fbc8, 20);
+        MD5STEP(F2, a, b, c, d, in[9] + 0x21e1cde6, 5);
+        MD5STEP(F2, d, a, b, c, in[14] + 0xc33707d6, 9);
+        MD5STEP(F2, c, d, a, b, in[3] + 0xf4d50d87, 14);
+        MD5STEP(F2, b, c, d, a, in[8] + 0x455a14ed, 20);
+        MD5STEP(F2, a, b, c, d, in[13] + 0xa9e3e905, 5);
+        MD5STEP(F2, d, a, b, c, in[2] + 0xfcefa3f8, 9);
+        MD5STEP(F2, c, d, a, b, in[7] + 0x676f02d9, 14);
+        MD5STEP(F2, b, c, d, a, in[12] + 0x8d2a4c8a, 20);
+
+        MD5STEP(F3, a, b, c, d, in[5] + 0xfffa3942, 4);
+        MD5STEP(F3, d, a, b, c, in[8] + 0x8771f681, 11);
+        MD5STEP(F3, c, d, a, b, in[11] + 0x6d9d6122, 16);
+        MD5STEP(F3, b, c, d, a, in[14] + 0xfde5380c, 23);
+        MD5STEP(F3, a, b, c, d, in[1] + 0xa4beea44, 4);
+        MD5STEP(F3, d, a, b, c, in[4] + 0x4bdecfa9, 11);
+        MD5STEP(F3, c, d, a, b, in[7] + 0xf6bb4b60, 16);
+        MD5STEP(F3, b, c, d, a, in[10] + 0xbebfbc70, 23);
+        MD5STEP(F3, a, b, c, d, in[13] + 0x289b7ec6, 4);
+        MD5STEP(F3, d, a, b, c, in[0] + 0xeaa127fa, 11);
+        MD5STEP(F3, c, d, a, b, in[3] + 0xd4ef3085, 16);
+        MD5STEP(F3, b, c, d, a, in[6] + 0x04881d05, 23);
+        MD5STEP(F3, a, b, c, d, in[9] + 0xd9d4d039, 4);
+        MD5STEP(F3, d, a, b, c, in[12] + 0xe6db99e5, 11);
+        MD5STEP(F3, c, d, a, b, in[15] + 0x1fa27cf8, 16);
+        MD5STEP(F3, b, c, d, a, in[2] + 0xc4ac5665, 23);
+
+        MD5STEP(F4, a, b, c, d, in[0] + 0xf4292244, 6);
+        MD5STEP(F4, d, a, b, c, in[7] + 0x432aff97, 10);
+        MD5STEP(F4, c, d, a, b, in[14] + 0xab9423a7, 15);
+        MD5STEP(F4, b, c, d, a, in[5] + 0xfc93a039, 21);
+        MD5STEP(F4, a, b, c, d, in[12] + 0x655b59c3, 6);
+        MD5STEP(F4, d, a, b, c, in[3] + 0x8f0ccc92, 10);
+        MD5STEP(F4, c, d, a, b, in[10] + 0xffeff47d, 15);
+        MD5STEP(F4, b, c, d, a, in[1] + 0x85845dd1, 21);
+        MD5STEP(F4, a, b, c, d, in[8] + 0x6fa87e4f, 6);
+        MD5STEP(F4, d, a, b, c, in[15] + 0xfe2ce6e0, 10);
+        MD5STEP(F4, c, d, a, b, in[6] + 0xa3014314, 15);
+        MD5STEP(F4, b, c, d, a, in[13] + 0x4e0811a1, 21);
+        MD5STEP(F4, a, b, c, d, in[4] + 0xf7537e82, 6);
+        MD5STEP(F4, d, a, b, c, in[11] + 0xbd3af235, 10);
+        MD5STEP(F4, c, d, a, b, in[2] + 0x2ad7d2bb, 15);
+        MD5STEP(F4, b, c, d, a, in[9] + 0xeb86d391, 21);
+
+        buf[0] += a;
+        buf[1] += b;
+        buf[2] += c;
+        buf[3] += d;
+}
+
+/*
+ * Start MD5 accumulation.  Set bit count to 0 and buffer to mysterious
+ * initialization constants.
+ */
+void
+MD5Init(struct MD5Context *ctx)
+{
+memset( ctx, 0, sizeof( struct MD5Context ) );	/* pcg */
+        ctx->buf[0] = 0x67452301;
+        ctx->buf[1] = 0xefcdab89;
+        ctx->buf[2] = 0x98badcfe;
+        ctx->buf[3] = 0x10325476;
+
+        ctx->bytes[0] = 0;
+        ctx->bytes[1] = 0;
+}
+
+/*
+ * Update context to reflect the concatenation of another buffer full
+ * of bytes.
+ */
+void
+MD5Update(struct MD5Context *ctx, md5byte const *buf, unsigned len)
+{
+        UWORD32 t;
+
+        /* Update byte count */
+
+        t = ctx->bytes[0];
+        if ((ctx->bytes[0] = t + len) < t)
+                ctx->bytes[1]++;        /* Carry from low to high */
+
+        t = 64 - (t & 0x3f);    /* Space available in ctx->in (at least 1) */
+        if (t > len) {
+                memcpy((md5byte *)ctx->in + 64 - t, buf, len);
+                return;
+        }
+        /* First chunk is an odd size */
+        memcpy((md5byte *)ctx->in + 64 - t, buf, t);
+        byteSwap(ctx->in, 16);
+        MD5Transform(ctx->buf, ctx->in);
+        buf += t;
+        len -= t;
+
+        /* Process data in 64-byte chunks */
+        while (len >= 64) {
+                memcpy(ctx->in, buf, 64);
+                byteSwap(ctx->in, 16);
+                MD5Transform(ctx->buf, ctx->in);
+                buf += 64;
+                len -= 64;
+        }
+
+        /* Handle any remaining bytes of data. */
+        memcpy(ctx->in, buf, len);
+}
+
+/*
+ * Final wrapup - pad to 64-byte boundary with the bit pattern
+ * 1 0* (64-bit count of bits processed, MSB-first)
+ */
+void
+MD5Final(md5byte digest[16], struct MD5Context *ctx)
+{
+        int count = ctx->bytes[0] & 0x3f;       /* Number of bytes in ctx->in */
+        md5byte *p = (md5byte *)ctx->in + count;
+
+        /* Set the first char of padding to 0x80.  There is always room. */
+        *p++ = 0x80;
+
+        /* Bytes of padding needed to make 56 bytes (-8..55) */
+        count = 56 - 1 - count;
+
+        if (count < 0) {        /* Padding forces an extra block */
+                memset(p, 0, count + 8);
+                byteSwap(ctx->in, 16);
+                MD5Transform(ctx->buf, ctx->in);
+                p = (md5byte *)ctx->in;
+                count = 56;
+        }
+        memset(p, 0, count);
+        byteSwap(ctx->in, 14);
+
+        /* Append length in bits and transform */
+        ctx->in[14] = ctx->bytes[0] << 3;
+        ctx->in[15] = ctx->bytes[1] << 3 | ctx->bytes[0] >> 29;
+        MD5Transform(ctx->buf, ctx->in);
+
+        byteSwap(ctx->buf, 4);
+        memcpy(digest, ctx->buf, 16);
+#if 0
+        // compile warning on sizeof(ctx)
+        memset(ctx, 0, sizeof(ctx));    /* In case it's sensitive */
+#else
+        // a better way to reset ctx
+        MD5Init(ctx);
+#endif
+}
+
+/* ===== end - public domain MD5 implementation ===== */
 
 /* DES implementation, Michael Brown, MIT license, 
    https://github.com/mbrown1413/des:
@@ -693,8 +957,14 @@ void des_feistel(const unsigned char input[4], const unsigned char subkey[6], un
 void des_encrypt(unsigned char block[8], unsigned char key[8], unsigned char output[8]) {
     // TODO: This whole program could probably benifit from using larger
     //       datatypes that char.
+#if 0	/* des_key_shift() reads one past the end of the buffer so we need
+		   to both extend it by one byte and set the values to zero - pcg */
     unsigned char key_halves_a[7];  // left key + right key
     unsigned char key_halves_b[7];  // Also left key + right key
+#else
+    unsigned char key_halves_a[8] = { 0 };  // left key + right key
+    unsigned char key_halves_b[8] = { 0 };  // Also left key + right key
+#endif /* 0 */
     unsigned char subkey[6];
     unsigned char fiestel_output[4];
     unsigned char i;
@@ -762,7 +1032,7 @@ int des() {
 
 /* End of DES implementation */
 
-/* Wrapper functions for DES and MD4 */
+/* Wrapper functions for MD4, MD5, and DES */
 
 static void md4Hash( const void *data, const int dataLength, BYTE *hashValue )
 	{
@@ -771,6 +1041,19 @@ static void md4Hash( const void *data, const int dataLength, BYTE *hashValue )
 	MD4Init( &md4CTX );
 	MD4Update( &md4CTX, data, dataLength );
 	MD4Final( hashValue, &md4CTX );
+	memset( &md4CTX, 0, sizeof( MD4_CTX ) );
+	}
+
+void md5Hash( const void *data, const int dataLength, BYTE *hashValue )
+	{
+	struct MD5Context md5CTX;
+
+	assert( sizeof( UWORD32 ) == 4 );
+
+	MD5Init( &md5CTX );
+	MD5Update( &md5CTX, data, dataLength );
+	MD5Final( hashValue, &md5CTX );
+	memset( &md5CTX, 0, sizeof( struct MD5Context ) );
 	}
 
 static void desEncrypt( const void *plaintext, const void *key, 
@@ -1633,6 +1916,18 @@ static int testMSCHAPv2( void )
 	const BYTE DesKey2[] = "\x01\x31\xD9\x61\x9D\xC1\x37\x6E";
 	const BYTE DesPlaintext2[] = "\x5C\xD5\x4C\xA8\x3D\xEF\x57\xDA";
 	const BYTE DesCiphertext2[] = "\x7A\x38\x9D\x10\x35\x4B\xD2\x71";
+	const BYTE MD5Data1[] = "a";
+	const int MD5Data1Len = 1;
+	const BYTE MD5Hash1[] = "\x0C\xC1\x75\xB9\xC0\xF1\xB6\xA8" \
+							"\x31\xC3\x99\xE2\x69\x77\x26\x61";
+	const BYTE MD5Data2[] = "abc";
+	const int MD5Data2Len = 3;
+	const BYTE MD5Hash2[] = "\x90\x01\x50\x98\x3C\xD2\x4F\xB0" \
+							"\xD6\x96\x3F\x7D\x28\xE1\x7F\x72";
+	const BYTE MD5Data3[] = "message digest";
+	const int MD5Data3Len = 14;
+	const BYTE MD5Hash3[] = "\xF9\x6B\x69\x7D\x7C\xB7\x93\x8D" \
+							"\x52\x5A\x2F\x31\xAA\xF1\x61\xD0";
 	const BYTE UserName[] = "\x55\x73\x65\x72";	/* "User" */
 	const BYTE Password[] = "\x63\x6C\x69\x65\x6E\x74\x50\x61\x73\x73";
 							/* "clientPass" */	
@@ -1648,7 +1943,7 @@ static int testMSCHAPv2( void )
 	const BYTE *utf8String = "\x52\xC3\xA9\x73\x75\x6D\xC3\xA9";	/* "Résumé" */
 	const BYTE *unicodeString = "\x52\x00\xE9\x00\x73\x00\x75\x00" \
 								"\x6D\x00\xE9\x00";
-	BYTE desCiphertext[ 8 ], unicodePassword[ 256 ];
+	BYTE desCiphertext[ 8 ], md5HashValue[ 16 ], unicodePassword[ 256 ];
 	BYTE Challenge[ 8 ], PasswordHash[ 16 ];
 	BYTE PasswordHashHash[ 16 ], NTResponse[ 24 ];
 	BYTE AuthenticatorResponse[ 50 ];
@@ -1695,6 +1990,24 @@ static int testMSCHAPv2( void )
 		return( CRYPT_ERROR_FAILED );
 		}
 #endif /* USE_CRYPTLIB_DES */
+	md5Hash( MD5Data1, MD5Data1Len, md5HashValue );
+	if( memcmp( md5HashValue, MD5Hash1, 16 ) )
+		{
+		DEBUG_PUTS(( "MD5 hash test 1 failed." ));
+		return( CRYPT_ERROR_FAILED );
+		}
+	md5Hash( MD5Data2, MD5Data2Len, md5HashValue );
+	if( memcmp( md5HashValue, MD5Hash2, 16 ) )
+		{
+		DEBUG_PUTS(( "MD5 hash test 2 failed." ));
+		return( CRYPT_ERROR_FAILED );
+		}
+	md5Hash( MD5Data3, MD5Data3Len, md5HashValue );
+	if( memcmp( md5HashValue, MD5Hash3, 16 ) )
+		{
+		DEBUG_PUTS(( "MD5 hash test 3 failed." ));
+		return( CRYPT_ERROR_FAILED );
+		}
 
 	/* General test that Unicode conversion is working */
 	unicodePasswordLength = convertToUnicode( unicodePassword, 256, 

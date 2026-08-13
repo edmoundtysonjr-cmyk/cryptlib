@@ -1123,9 +1123,12 @@ static int deleteItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 								 KEYSET_ERRINFO ) );
 		}
 	ENSURES( keyName != NULL && deleteString != NULL );
-	strlcpy_s( sqlBuffer, MAX_SQL_QUERY_SIZE, deleteString );
-	strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, keyName );
-	strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, " = ?" );
+	status = strlcpy_s( sqlBuffer, MAX_SQL_QUERY_SIZE, deleteString );
+	ENSURES( cryptStatusOK( status ) );
+	status = strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, keyName );
+	ENSURES( cryptStatusOK( status ) );
+	status = strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, " = ?" );
+	ENSURES( cryptStatusOK( status ) );
 	initBoundData( boundDataPtr );
 	setBoundData( boundDataPtr, 0, encodedKeyID, encodedKeyIDlength );
 	status = dbmsUpdate( sqlBuffer, boundDataPtr, DBMS_UPDATE_NORMAL );

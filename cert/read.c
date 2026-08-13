@@ -631,7 +631,7 @@ static int readAttributeCertInfo( INOUT_PTR STREAM *stream,
 		tag == MAKE_CTAG( CTAG_AC_HOLDER_BASECERTIFICATEID ) )
 		status = readUniversal( stream );
 	if( cryptStatusError( status ) )
-		return( status );
+		return( status );	/* Residual error from peekTag() */
 	if( checkStatusLimitsPeekTag( stream, status, tag, innerEndPos ) && \
 		tag == MAKE_CTAG( CTAG_AC_HOLDER_ENTITYNAME ) )
 		{
@@ -1455,7 +1455,7 @@ static int readOcspRequestInfo( INOUT_PTR STREAM *stream,
 		tag == MAKE_CTAG( CTAG_OR_DUMMY ) )
 		status = readUniversal( stream );
 	if( cryptStatusError( status ) )
-		return( status );
+		return( status );	/* Residual error from peekTag() */
 
 	/* Read the SEQUENCE OF revocation information and make the currently 
 	   selected one the start of the list */

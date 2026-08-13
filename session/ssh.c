@@ -19,6 +19,21 @@
 
 #if defined( USE_SSH )
 
+#if defined( _MSC_VER ) || defined( __GNUC__ ) || defined( __clang__ ) 
+  #ifdef USE_SSH_EXTENDED
+	#pragma message( "  Building with extended SSH facilities enabled." )
+	#pragma message( "  Warning: This enables a large amount of additional complexity in the " )
+	#pragma message( "           SSH protocol and should remain disabled unless you absolutely " )
+	#pragma message( "           need it." )
+	#pragma message( "  " )
+  #endif /* USE_SSH_EXTENDED */
+  #ifdef USE_SSH_OPENSSH
+	#pragma message( "  Building with nonstandard OpenSSH extensions enabled." )
+	#pragma message( "  Warning: This enables support for the insecure EtM OpenSSH extension." )
+	#pragma message( "  " )
+  #endif /* USE_SSH_OPENSSH */
+#endif /* Notify extended SSH facilities */
+
 /****************************************************************************
 *																			*
 *								Utility Functions							*
@@ -312,17 +327,14 @@ static void destroyHandshakeInfo( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo )
 
 /* Initialise any crypto that's needed to start the handshake */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-static int initHandshakeCrypto( INOUT_PTR SESSION_INFO *sessionInfoPtr,
-								INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+static int initCrypto( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo )
 	{
 	MESSAGE_CREATEOBJECT_INFO createInfo;
 	int status;
 
-	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
 
-	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
 	REQUIRES( sanityCheckSSHHandshakeInfo( handshakeInfo ) );
 
 	/* If we're fuzzing then there's no crypto active */
@@ -476,7 +488,7 @@ static int completeStartup( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 		status = checkPreauthResponse( &handshakeInfo, SESSION_ERRINFO );
 		}
 	if( cryptStatusOK( status ) )
-		status = initHandshakeCrypto( sessionInfoPtr, &handshakeInfo );
+		status = initCrypto( &handshakeInfo );
 	if( cryptStatusError( status ) )
 		{
 		/* Since the session hasn't begun yet we exit without any additional 
@@ -526,12 +538,15 @@ static int completeStartup( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	status = handshakeFunction( sessionInfoPtr, &handshakeInfo );
 	if( cryptStatusError( status ) )
 		{
-		destroySecurityContextsSSH( sessionInfoPtr );
+		/* We don't know how far we got setting up the security contexts 
+		   during the keyex phase before we hit the error but 
+		   destroySecurityContextsSSH() will sort it out */
 		ENSURES( handshakeInfo.completedHSstate != HANDSHAKE_STATE_KEYEX );
 		destroyHandshakeInfo( &handshakeInfo );
 		disableErrorReporting( sessionInfoPtr );
 		delayRandom();	/* Dither error timing info */
 		shutdownFunction( sessionInfoPtr );
+		destroySecurityContextsSSH( sessionInfoPtr );
 		return( status );
 		}
 	ENSURES( handshakeInfo.completedHSstate == HANDSHAKE_STATE_KEYEX );
@@ -812,7 +827,7 @@ int setAccessMethodSSH( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	static const PROTOCOL_INFO protocolInfo = {
 		/* General session information */
 		FALSE,						/* Request-response protocol */
-		 SESSION_PROTOCOL_FIXEDSIZECREDENTIALS,	/* Flags */
+		SESSION_PROTOCOL_FIXEDSIZECREDENTIALS,	/* Flags */
 		SSH_PORT,					/* SSH port */
 		SESSION_NEEDS_USERID |		/* Client attributes */
 			SESSION_NEEDS_PASSWORD | \

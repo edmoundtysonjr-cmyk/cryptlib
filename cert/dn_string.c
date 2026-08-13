@@ -204,7 +204,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int getNativeWidechar( IN_BUFFER_C( WCHAR_SIZE ) const BYTE *string,
 							  wchar_t *wCh )
 	{
-	wchar_t ch = 0;
+	wchar_t localWCh = 0;
 #ifdef DATA_LITTLEENDIAN
 	int shiftAmt = 0;
 #endif /* DATA_LITTLEENDIAN */
@@ -225,10 +225,14 @@ static int getNativeWidechar( IN_BUFFER_C( WCHAR_SIZE ) const BYTE *string,
 		ENSURES( LOOP_INVARIANT_SMALL( i, 0, WCHAR_SIZE - 1 ) );
 
 #ifdef DATA_LITTLEENDIAN
-		ch |= string[ i ] << shiftAmt;
+		if( checkOverflowShift( byteToInt( string[ i ] ), shiftAmt ) )
+			return( CRYPT_ERROR_BADDATA );
+		localWCh |= byteToInt( string[ i ] ) << shiftAmt;
 		shiftAmt += 8;
 #else
-		ch = ( ch << 8 ) | string[ i ];
+		if( checkOverflowShift( localWCh, 8 ) )
+			return( CRYPT_ERROR_BADDATA );
+		localWCh = ( localWCh << 8 ) | string[ i ];
 #endif /* DATA_LITTLEENDIAN */
 		}
 	ENSURES( LOOP_BOUND_OK );
@@ -238,19 +242,19 @@ static int getNativeWidechar( IN_BUFFER_C( WCHAR_SIZE ) const BYTE *string,
 	   high bit set.  To deal with this we need to trim the return value 
 	   down to size.  This takes advantage of the fact that WCHAR_MAX is 
 	   always given as a bit mask, e.g. 0x7FFFFFFF for a 32-bit wchar_t */
-	if( ch < 0 )
+	if( localWCh < 0 )
 		{
-		ch &= WCHAR_MAX;
-		ENSURES( ch >= 0 );
+		localWCh &= WCHAR_MAX;
+		ENSURES( localWCh >= 0 );
 		}
 
 	/* The one character that we shouldn't be seeing in strings is a '\0', 
 	   although cryptlib uses counted strings internally and isn't bothered
 	   by them a lot of other things don't so we exclude this character */
-	if( ch <= 0 )
+	if( localWCh <= 0 )
 		return( CRYPT_ERROR_BADDATA );
 
-	*wCh = ch;
+	*wCh = localWCh;
 	return( CRYPT_OK );
 	}
 #endif /* USE_WIDECHARS */
@@ -804,7 +808,8 @@ static int getUTF8Char( INOUT_PTR STREAM *stream,
 		if( largeCh >= 0xD800 && largeCh <= 0xDFFF )
 			{
 			DEBUG_DIAG(( "Found invalid UTF-16 surrogate in UTF-8 string" ));
-			assert( DEBUG_WARN );
+			assert_nofuzz( DEBUG_WARN );
+
 			return( CRYPT_ERROR_BADDATA );
 			}
 		
@@ -1265,6 +1270,14 @@ int getASN1StringInfo( IN_BUFFER( stringLen ) const void *string,
 		if( !isNativeString || status != OK_SPECIAL )
 			return( CRYPT_ERROR_BADDATA );
 		
+#if 0	/* 18/7/26 Due to an incorrect precondition check on all versions of
+				   the mbstowcs_s() emulation function before cryptlib 
+				   3.4.9.4, it would always return an error status when 
+				   called.  Since this never resulted in any problems, this 
+				   code path has probably never been exercised (Windows, 
+				   which has a proper mbstowcs_s(), goes via the !USE_UTF8 
+				   version belo), so for attack surface reduction we make it 
+				   an unconditional error return */
 		/* It's some oddball 8-bit local character type that's not 8859-1 or
 		   UTF-8 but that might be convertible into UTF-8, check whether 
 		   this is the case */
@@ -1286,6 +1299,9 @@ int getASN1StringInfo( IN_BUFFER( stringLen ) const void *string,
 		*asn1StringType = BER_STRING_UTF8;
 
 		return( CRYPT_OK );
+#else
+		return( CRYPT_ERROR_BADDATA );
+#endif /* 0 */
 		}
 
 	/* Remember the string type */

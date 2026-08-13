@@ -331,7 +331,7 @@ int processChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	BYTE buffer[ UINT32_SIZE + 8 ];
 	long channelNo;
 	LOOP_INDEX i;
-	int typeLen, arg1Len = 0, maxPacketSize, status;
+	int typeLen, arg1Len = 0, maxPacketSize DUMMY_INIT, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -400,10 +400,23 @@ int processChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   to the windowing problem and advertise a maximum-size window, since 
 	   this is typically INT_MAX (used by e.g. PSFTP, WinSCP, and FileZilla) 
 	   we have to use an sread() rather than the range-checking readUint32() 
-	   to read (or at least skip) this */
-	channelNo = readUint32( stream );
-	( void ) sread( stream, buffer, UINT32_SIZE );	/* Skip window size */
-	status = maxPacketSize = readUint32( stream );
+	   to read (or at least skip) this.  This also means that we don't fall
+	   victim to malicious window-size tricks where the other side 
+	   advertises a small window designed to cause flow-control issues */
+	status = channelNo = readUint32( stream );
+	if( !cryptStatusError( status ) && \
+		( channelNo < 0 || channelNo > CHANNEL_MAX ) )
+		{
+		/* This check is redundant since readUint32() guarantees 
+		   isIntegerRange() which has a tighter bound than CHANNEL_MAX, but 
+		   we leave it here to document that it's been done */
+		status = CRYPT_ERROR_BADDATA;
+		}
+	if( !cryptStatusError( status ) )
+		{
+		( void ) sread( stream, buffer, UINT32_SIZE );	/* Skip window size */
+		status = maxPacketSize = readUint32( stream );
+		}
 	if( cryptStatusError( status ) )
 		{
 		retExt( status, 
@@ -525,13 +538,25 @@ int processChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 										 SSH_ATTRIBUTE_WINDOWSIZE,
 										 windowSize );
 		if( cryptStatusOK( status ) )
+			{
 			status = setChannelExtAttribute( sessionInfoPtr, 
 											 SSH_ATTRIBUTE_WINDOWCOUNT,
 											 windowSize );
+			}
 		}
 	if( cryptStatusOK( status ) )
 		status = selectChannel( sessionInfoPtr, channelNo, CHANNEL_BOTH );
-	return( status );
+	if( cryptStatusError( status ) )
+		{
+		/* The activation failed, make sure the channel doesn't remain 
+		   marked as active.  This is more a hygiene thing than anything 
+		   else since the session can't continue without an open channel */
+		( void ) setChannelExtAttribute( sessionInfoPtr, SSH_ATTRIBUTE_ACTIVE, 
+										 FALSE );
+		return( status );
+		}
+
+	return( CRYPT_OK );
 	}
 
 /****************************************************************************
@@ -719,7 +744,8 @@ int processChannelRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 												   stringBuffer, 
 												   stringLength );
 					}
-				ENSURES( cryptStatusOK( status ) );
+				if( cryptStatusError( status ) )
+					requestOK = FALSE;
 				}
 			break;
 
@@ -768,7 +794,8 @@ int processChannelRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   an error code once we run out of port forwards to cancel, so
 			   the loop bound is implicitly set by that rather than an 
 			   explicit loop iterator */
-			LOOP_MED_INITCHECK( requestOK = FALSE, cryptStatusOK( status ) )
+			LOOP_MED_INITCHECK( ( requestOK = FALSE, status = CRYPT_OK ), 
+								cryptStatusOK( status ) )
 				{
 				ENSURES( LOOP_INVARIANT_MED_GENERIC() );
 

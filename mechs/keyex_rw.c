@@ -46,7 +46,7 @@ int getCmsKeyIdentifier( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 						 OUT_BUFFER( keyIDMaxLength, *keyIDlength ) \
 							BYTE *keyID, 
 						 IN_LENGTH_SHORT_MIN( 32 ) const int keyIDMaxLength,
-						 OUT_LENGTH_BOUNDED_Z( keyIDMaxLength ) \
+						 OUT_LENGTH_BOUNDED_SHORT_Z( keyIDMaxLength ) \
 							int *keyIDlength )
 	{
 	MESSAGE_DATA msgData;
@@ -161,9 +161,9 @@ static int readKeyDerivationInfo( INOUT_PTR STREAM *stream,
 		CRYPT_ALGO_TYPE prfAlgo;
 		ALGOID_PARAMS algoIDparams;
 	
-		/* There's a non-default hash algorithm ID present, read it */
+		/* There's a non-default MAC algorithm ID present, read it */
 		status = readAlgoIDex( stream, &prfAlgo, &algoIDparams, 
-							   ALGOID_CLASS_HASH );
+							   ALGOID_CLASS_MAC );
 		if( cryptStatusError( status ) )
 			return( status );
 		queryInfo->keySetupAlgo = prfAlgo;
@@ -238,7 +238,10 @@ static int writeKeyDerivationInfo( INOUT_PTR STREAM *stream,
 		else
 			status = prfAlgoIDsize = sizeofAlgoID( prfAlgo );
 		if( cryptStatusError( status ) )
+			{
+			zeroise( salt, CRYPT_MAX_HASHSIZE );
 			return( status );
+			}
 		REQUIRES( !checkOverflowAdd( derivationInfoSize, prfAlgoIDsize ) );
 		derivationInfoSize += prfAlgoIDsize;
 		}
@@ -295,7 +298,9 @@ static int readCmsKek( INOUT_PTR STREAM *stream,
 	return( CRYPT_ERROR_NOTAVAIL );
 	}
 
-#if 0	/* 21/4/06 Disabled since it was never used */
+#if 0	/* 21/4/06 Disabled since it was never used.  This code hasn't been 
+				   updated for newer changes so probably won't compile any
+				   more */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 static int writeCmsKek( INOUT_PTR STREAM *stream, 
@@ -387,7 +392,7 @@ static int readCryptlibKek( INOUT_PTR STREAM *stream,
 	status = tag = peekTag( stream );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( tag == CTAG_RI_KEK )
+	if( tag == MAKE_CTAG( CTAG_RI_KEK ) )
 		return( readCmsKek( stream, queryInfo ) );
 
 	/* Read the header */
@@ -469,7 +474,7 @@ static int writeCryptlibKek( STREAM *stream,
 								const int encryptedKeyLength )
 	{
 	STREAM localStream;
-	BYTE derivationInfo[ CRYPT_MAX_HASHSIZE + 32 + 8 ], kekInfo[ 128 + 8 ];
+	BYTE derivationInfo[ 64 + CRYPT_MAX_HASHSIZE + 8 ], kekInfo[ 128 + 8 ];
 	BOOLEAN hasKeyDerivationInfo = TRUE;
 	const int algoIdInfoSize = sizeofCryptContextAlgoID( iCryptContext );
 	int derivationInfoSize = 0, kekInfoSize DUMMY_INIT, value, status;
@@ -514,7 +519,7 @@ static int writeCryptlibKek( STREAM *stream,
 	   it to local buffers */
 	if( hasKeyDerivationInfo )
 		{
-		sMemOpen( &localStream, derivationInfo, CRYPT_MAX_HASHSIZE + 32 );
+		sMemOpen( &localStream, derivationInfo, 64 + CRYPT_MAX_HASHSIZE );
 		status = writeKeyDerivationInfo( &localStream, iCryptContext );
 		if( cryptStatusOK( status ) )
 			derivationInfoSize = stell( &localStream );
@@ -602,8 +607,8 @@ static int writePgpKek( INOUT_PTR STREAM *stream,
 	BYTE salt[ CRYPT_MAX_HASHSIZE + 8 ];
 	int hashAlgo DUMMY_INIT, kekCryptAlgo DUMMY_INIT;	/* int vs.enum */
 	int pgpKekCryptAlgo, pgpHashAlgo DUMMY_INIT, keySetupIterations;
-	LOOP_INDEX count;
-	int status;
+	LOOP_INDEX exponent;
+	int s2kEncodedCount, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
@@ -619,6 +624,14 @@ static int writePgpKek( INOUT_PTR STREAM *stream,
 		status = krnlSendMessage( iCryptContext, IMESSAGE_GETATTRIBUTE,
 								  &hashAlgo, CRYPT_CTXINFO_KEYING_ALGO );
 		}
+#if 0	/* Not available yet, needed for cryptlibToPgpAlgo() below */
+	if( cryptStatusOK( status ) )
+		{
+		status = krnlSendMessage( iCryptContext, IMESSAGE_GETATTRIBUTE,
+								  &hashParam, 
+								  CRYPT_CTXINFO_KEYING_ALGO_PARAM );
+		}
+#endif /* 0 */
 	if( cryptStatusOK( status ) )
 		{
 		status = krnlSendMessage( iCryptContext, IMESSAGE_GETATTRIBUTE,
@@ -634,34 +647,93 @@ static int writePgpKek( INOUT_PTR STREAM *stream,
 		}
 	if( cryptStatusError( status ) )
 		return( status );
-	status = cryptlibToPgpAlgo( kekCryptAlgo, &pgpKekCryptAlgo );
+	status = cryptlibToPgpAlgo( kekCryptAlgo, 0, &pgpKekCryptAlgo );
 	if( cryptStatusOK( status ) )
-		status = cryptlibToPgpAlgo( hashAlgo, &pgpHashAlgo );
-	ENSURES( cryptStatusOK( status ) );
+		status = cryptlibToPgpAlgo( hashAlgo, 0, &pgpHashAlgo );
+	if( cryptStatusError( status ) )
+		{
+		/* Because these are general-purpose attributes it's possible that
+		   a caller could set them to a non-PGP algorithm.  The higher-level
+		   code should have sorted this out for us, for example the PGP
+		   enveloping code only allows PGP-compatible algorithms to be
+		   set in envelope/pgp_env.c:initPGPEnveloping(), but we perform an 
+		   extra check here in case there's some code path where a 
+		   disallowed algorithm could slip through */
+		return( CRYPT_ERROR_NOTAVAIL );
+		}
 
 	/* Calculate the PGP "iteration count" from the value used to derive
 	   the key.  The "iteration count" is actually a count of how many bytes
 	   are hashed, this is because the "iterated hashing" treats the salt +
 	   password as an infinitely-repeated sequence of values and hashes the
-	   resulting string for PGP-iteration-count bytes worth.  Instead of
-	   being written directly the count is encoded in a complex manner that
-	   saves a whole byte, so before we can write it we have to encode it
-	   into the base + exponent form expected by PGP.  This has a default
-	   base of 16 + the user-supplied base value, we can set this to zero
-	   since the iteration count used by cryptlib is always a multiple of
-	   16, the remainder is just log2 of what's left of the iteration
-	   count */
-	REQUIRES( keySetupIterations % 16 == 0 );
-	REQUIRES( !checkOverflowDiv( keySetupIterations, 32 ) );
-	keySetupIterations /= 32;	/* Remove fixed offset before log2 op.*/
-	LOOP_MED( count = 0, keySetupIterations > 0,
-			  ( count++, keySetupIterations >>= 1 ) )
+	   resulting string for PGP-iteration-count bytes worth.  Because 
+	   counting bytes rather than actual iterations leads to ludicrous-speed
+	   values, the value stored as CRYPT_CTXINFO_KEYING_ITERATIONS is the
+	   count divided by 64 to make sure that it's not rejected by range
+	   checks everywhere.
+	   
+	   Instead of being written directly the count is encoded in a complex 
+	   manner that saves a whole byte, so before we can write it we have to 
+	   encode it into the base + exponent form expected by PGP, see the long 
+	   discussion in misc/consts.h for details.
+	   
+	   First, we have to clamp the user-set iteration count to whatever the 
+	   PGP format can encode.  See the next comment for the explanation of 
+	   the mantissa values */
+	#define S2K_MANTISSA_MIN		( 16 + 0x0 )
+	#define S2K_MANTISSA_MAX		( 16 + 0xF )
+	static_assert( MAX_KEYSETUP_HASHSPECIFIER == S2K_MANTISSA_MAX << 15,
+				   "MAX_KEYSETUP_HASHSPECIFIER value is incorrect" );
+	if( keySetupIterations < S2K_MANTISSA_MIN )
 		{
-		ENSURES( LOOP_INVARIANT_MED_XXX( count, 0, 64 ) );
+		DEBUG_DIAG(( "PGP key setup iterations increased to minimum "
+					 "encodable value of %d", S2K_MANTISSA_MIN * 64 ));
+		keySetupIterations = S2K_MANTISSA_MIN;
+		}
+	if( keySetupIterations > MAX_KEYSETUP_HASHSPECIFIER )
+		{
+		DEBUG_DIAG(( "PGP key setup iterations reduced to maximum "
+					 "encodable value of %d", 
+					 MAX_KEYSETUP_HASHSPECIFIER * 64 ));
+		keySetupIterations = MAX_KEYSETUP_HASHSPECIFIER;
+		}
+	   
+	/* Then we encode it into an 8-bit fixed-point format (RFC 2440 section
+	   3.6.1.3):
+
+		count = ((Int32)16 + (c & 15)) << ((c >> 4) + EXPBIAS)
+	
+	   which is:
+	   
+		count = ( base + 16 ) << ( exponent + 6 )
+		
+	   Since the hash specifier is the value divided by by 64 = 2^6 this 
+	   reduces to
+
+				( 16 + base ) << exponent
+			
+	   so we just need to get the value into the mantissa range 0...15 
+	   (which becomes 16...31 with the +16), with the number of shifts being
+	   the exponent.
+	   
+	   Note that cryptlib up to 3.4.9 always set the base to 0 and used 
+	   power-of-2 counts which made the encoding straightforward, but this
+	   didn't allow the encoding of counts that go to 11 so it was changed
+	   to encode the full range after 3.4.9 */
+	LOOP_MED( exponent = 0, 
+			  keySetupIterations > S2K_MANTISSA_MAX,
+			  keySetupIterations >>= 1 )
+		{
+		ENSURES( LOOP_INVARIANT_MED( exponent, 0, 14 ) );
+		
+		exponent++;
 		}
 	ENSURES( LOOP_BOUND_OK );
-	count <<= 4;				/* Exponent comes first, base = 0 */
-	ENSURES( count >= 0 && count <= 0xFF );
+	ENSURES( keySetupIterations >= S2K_MANTISSA_MIN && \
+			 keySetupIterations <= S2K_MANTISSA_MAX );
+	s2kEncodedCount = ( exponent << 4 ) | \
+					  ( keySetupIterations - S2K_MANTISSA_MIN );
+	ENSURES( s2kEncodedCount >= 0 && s2kEncodedCount <= 0xFF );
 
 	/* Write the SKE packet */
 	status = pgpWritePacketHeader( stream, PGP_PACKET_SKE, 
@@ -674,7 +746,11 @@ static int writePgpKek( INOUT_PTR STREAM *stream,
 	sputc( stream, 3 );		/* S2K = salted, iterated hash */
 	sputc( stream, pgpHashAlgo );
 	swrite( stream, salt, PGP_SALTSIZE );
-	return( sputc( stream, count ) );
+	status = sputc( stream, s2kEncodedCount );
+	
+	zeroise( salt, CRYPT_MAX_HASHSIZE );
+	
+	return( status );
 	}
 #endif /* USE_PGP */
 
@@ -837,6 +913,7 @@ static int writeKeytransCMS( INOUT_PTR STREAM *stream,
 	else
 #endif /* USE_OAEP */
 		{
+		REQUIRES( isOAEP == FALSE );
 		status = algoIdInfoSize = \
 					sizeofContextAlgoID( iCryptContext );
 		}
@@ -991,6 +1068,7 @@ static int writeKeytransCryptlib( INOUT_PTR STREAM *stream,
 	else
 #endif /* USE_OAEP */
 		{
+		REQUIRES( isOAEP == FALSE );
 		status = algoIdInfoSize = \
 					sizeofContextAlgoID( iCryptContext );
 		}
@@ -1083,7 +1161,7 @@ static int readPgpKeytrans( INOUT_PTR STREAM *stream,
 		return( status );
 
 	/* Get the PGP key ID and algorithm */
-	REQUIRES( rangeCheck( PGP_KEYID_SIZE, 1, PGP_KEYID_SIZE ) );
+	REQUIRES( rangeCheck( PGP_KEYID_SIZE, 1, CRYPT_MAX_HASHSIZE ) );
 	status = sread( stream, queryInfo->keyID, PGP_KEYID_SIZE );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1092,6 +1170,12 @@ static int readPgpKeytrans( INOUT_PTR STREAM *stream,
 						  PGP_ALGOCLASS_PKCCRYPT );
 	if( cryptStatusError( status ) )
 		return( status );
+	if( queryInfo->cryptAlgo != CRYPT_ALGO_RSA && \
+		queryInfo->cryptAlgo != CRYPT_ALGO_ELGAMAL )
+		{
+		/* Guaranteed by readPgpAlgo() but we make it explicit here */
+		return( CRYPT_ERROR_NOTAVAIL );
+		}
 
 	/* Read the RSA-encrypted key, recording the position and length of the 
 	   raw RSA-encrypted integer value.  We have to be careful how we handle 
@@ -1201,8 +1285,17 @@ static int writePgpKeytrans( INOUT_PTR STREAM *stream,
 		}
 	if( cryptStatusError( status ) )
 		return( status );
-	status = cryptlibToPgpAlgo( algorithm, &pgpAlgo );
-	ENSURES( cryptStatusOK( status ) );
+	if( algorithm != CRYPT_ALGO_RSA && algorithm != CRYPT_ALGO_ELGAMAL )
+		{
+		/* See the comment for the identical situation in writePgpKek() */
+		return( CRYPT_ERROR_NOTAVAIL );
+		}
+	status = cryptlibToPgpAlgo( algorithm, 0, &pgpAlgo );
+	if( cryptStatusError( status ) )
+		{
+		/* See the comment for the identical situation in writePgpKek() */
+		return( CRYPT_ERROR_NOTAVAIL );
+		}
 
 	/* Write the PKE packet */
 	status = pgpWritePacketHeader( stream, PGP_PACKET_PKE,
@@ -1234,6 +1327,7 @@ typedef struct {
 static const KEYTRANS_READ_INFO keytransReadTable[] = {
 	{ KEYEX_CMS, readCmsKeytrans },
 	{ KEYEX_CRYPTLIB, readCryptlibKeytrans },
+	  /* These also handle the OAEP case */
 #ifdef USE_PGP
 	{ KEYEX_PGP, readPgpKeytrans },
 #endif /* USE_PGP */

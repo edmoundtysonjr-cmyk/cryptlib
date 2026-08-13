@@ -136,7 +136,7 @@ static int createDecryptionContext( OUT_HANDLE_OPT CRYPT_CONTEXT *iSessionKey,
 								     keyInfo->cryptParam > 0 ) ? \
 									keyInfo->cryptParam : CRYPT_UNUSED,
 								   password, passwordLength, 
-								   keyInfo->hashAlgo, 
+								   keyInfo->hashAlgo, keyInfo->hashParam, 
 								   ( keyInfo->saltSize > 0 ) ? \
 									keyInfo->salt : NULL, keyInfo->saltSize,
 								   keyInfo->keySetupIterations );
@@ -655,6 +655,8 @@ static int getItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 	if( cryptStatusError( status ) )
 		{
 		krnlSendNotifier( iLocalContext, IMESSAGE_DECREFCOUNT );
+		if( itemType == KEYMGMT_ITEM_PRIVATEKEY )
+			krnlSendNotifier( iDecryptionKey, IMESSAGE_DECREFCOUNT );
 		retExt( status, 
 				( status, KEYSET_ERRINFO, 
 				  "Couldn't recreate key from stored %s key data",

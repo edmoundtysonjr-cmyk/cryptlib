@@ -19,11 +19,18 @@
 
 #ifdef USE_SSH
 
-/* Flags for information sent as signalling algorithms */
+/* Indicator types for signalling algorithms, which don't communicate an 
+   actual algorithm but indicate some special-case condition for the 
+   protocol */
 
-#define SSH_EFLAG_NONE			0x00	/* No information */
-#define SSH_EFLAG_EXT_INFO		0x01	/* Use SSH_MSG_EXT_INFO */
-#define SSH_EFLAG_STRICT_KEX	0x02	/* Use strict keyex */
+typedef enum { 
+	SIGNAL_INDICATOR_NONE,	/* No signalling indicator */
+	SIGNAL_INDICATOR_STRICT_KEX,/* Strict KEX signalling suite */
+#ifdef USE_SSH_EXTENDED
+	SIGNAL_INDICATOR_EXT_INFO,	/* Extension signalling suite */
+#endif /* USE_SSH_EXTENDED */
+	SIGNAL_INDICATOR_LAST	/* Last possible signalling indicator type */
+	} SIGNAL_INDICATOR_TYPE;
 
 /* Tables mapping SSHv2 algorithm names to cryptlib algorithm IDs in 
    preferred-algorithm order. 
@@ -107,13 +114,14 @@
    State Learning", Fabian Bäumer, Marcel Maehren, Marcus Brinkmann and Jörg 
    Schwenk) and since we're not vulnerable in the first place there doesn't 
    seem much point to adding a vulnerable mechanism and then having to try 
-   and patch around the vulnerability that we've just added,
+   and patch around the vulnerability that we've just added.
    
-   We do however implement strict KEX not because we're vulnerable to the 
-   things that it counters but from a combination of it being good hygiene 
-   and because, as with 1024-bit groups, it means that we won't get pinged 
-   by vulnerability scanners for not defending against something that we're 
-   not vulnerable to in the first place */
+   We do however implement strict KEX (see session/ssh2.c:checkStrictKEX()) 
+   not because we're vulnerable to the things that it counters but from a 
+   combination of it being good hygiene, it's pretty simple to check for, 
+   and because as with 1024-bit groups it means that we won't get pinged by 
+   vulnerability scanners for not defending against something that we're not 
+   vulnerable to in the first place */
    
 static const ALGO_STRING_INFO algoStringKeyexTbl[] = {
 #ifdef PREFER_ECC
@@ -205,15 +213,19 @@ static const ALGO_STRING_INFO algoStringCoprTbl[] = {
 	};
 
 static const ALGO_STRING_INFO algoStringSignalAlgoCTbl[] = {
-	{ "ext-info-c", 10, CRYPT_ALGO_NONE, 0, SSH_EFLAG_EXT_INFO },
-	{ "kex-strict-c", 12, CRYPT_ALGO_NONE, 0, SSH_EFLAG_STRICT_KEX },
-	{ "kex-strict-c-v00@openssh.com", 28, CRYPT_ALGO_NONE, 0, SSH_EFLAG_STRICT_KEX },
+#ifdef USE_SSH_EXTENDED
+	{ "ext-info-c", 10, CRYPT_ALGO_NONE, 0, SIGNAL_INDICATOR_EXT_INFO },
+#endif /* USE_SSH_EXTENDED */
+	{ "kex-strict-c", 12, CRYPT_ALGO_NONE, 0, SIGNAL_INDICATOR_STRICT_KEX },
+	{ "kex-strict-c-v00@openssh.com", 28, CRYPT_ALGO_NONE, 0, SIGNAL_INDICATOR_STRICT_KEX },
 	{ NULL, 0, CRYPT_ALGO_NONE }, { NULL, 0, CRYPT_ALGO_NONE }
 	};
 static const ALGO_STRING_INFO algoStringSignalAlgoSTbl[] = {
-	{ "ext-info-s", 10, CRYPT_ALGO_NONE, 0, SSH_EFLAG_EXT_INFO },
-	{ "kex-strict-s", 12, CRYPT_ALGO_NONE, 0, SSH_EFLAG_STRICT_KEX },
-	{ "kex-strict-s-v00@openssh.com", 28, CRYPT_ALGO_NONE, 0, SSH_EFLAG_STRICT_KEX },
+#ifdef USE_SSH_EXTENDED
+	{ "ext-info-s", 10, CRYPT_ALGO_NONE, 0, SIGNAL_INDICATOR_EXT_INFO },
+#endif /* USE_SSH_EXTENDED */
+	{ "kex-strict-s", 12, CRYPT_ALGO_NONE, 0, SIGNAL_INDICATOR_STRICT_KEX },
+	{ "kex-strict-s-v00@openssh.com", 28, CRYPT_ALGO_NONE, 0, SIGNAL_INDICATOR_STRICT_KEX },
 	{ NULL, 0, CRYPT_ALGO_NONE }, { NULL, 0, CRYPT_ALGO_NONE }
 	};
 
@@ -284,7 +296,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 static int checkSignalAlgo( IN_BUFFER( nameLength ) const void *name,
 							IN_LENGTH_SHORT_MIN( SSH2_MIN_ALGOID_SIZE ) \
 								const int nameLength,
-							OUT_FLAGS_Z( SSH ) int *flags,
+							OUT_ENUM_OPT( SIGNAL_INDICATOR ) \
+								SIGNAL_INDICATOR_TYPE *indicatorType,
 							IN_BOOL const BOOLEAN isServer )
 	{
 	const ALGO_STRING_INFO *signalAlgoTbl = isServer ? \
@@ -297,13 +310,13 @@ static int checkSignalAlgo( IN_BUFFER( nameLength ) const void *name,
 	LOOP_INDEX signalAlgoIndex;
 
 	assert( isReadPtrDynamic( name, nameLength ) );
-	assert( isWritePtr( flags, sizeof( int ) ) );
+	assert( isWritePtr( indicatorType, sizeof( SIGNAL_INDICATOR_TYPE ) ) );
 	
 	REQUIRES( isShortIntegerRangeMin( nameLength, SSH2_MIN_ALGOID_SIZE ) );
 	REQUIRES( isBooleanValue( isServer ) );
 				
 	/* Clear return value */
-	*flags = SSH_PFLAG_NONE;
+	*indicatorType = SIGNAL_INDICATOR_NONE;
 
 	LOOP_SMALL( signalAlgoIndex = 0, 
 				signalAlgoIndex < signalAlgoTblSize && \
@@ -319,7 +332,7 @@ static int checkSignalAlgo( IN_BUFFER( nameLength ) const void *name,
 		if( signalAlgoInfoPtr->nameLen == nameLength && \
 			!memcmp( signalAlgoInfoPtr->name, name, nameLength ) )
 			{
-			*flags = signalAlgoInfoPtr->parameter;
+			*indicatorType = signalAlgoInfoPtr->parameter;
 
 			/* Let the caller know that we've found a match */
 			return( OK_SPECIAL );
@@ -395,7 +408,10 @@ typedef struct {
 	CRYPT_ALGO_TYPE subAlgo;		/* Sub-algorithm (e.g. hash for keyex) */
 	int parameter;					/* Optional algorithm parameter */
 	BOOLEAN prefAlgoMismatch;		/* First match != preferredAlgo */
-	SAFE_FLAGS extFlags;			/* Extension indicators found */
+	BOOLEAN useStrictKEX;			/* Enforce strict KEX */
+#ifdef USE_SSH_EXTENDED 
+	BOOLEAN useExtensions;			/* Use SSH extensions */
+#endif /* USE_SSH_EXTENDED */
 	} ALGOSTRING_INFO;
 
 #if defined( USE_ECDH ) || defined( USE_ECDSA )
@@ -416,7 +432,6 @@ typedef struct {
 	( algoStringInfo )->getAlgoType = ( getType ); \
 	( algoStringInfo )->allowECC = ALLOW_ECC; \
 	( algoStringInfo )->signalAlgoType = SIGNAL_ALGO_NONE; \
-	INIT_FLAGS( ( algoStringInfo )->extFlags, 0 ); \
 	}
 #define setAlgoStringInfoEx( algoStringInfo, algoStrInfo, algoStrInfoEntries, prefAlgo, getType ) \
 	{ \
@@ -427,7 +442,6 @@ typedef struct {
 	( algoStringInfo )->getAlgoType = ( getType ); \
 	( algoStringInfo )->allowECC = ALLOW_ECC; \
 	( algoStringInfo )->signalAlgoType = SIGNAL_ALGO_NONE; \
-	INIT_FLAGS( ( algoStringInfo )->extFlags, 0 ); \
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
@@ -558,10 +572,10 @@ static int readAlgoStringEx( INOUT_PTR STREAM *stream,
 		   expecting */
 		if( algoStringInfo->signalAlgoType != SIGNAL_ALGO_NONE )
 			{
-			int signalFlags;
+			SIGNAL_INDICATOR_TYPE signalIndicator;
 			
 			status = checkSignalAlgo( substringPtr, substringLen,
-									  &signalFlags, 
+									  &signalIndicator, 
 									  ( algoStringInfo->signalAlgoType == \
 													SIGNAL_ALGO_SERVER ) ? \
 										TRUE : FALSE );
@@ -569,7 +583,21 @@ static int readAlgoStringEx( INOUT_PTR STREAM *stream,
 				{
 				/* If we get an OK_SPECIAL status then we've found a match 
 				   and can continue on to the next entry */
-				SET_FLAGS( algoStringInfo->extFlags, signalFlags );
+				switch( signalIndicator )
+					{
+					case SIGNAL_INDICATOR_STRICT_KEX:
+						algoStringInfo->useStrictKEX = TRUE;
+						break;
+
+#ifdef USE_SSH_EXTENDED
+					case SIGNAL_INDICATOR_EXT_INFO:
+						algoStringInfo->useExtensions = TRUE;
+						break;
+#endif /* USE_SSH_EXTENDED */
+
+					default:
+						retIntError();
+					}
 				continue;
 				}
 			if( cryptStatusError( status ) )
@@ -737,7 +765,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4, 6 ) ) \
 int readAlgoString( INOUT_PTR STREAM *stream, 
 					IN_ARRAY( noAlgoStringEntries ) \
 						const ALGO_STRING_INFO *algoInfo,
-					IN_RANGE( 1, 16 ) const int noAlgoStringEntries, 
+					IN_RANGE( 1, 10 ) const int noAlgoStringEntries, 
 					OUT_INT_SHORT_Z int *algoParam, 
 					IN_BOOL const BOOLEAN useFirstMatch, 
 					INOUT_PTR ERROR_INFO *errorInfo )
@@ -751,7 +779,7 @@ int readAlgoString( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( algoParam, sizeof( int ) ) );
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
 
-	REQUIRES( noAlgoStringEntries >= 1 && noAlgoStringEntries <= 16 );
+	REQUIRES( noAlgoStringEntries >= 1 && noAlgoStringEntries <= 10 );
 	REQUIRES( isBooleanValue( useFirstMatch ) );
 
 	/* Clear return value */
@@ -865,7 +893,7 @@ int writeAlgoStringEx( INOUT_PTR STREAM *stream,
 					   IN_INT_SHORT_Z const int subAlgo,
 					   IN_INT_SHORT_OPT const int parameter,
 					   IN_BOOL const BOOLEAN useAltDH,
-					   IN_FLAGS_Z( SSH ) const int algoStringFlags )
+					   IN_FLAGS_Z( SSH ) const int flags )
 	{
 	LOOP_INDEX algoIndex;
 
@@ -881,7 +909,7 @@ int writeAlgoStringEx( INOUT_PTR STREAM *stream,
 				( ( parameter == TRUE ) || ( parameter == FALSE ) ) ) || \
 			  ( parameter == CRYPT_UNUSED ) );
 	REQUIRES( isBooleanValue( useAltDH ) );
-	REQUIRES( isFlagRangeZ( algoStringFlags, SSH ) );
+	REQUIRES( isFlagRangeZ( flags, SSH ) );
 
 	/* Locate the name for this algorithm and optional sub-algoritihm and 
 	   encode it as an SSH string */
@@ -963,7 +991,7 @@ int writeAlgoStringEx( INOUT_PTR STREAM *stream,
 	   append them to the algorithm ID.  These are always client-side 
 	   algorithms since the server-side is written through 
 	   writeAlgoClassList() */
-	if( algoStringFlags & SSH_PFLAG_STRICT_KEX )
+	if( flags & SSH_PFLAG_STRICT_KEX )
 		{
 		writeUint32( stream, algoStringMapTbl[ algoIndex ].nameLen + 42 );
 		swrite( stream, algoStringMapTbl[ algoIndex ].name, 
@@ -1017,7 +1045,7 @@ static int writeAlgoListEx( INOUT_PTR STREAM *stream,
 	assert( isReadPtr( algoStringInfoTbl, sizeof( ALGO_STRING_INFO ) * \
 										  noAlgoStringInfoEntries ) );
 
-	REQUIRES( noAlgoStringInfoEntries >= 1 && noAlgoStringInfoEntries <= 16 );
+	REQUIRES( noAlgoStringInfoEntries >= 1 && noAlgoStringInfoEntries <= 10 );
 	REQUIRES( isEnumRangeOpt( signalAlgoType, SIGNAL_ALGO ) );
 
 	/* Walk down the list of algorithms remembering the encoded name of each
@@ -1057,7 +1085,7 @@ static int writeAlgoListEx( INOUT_PTR STREAM *stream,
 	ENSURES( LOOP_BOUND_OK );
 
 	/* Make sure that we'll be writing at least one algorithm */
-	ENSURES( rangeCheck( noAlgos, 1, 15 ) );
+	ENSURES( rangeCheck( noAlgos, 1, 10 ) );
 
 	/* If we're using signalling algorithms, add those as well.  These are 
 	   always server-side algorithms since the client-side is written through
@@ -1323,14 +1351,14 @@ int processHelloSSH( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		handshakeInfo->isECDH = TRUE;
 		handshakeInfo->exchangeHashAlgo = algoStringInfo.subAlgo;
 		}
-	if( TEST_FLAG( algoStringInfo.extFlags, SSH_EFLAG_STRICT_KEX ) )
+	if( algoStringInfo.useStrictKEX )
 		{
 		DEBUG_PRINT(( "Enabling strict KEX as signalled by %s.\n", 
 					  isServer ? "client" : "server" ));
 		SET_FLAG( sessionInfoPtr->protocolFlags, SSH_PFLAG_STRICT_KEX );
 		}
 #ifdef USE_SSH_EXTENDED
-	if( TEST_FLAG( algoStringInfo.extFlags, SSH_EFLAG_EXT_INFO ) )
+	if( algoStringInfo.useExtensions )
 		{
 		DEBUG_PRINT(( "Enabling extensions as signalled by %s.\n", 
 					  isServer ? "client" : "server" ));

@@ -72,6 +72,10 @@ typedef enum { AUTH_PAP, AUTH_CHAP, AUTH_MSCHAPV2, AUTH_LAST } AUTH_TYPE;
 
 #ifdef USE_EAP
 
+/* Prototypes for functions in eap_crypt.c */
+
+void md5Hash( const void *data, const int dataLength, BYTE *hashValue );
+
 /****************************************************************************
 *																			*
 *								Utility Functions							*
@@ -189,10 +193,16 @@ static int createTTLSAVPCHAP( BYTE *ttlsAVP, const int ttlsAVPmaxLength,
 							  const void *password, const int passwordLength,
 							  const void *chapChallenge )
 	{
+#ifdef USE_CRYPTLIB_MD5
 	CRYPT_CONTEXT cryptContext;
+#endif /* USE_CRYPTLIB_MD5 */
 	const BYTE identifier = ( ( BYTE * ) chapChallenge )[ 16 ];
 	BYTE hashValue[ CRYPT_MAX_HASHSIZE ], chapResponse[ CRYPT_MAX_HASHSIZE ];
-	int hashValueLength, ttlsAVPlen, status;
+	BYTE hashBuffer[ 512 ];
+	int ttlsAVPlen;
+#ifdef USE_CRYPTLIB_MD5
+	int hashValueLength, status;
+#endif /* USE_CRYPTLIB_MD5 */
 
 	/* Check input parameters */
 	if( userNameLength <= 0 || userNameLength > 255 )
@@ -204,6 +214,10 @@ static int createTTLSAVPCHAP( BYTE *ttlsAVP, const int ttlsAVPmaxLength,
 		return( CRYPT_ERROR_OVERFLOW );
 
 	/* Create the CHAP response: MD5( identifier || password || challenge ) */
+	hashBuffer[ 0 ] = identifier;
+	memcpy( hashBuffer + 1, password, passwordLength );
+	memcpy( hashBuffer + 1 + passwordLength, chapChallenge, 16 );
+#ifdef USE_CRYPTLIB_MD5
 	status = cryptCreateContext( &cryptContext, CRYPT_UNUSED, 
 								 CRYPT_ALGO_MD5 );
 	if( cryptStatusError( status ) )
@@ -221,6 +235,9 @@ static int createTTLSAVPCHAP( BYTE *ttlsAVP, const int ttlsAVPmaxLength,
 	cryptDestroyContext( cryptContext );
 	if( cryptStatusError( status ) )
 		return( status );
+#else
+	md5Hash( hashBuffer, 1 + passwordLength + 16, hashValue );
+#endif /* USE_CRYPTLIB_MD5 */
 
 	/* Encode the CHAP response: identifier || hashValue */
 	chapResponse[ 0 ] = identifier;
@@ -238,6 +255,7 @@ static int createTTLSAVPCHAP( BYTE *ttlsAVP, const int ttlsAVPmaxLength,
 	*ttlsAVPlength = ttlsAVPlen;
 
 	/* Clean up */
+	memset( hashBuffer, 0, 512 );
 	memset( hashValue, 0, CRYPT_MAX_HASHSIZE );
 	memset( chapResponse, 0, CRYPT_MAX_HASHSIZE );
 

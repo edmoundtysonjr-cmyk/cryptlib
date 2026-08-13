@@ -194,7 +194,7 @@ static int testAEAD( const CAPABILITY_INFO *capabilityInfo,
 					 void *macStatePtr )
 	{
 	CONTEXT_INFO contextInfo;
-	MAC_INFO contextData;
+	MAC_INFO contextData, *macInfo = &contextData;
 	static const BYTE zeroes[ 16 ] = { 0 };
 	BYTE lengthBuffer[ 16 + 8 ];
 	const int dataLength = 114, aadLength = 12;
@@ -262,7 +262,7 @@ static int testAEAD( const CAPABILITY_INFO *capabilityInfo,
 												  MKDATA( "" ), 0 );
 		}
 	if( cryptStatusOK( status ) && \
-		memcmp( contextInfo.ctxMAC->mac, aeadMAC, POLY1305_MAC_SIZE ) )
+		memcmp( macInfo->mac, aeadMAC, POLY1305_MAC_SIZE ) )
 		status = CRYPT_ERROR_FAILED;
 	staticDestroyContext( &contextInfo );
 
@@ -314,8 +314,8 @@ static int selfTest( void )
 /* Return context subtype-specific information */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-static int getInfo( IN_ENUM( CAPABILITY_INFO ) \
-						const CAPABILITY_INFO_TYPE type, 
+static int getInfo( IN_ENUM( CONTEXT_INFO ) \
+						const CONTEXT_INFO_TYPE type, 
 					INOUT_PTR_OPT CONTEXT_INFO *contextInfoPtr,
 					OUT_PTR void *data, 
 					IN_INT_Z const int length )
@@ -325,11 +325,11 @@ static int getInfo( IN_ENUM( CAPABILITY_INFO ) \
 	assert( ( length == 0 && isWritePtr( data, sizeof( int ) ) ) || \
 			( length > 0 && isWritePtrDynamic( data, length ) ) );
 
-	REQUIRES( isEnumRange( type, CAPABILITY_INFO ) );
+	REQUIRES( isEnumRange( type, CONTEXT_INFO ) );
 	REQUIRES( ( contextInfoPtr == NULL ) || \
 			  sanityCheckContext( contextInfoPtr ) );
 
-	if( type == CAPABILITY_INFO_STATESIZE )
+	if( type == CONTEXT_INFO_STATESIZE )
 		{
 		int *valuePtr = ( int * ) data;
 
@@ -354,14 +354,19 @@ static int hash( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				 IN_BUFFER( noBytes ) BYTE *buffer, 
 				 IN_LENGTH_Z int noBytes )
 	{
-	MAC_INFO *macInfo = contextInfoPtr->ctxMAC;
-	POLY1305_MAC_STATE *poly1305Info = macInfo->macInfo;
+	MAC_INFO *macInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	POLY1305_MAC_STATE *poly1305Info;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( noBytes == 0 || isReadPtrDynamic( buffer, noBytes ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRange( noBytes ) );
+	REQUIRES( macInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	poly1305Info = macInfo->macInfo;
 
 	/* If the hash state was reset to allow another round of MAC'ing, 
 	   reinitialise the MAC state from the key */
@@ -391,14 +396,19 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					IN_BUFFER( keyLength ) const void *key, 
 					IN_LENGTH_SHORT const int keyLength )
 	{
-	MAC_INFO *macInfo = contextInfoPtr->ctxMAC;
-	POLY1305_MAC_STATE *poly1305Info = macInfo->macInfo;
+	MAC_INFO *macInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	POLY1305_MAC_STATE *poly1305Info;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isReadPtrDynamic( key, keyLength ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( keyLength == POLY1305_KEY_SIZE );
+	REQUIRES( macInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	poly1305Info = macInfo->macInfo;
 
 	/* Copy the key to internal storage */
 	if( macInfo->userKey != key )

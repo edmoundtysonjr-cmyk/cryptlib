@@ -560,6 +560,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -579,7 +583,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 #endif /* CONFIG_FILE_PATH */
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
@@ -592,7 +597,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 #ifdef CONFIG_FILE_PATH
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -851,6 +859,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -870,7 +882,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 #endif /* CONFIG_FILE_PATH */
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
@@ -885,7 +898,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 #ifdef CONFIG_FILE_PATH
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -1140,6 +1156,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -1159,7 +1179,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 #endif /* CONFIG_FILE_PATH */
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
@@ -1178,7 +1199,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 #ifdef CONFIG_FILE_PATH
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -1351,6 +1375,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -1369,9 +1397,13 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -1648,6 +1680,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -1667,9 +1703,13 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -1750,7 +1790,8 @@ int sFileOpen( OUT_PTR STREAM *stream,
 	   caller */
 	if( strnlen_s( fileName, MAX_PATH_LENGTH ) > 8 )
 		return( CRYPT_ERROR_OPEN );
-	strlcpy_s( stream->name, 8, fileName );
+	status = strlcpy_s( stream->name, 8, fileName );
+	ENSURES( cryptStatusOK( status ) );
 
 	/* If we're doing a read, fetch the data into memory */
 	if( mode & FILE_FLAG_READ )
@@ -1800,7 +1841,8 @@ int sFileOpen( OUT_PTR STREAM *stream,
 	   information, so all we can do at this point is remember the name for
 	   later use */
 	openMode = modes[ mode & FILE_FLAG_RW_MASK ];
-	strlcpy_s( stream->name, MAX_PATH_LENGTH, fileName );
+	status = strlcpy_s( stream->name, MAX_PATH_LENGTH, fileName );
+	ENSURES( cryptStatusOK( status ) );
   #ifdef EBCDIC_CHARS
 	fileName = bufferToEbcdic( fileNameBuffer, fileName );
   #endif /* EBCDIC_CHARS */
@@ -2466,6 +2508,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -2485,7 +2531,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 #endif /* CONFIG_FILE_PATH */
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
@@ -2510,7 +2557,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 #ifdef CONFIG_FILE_PATH
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -2792,6 +2842,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -2815,7 +2869,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 #endif /* CONFIG_FILE_PATH */
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
@@ -2839,7 +2894,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 #ifdef CONFIG_FILE_PATH
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -3085,6 +3143,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -3104,7 +3166,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 #endif /* CONFIG_FILE_PATH */
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
@@ -3123,7 +3186,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 #ifdef CONFIG_FILE_PATH
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -3384,6 +3450,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -3403,7 +3473,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 #endif /* CONFIG_FILE_PATH */
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
@@ -3420,7 +3491,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 #ifdef CONFIG_FILE_PATH
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -3717,6 +3791,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -3736,7 +3814,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 #endif /* CONFIG_FILE_PATH */
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
@@ -3750,7 +3829,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 #ifdef CONFIG_FILE_PATH
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -4660,6 +4742,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -4679,9 +4765,13 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Embedded OSes have little in the way of filesystems so rather than 
@@ -4714,8 +4804,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 #endif /* __iOS__ */
 #ifdef EBCDIC_CHARS
 	char fileNameBuffer[ MAX_PATH_LENGTH + 8 ];
-	int status;
 #endif /* EBCDIC_CHARS */
+	int status;
 
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
@@ -4813,11 +4903,12 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 #if defined( __APPLE__ )
 	/* Like Windows, OS X has a predefined location for storing user config
 	   data */
-	strlcpy_s( path + length, pathMaxLen - length, 
-			   "Library/Preferences/cryptlib" );
+	status = strlcpy_s( path + length, pathMaxLen - length, 
+						"Library/Preferences/cryptlib" );
 #else
-	strlcpy_s( path + length, pathMaxLen - length, ".cryptlib" );
+	status = strlcpy_s( path + length, pathMaxLen - length, ".cryptlib" );
 #endif /* OS X */
+	ENSURES( cryptStatusOK( status ) );
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
 	   already exist, create it now.  In theory we could eliminate potential 
@@ -4904,7 +4995,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 
 	/* Add the filename to the path */
-	strlcat_s( path, pathMaxLen, "/" );
+	status = strlcat_s( path, pathMaxLen, "/" );
+	ENSURES( cryptStatusOK( status ) );
 #ifndef EBCDIC_CHARS
 	ANALYSER_HINT( fileName != NULL );
 	return( appendFilename( path, pathMaxLen, pathLen, fileName, 
@@ -5314,9 +5406,13 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -5525,7 +5621,7 @@ static BOOLEAN checkUserKnown( IN_BUFFER( fileNameLength ) const char *fileName,
 	DWORD nameBufSize = PATH_BUFFER_SIZE, domainBufSize = PATH_BUFFER_SIZE;
 	BOOLEAN isMappedDrive = FALSE, tokenOK = FALSE;
 	LOOP_INDEX serverNameLength;
-	int fileNamePtrLength = fileNameLength, length;
+	int fileNamePtrLength = fileNameLength, length, status;
 
 	assert( isReadPtrDynamic( fileName, fileNameLength ) );
 
@@ -5638,8 +5734,9 @@ static BOOLEAN checkUserKnown( IN_BUFFER( fileNameLength ) const char *fileName,
 	REQUIRES_B( boundsCheck( serverNameLength, 1, PATH_BUFFER_SIZE ) );
 	memmove( pathBuffer, fileNamePtr, serverNameLength );
 	REQUIRES_B( !checkOverflowSub( PATH_BUFFER_SIZE, serverNameLength ) );
-	strlcpy_s( pathBuffer + serverNameLength, 
-			   PATH_BUFFER_SIZE - serverNameLength, "\\" );
+	status = strlcpy_s( pathBuffer + serverNameLength, 
+						PATH_BUFFER_SIZE - serverNameLength, "\\" );
+	ENSURES_B( cryptStatusOK( status ) );
 
 	/* Get the current user's SID */
 	if( OpenThreadToken( GetCurrentThread(), TOKEN_QUERY, FALSE, &hToken ) || \
@@ -6510,7 +6607,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		length + 16 >= pathMaxLen )
 		return( CRYPT_ERROR_OVERFLOW );
 	REQUIRES( !checkOverflowSub( pathMaxLen, length ) );
-	strlcpy_s( pathPtr + length, pathMaxLen - length, "\\cryptlib" );
+	status = strlcpy_s( pathPtr + length, pathMaxLen - length, "\\cryptlib" );
+	ENSURES( cryptStatusOK( status ) );
 #elif defined( __WINCE__ )
 	if( SHGetSpecialFolderPath( NULL, pathPtr, CSIDL_APPDATA, TRUE ) || \
 		SHGetSpecialFolderPath( NULL, pathPtr, CSIDL_PERSONAL, TRUE ) )
@@ -6557,7 +6655,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 #endif /* __WINCE__ */
 
 	/* Add the filename to the path */
-	strlcat_s( path, pathMaxLen, "\\" );
+	status = strlcat_s( path, pathMaxLen, "\\" );
+	ENSURES( cryptStatusOK( status ) );
 	return( appendFilename( path, pathMaxLen, pathLen, fileName, 
 							fileNameLen, option ) );
 	}
@@ -6754,6 +6853,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -6773,7 +6876,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 #endif /* CONFIG_FILE_PATH */
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
@@ -6786,7 +6890,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 #ifdef CONFIG_FILE_PATH
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -7058,6 +7165,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 						   IN_ENUM( BUILDPATH_OPTION ) \
 						   const BUILDPATH_OPTION_TYPE option )
 	{
+#ifdef CONFIG_FILE_PATH
+	int status;
+#endif /* CONFIG_FILE_PATH */
+
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
 	assert( ( option == BUILDPATH_RNDSEEDFILE ) || \
@@ -7077,7 +7188,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	/* Build the path to the configuration file if necessary */
 #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
 #endif /* CONFIG_FILE_PATH */
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
@@ -7096,7 +7208,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 #ifdef CONFIG_FILE_PATH
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -7558,6 +7673,7 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 #if defined( __OS2__ )
 	ULONG aulSysInfo[ 1 ] = { 0 };
 #endif /* OS-specific info */
+	int status;
 
 	assert( isWritePtrDynamic( path, pathMaxLen ) );
 	assert( isWritePtr( pathLen, sizeof( int ) ) );
@@ -7577,14 +7693,16 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 
 	/* Build the path to the configuration file if necessary */
 #if defined( __MSDOS__ )
-	strlcpy_s( path, pathMaxLen, "c:/dos/" );
+	status = strlcpy_s( path, pathMaxLen, "c:/dos/" );
+	ENSURES( cryptStatusOK( status ) );
 	return( appendFilename( path, pathMaxLen, pathLen, fileName, 
 							fileNameLen, option ) );
 #elif defined( __WIN16__ )
 	clearErrno();
 	REQUIRES( !checkOverflowSub( pathMaxLen, 32 ) );
 	GetWindowsDirectory( path, pathMaxLen - 32 );
-	strlcat_s( path, pathMaxLen, "\\cryptlib" );
+	status = strlcat_s( path, pathMaxLen, "\\cryptlib" );
+	ENSURES( cryptStatusOK( status ) );
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
 	   already exist, create it now.  There's no way to check for its
@@ -7595,7 +7713,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		return( CRYPT_ERROR_OPEN );
 
 	/* Add the filename to the path */
-	strlcat_s( path, pathMaxLen, "\\" );
+	status = strlcat_s( path, pathMaxLen, "\\" );
+	ENSURES( cryptStatusOK( status ) );
 	return( appendFilename( path, pathMaxLen, pathLen, fileName, 
 							fileNameLen, option ) );
 #elif defined( __OS2__ )
@@ -7604,13 +7723,15 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 	if( *aulSysInfo == 0 )
 		return( CRYPT_ERROR_OPEN );	/* No boot drive info */
 	path[ 0 ] = *aulSysInfo + 'A' - 1;
-	strlcpy_s( path + 1, pathMaxLen - 1, ":\\OS2\\" );
+	status = strlcpy_s( path + 1, pathMaxLen - 1, ":\\OS2\\" );
+	ENSURES( cryptStatusOK( status ) );
 	return( appendFilename( path, pathMaxLen, pathLen, fileName, 
 							fileNameLen, option ) );
 #elif defined( __SMX__ )
   #ifdef CONFIG_FILE_PATH
 	REQUIRES( strnlen_s( CONFIG_FILE_PATH, MAX_PATH_LENGTH ) >= 1 );
-	strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	status = strlcpy_s( path, pathMaxLen, CONFIG_FILE_PATH );
+	ENSURES( cryptStatusOK( status ) );
   #endif /* CONFIG_FILE_PATH */
 
 	/* If we're being asked to create the cryptlib directory and it doesn't
@@ -7626,7 +7747,10 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
   #ifdef CONFIG_FILE_PATH
 	if( path[ strnlen_s( path, MAX_PATH_LENGTH ) - 1 ] != '/' )
-		strlcat_s( path, pathMaxLen, "/" );
+		{
+		status = strlcat_s( path, pathMaxLen, "/" );
+		ENSURES( cryptStatusOK( status ) );
+		}
   #endif /* CONFIG_FILE_PATH */
 
 	/* Add the filename to the path */
@@ -7648,7 +7772,8 @@ int fileBuildCryptlibPath( OUT_BUFFER( pathMaxLen, *pathLen ) char *path,
 		}
 	return( CRYPT_OK );
 #elif defined( __SYMBIAN32__ )
-	strlcpy_s( path, pathMaxLen, "C:\\SYSTEM\\DATA\\" );
+	status = strlcpy_s( path, pathMaxLen, "C:\\SYSTEM\\DATA\\" );
+	ENSURES( cryptStatusOK( status ) );
 	return( appendFilename( path, pathMaxLen, pathLen, fileName, 
 							fileNameLen, option ) );
 #elif defined( __MGOS__ ) || defined( __MQXRTOS__ ) || \

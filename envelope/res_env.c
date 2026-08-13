@@ -619,6 +619,7 @@ static int addPgpPasswordInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		status = pgpPasswordToKey( iCryptContext, CRYPT_UNUSED, 
 								   password, passwordLength,
 								   envelopeInfoPtr->defaultHash,
+								   envelopeInfoPtr->defaultHashParam,
 								   salt, PGP_SALTSIZE, PGP_ITERATIONS );
 		}
 	if( cryptStatusError( status ) )

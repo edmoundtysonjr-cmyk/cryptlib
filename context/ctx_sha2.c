@@ -219,8 +219,8 @@ static int selfTest( void )
 /* Return context subtype-specific information */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-static int getInfo( IN_ENUM( CAPABILITY_INFO ) \
-						const CAPABILITY_INFO_TYPE type, 
+static int getInfo( IN_ENUM( CONTEXT_INFO ) \
+						const CONTEXT_INFO_TYPE type, 
 					INOUT_PTR_OPT CONTEXT_INFO *contextInfoPtr,
 					OUT_PTR void *data, 
 					IN_INT_Z const int length )
@@ -230,13 +230,15 @@ static int getInfo( IN_ENUM( CAPABILITY_INFO ) \
 	assert( ( length == 0 && isWritePtr( data, sizeof( int ) ) ) || \
 			( length > 0 && isWritePtrDynamic( data, length ) ) );
 
-	REQUIRES( isEnumRange( type, CAPABILITY_INFO ) );
+	REQUIRES( isEnumRange( type, CONTEXT_INFO ) );
 	REQUIRES( ( contextInfoPtr == NULL ) || \
 			  sanityCheckContext( contextInfoPtr ) );
 
-	if( type == CAPABILITY_INFO_STATESIZE )
+	if( type == CONTEXT_INFO_STATESIZE )
 		{
 		int *valuePtr = ( int * ) data;
+
+		REQUIRES( length == sizeof( int ) );
 
 		*valuePtr = SHA2_STATE_SIZE;
 
@@ -261,7 +263,8 @@ static int hash( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	sha2_ctx *shaInfo = ( sha2_ctx * ) contextInfoPtr->ctxHash->hashInfo;
+	HASH_INFO *hashInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	sha2_ctx *shaInfo;
 #ifdef HAS_DEVCRYPTO
 	const int hwCryptInfo = getSysVar( SYSVAR_HWCRYPT );
 #endif /* HAS_DEVCRYPTO */
@@ -272,6 +275,11 @@ static int hash( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRange( noBytes ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( hashInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	shaInfo = ( sha2_ctx * ) hashInfo->hashInfo;
 
 	/* If there's crypto hardware available, try and use that */
 #ifdef HAS_DEVCRYPTO
@@ -299,7 +307,7 @@ static int hash( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		}
 	else
 		{
-		sha2_end( contextInfoPtr->ctxHash->hash, shaInfo );
+		sha2_end( hashInfo->hash, shaInfo );
 		}
 
 	return( CRYPT_OK );

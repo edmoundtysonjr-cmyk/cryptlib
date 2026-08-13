@@ -37,6 +37,7 @@
 
 #if defined( CONFIG_CRYPTO_HW1 ) || defined( CONFIG_CRYPTO_HW2 )
 
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int getCryptoStorageObject( OUT_HANDLE_OPT CRYPT_KEYSET *iCryptKeyset )
 	{
 	CRYPT_KEYSET iHWKeyset;
@@ -118,7 +119,7 @@ int openDeviceFileStorageObject( OUT_HANDLE_OPT CRYPT_KEYSET *iCryptKeyset,
 	}
 #endif /* USE_FILES */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 4, 7 ) ) \
+CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 4, 7 ) ) \
 int openDeviceStorageObject( OUT_HANDLE_OPT CRYPT_KEYSET *iCryptKeyset,
 							 IN_ENUM_OPT( CRYPT_KEYOPT ) \
 								const CRYPT_KEYOPT_TYPE options,
@@ -271,6 +272,8 @@ int openDeviceStorageObject( OUT_HANDLE_OPT CRYPT_KEYSET *iCryptKeyset,
 		}
 	*iCryptKeyset = iLocalKeyset;
 
+	/* We return OK_SPECIAL to signal that the storage object is a file 
+	   keyset rather than on-device storage */
 	return( isFileKeyset ? OK_SPECIAL : CRYPT_OK );
 	}
 
@@ -311,7 +314,13 @@ int deleteDeviceStorageObject( IN_BOOL const BOOLEAN updateBackingStore,
 						 "available from HAL" ));
 			return( CRYPT_ERROR_NOTFOUND );
 			}
-		ANALYSER_HINT( storageObjectAddr != NULL );
+		if( storageObjectAddr == NULL || \
+			!isIntegerRangeNZ( storageObjectSize ) )
+			{
+			DEBUG_DIAG(( "HAL returned invalid secure hardware storage "
+						 "reference" ));
+			return( CRYPT_ERROR_NOTFOUND );
+			}
 		zeroise( storageObjectAddr, storageObjectSize );
 		if( updateBackingStore )
 			{
@@ -332,7 +341,7 @@ int deleteDeviceStorageObject( IN_BOOL const BOOLEAN updateBackingStore,
 										BUILDPATH_GETPATH );
 		if( cryptStatusError( status ) )
 			return( status );
-		fileErase( storageFilePath );
+		fileErase( storageFilePath );	/* void function */
 		}
 #endif /* USE_FILES */
 
@@ -422,7 +431,7 @@ int persistContextMetadata( INOUT_PTR TYPECAST( CONTEXT_INFO * ) \
 								CRYPT_ERROR_SIGNALLED );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( deviceInfoPtr->iCryptKeyset == CRYPT_ERROR )
+	if( !isHandleRangeValid( deviceInfoPtr->iCryptKeyset ) )
 		{
 		krnlReleaseObject( iCryptDevice );
 		return( CRYPT_ERROR_NOTINITED );

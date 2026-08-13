@@ -477,8 +477,7 @@ int putSessionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					( CRYPT_ERROR_TIMEOUT, SESSION_ERRINFO, 
 					  "Timeout during flush, only %d bytes were written "
 					  "before the timeout of %d seconds expired",
-					  sessionInfoPtr->sendBufPartialBufPos, 
-					  sessionInfoPtr->writeTimeout ) );
+					  bytesWritten, sessionInfoPtr->writeTimeout ) );
 			}
 		retExt( CRYPT_ERROR_TIMEOUT,
 				( CRYPT_ERROR_TIMEOUT, SESSION_ERRINFO, 

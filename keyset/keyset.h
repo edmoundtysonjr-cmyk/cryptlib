@@ -32,17 +32,20 @@
    certificate, bringing some dangerously close to 2048 bytes (and even 
    larger in some rare cases for oddball certificates) it's now 4096 bytes.
 
-   (Another reason for allowing the increase is that an original motivation
+   Another reason for allowing the increase is that an original motivation
    for capping the value at 2048 bytes was to deal with databases that 
    didn't support BLOBs and/or didn't do VARCHARs (treating them as straight
    CHARs), but both the massively-increased storage available to databases
    since then and the high improbability of a PKI of any appreciable size 
    ever being widely deployed (beyond the existing databases of commercial
    CAs), combined with the near-universal supportof BLOBs in databases, 
-   means that we don't need to be so restrictive any more) */
+   means that we don't need to be so restrictive any more.
+   
+   The calculation for the maximum base64-encoded size is 4 * ceil( n/3 ),
+   thus the rounding up by 3 - 1 = 2 bytes for MAX_CERT_SIZE */
 
 #define MAX_CERT_SIZE		4096
-#define MAX_ENCODED_CERT_SIZE ( ( MAX_CERT_SIZE * 4 ) / 3 )
+#define MAX_ENCODED_CERT_SIZE ( ( ( MAX_CERT_SIZE + 2 ) / 3 ) * 4 )
 
 /* Keyset information flags.  These are:
 
@@ -284,7 +287,7 @@ typedef struct {
 	   return data in multiple chunks depending on how much comes over the
 	   net at once.  Because of this we need to track what's come in, and
 	   also allocate more buffer space on demand if required.  The following
-	   variables handle the on-demand re-allocation of buffer space */
+	   variable handles the on-demand re-allocation of buffer space */
 	int bufPos;						/* Current position in buffer */
 	} HTTP_INFO;
 

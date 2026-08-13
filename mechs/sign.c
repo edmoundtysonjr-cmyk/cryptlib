@@ -168,10 +168,12 @@ static CRYPT_FORMAT_TYPE getFormatType( IN_BUFFER( dataLength ) const void *data
 		}
 
 #if defined( USE_PGP ) || defined( USE_PGPKEYS )
-	/* It's not ASN.1 data, check for PGP data */
+	/* It's not ASN.1 data, check for PGP data.  pgpReadPacketHeader() 
+	   applies the given bounds so the additional check is just to document 
+	   that it's being done */
 	status = pgpReadPacketHeader( &stream, NULL, &packetLength, 30, 8192 );
 	if( cryptStatusOK( status ) && \
-		packetLength > 30 && packetLength < 8192 )
+		packetLength >= 30 && packetLength <= 8192 )
 		{
 		sMemDisconnect( &stream );
 		return( CRYPT_FORMAT_PGP );
@@ -403,9 +405,21 @@ C_RET cryptCheckSignatureEx( C_IN void C_PTR signature,
 		return( CRYPT_ERROR_PARAM2 );
 	if( !isReadPtrDynamic( signature, signatureLength ) )
 		return( CRYPT_ERROR_PARAM1 );
+	if( extraData != NULL && \
+		!isWritePtr( extraData, sizeof( int ) ) )
+		return( CRYPT_ERROR_PARAM5 );
 	if( ( formatType = getFormatType( signature, \
 									  signatureLength ) ) == CRYPT_FORMAT_NONE )
 		return( CRYPT_ERROR_BADDATA );
+#ifndef USE_PGP 
+	if( formatType == CRYPT_FORMAT_PGP )
+		{
+		/* getFormatType() will identify the PGP format for both data and 
+		   PGP keys which are signed, so if we don't have PGP data enabled 
+		   we have to reject PGP-format data */
+		return( CRYPT_ERROR_BADDATA );
+		}
+#endif /* !USE_PGP */
 
 	/* Clear return values */
 	if( extraData != NULL )
@@ -474,11 +488,6 @@ C_RET cryptCheckSignatureEx( C_IN void C_PTR signature,
 
 		case CRYPT_FORMAT_CMS:
 		case CRYPT_FORMAT_SMIME:
-			if( extraData != NULL )
-				{
-				if( !isWritePtr( extraData, sizeof( int ) ) )
-					return( CRYPT_ERROR_PARAM6 );
-				}
 			break;
 
 #ifdef USE_PGP
@@ -511,6 +520,15 @@ C_RET cryptCheckSignatureEx( C_IN void C_PTR signature,
 	if( cryptStatusError( status ) )
 		return( status );
 	if( extraData == NULL )
+		return( CRYPT_OK );
+	
+	/* There's an additional condition that we have to handle and that's 
+	   where the caller has asked for signing attributes but there are none 
+	   present, meaning the handle is still set at the cleared-state value.  
+	   The request for signing attributes is simply that, not a condition 
+	   for a hard failure, so we exit leaving the value in the cleared 
+	   state */
+	if( !isHandleRangeValid( iExtraData ) )
 		return( CRYPT_OK );
 	
 	/* The caller has requested to see the the recovered signing attributes, 
@@ -559,8 +577,9 @@ C_RET cryptCheckSignature( C_IN void C_PTR signature,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3, 6, 8 ) ) \
 int iCryptCreateSignature( OUT_BUFFER_OPT( signatureMaxLength, *signatureLength ) \
 							void *signature, 
-						   IN_DATALENGTH_Z const int signatureMaxLength,
-						   OUT_DATALENGTH_Z int *signatureLength,
+						   IN_LENGTH_SHORT_Z const int signatureMaxLength,
+						   OUT_LENGTH_BOUNDED_SHORT_Z( signatureMaxLength ) \
+							int *signatureLength,
 						   IN_ENUM( CRYPT_FORMAT ) \
 							const CRYPT_FORMAT_TYPE formatType,
 						   IN_HANDLE const CRYPT_CONTEXT iSignContext,
@@ -587,8 +606,8 @@ int iCryptCreateSignature( OUT_BUFFER_OPT( signatureMaxLength, *signatureLength 
 
 	REQUIRES( ( signature == NULL && signatureMaxLength == 0 ) || \
 			  ( signature != NULL && \
-				isBufsizeRangeMin( signatureMaxLength, \
-								   MIN_CRYPT_OBJECTSIZE ) ) );
+				isShortIntegerRangeMin( signatureMaxLength, \
+										MIN_CRYPT_OBJECTSIZE ) ) );
 	REQUIRES( isEnumRange( formatType, CRYPT_FORMAT ) );
 	REQUIRES( isHandleRangeValid( iSignContext ) );
 	REQUIRES( sanityCheckSigDataInfo( sigDataInfo, 
@@ -712,7 +731,7 @@ int iCryptCreateSignature( OUT_BUFFER_OPT( signatureMaxLength, *signatureLength 
 					sigFormat == CRYPT_PKCFORMAT_PSS )
 					sigType = SIGNATURE_CMS_PSS;
 				}
-
+ 
 			REQUIRES( ( sigParams->iAuthAttr == CRYPT_ERROR && \
 						sigParams->useDefaultAuthAttr == FALSE ) || \
 					  ( sigParams->iAuthAttr == CRYPT_ERROR && \

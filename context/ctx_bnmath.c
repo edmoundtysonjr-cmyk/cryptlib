@@ -38,11 +38,14 @@ BOOLEAN BN_uadd( INOUT_PTR BIGNUM *r,
 	assert( isReadPtr( a, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( b, sizeof( BIGNUM ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) );
 	REQUIRES_B( sanityCheckBignum( b ) );
 	REQUIRES_B( length >= 0 && \
 				length <= getBNMaxSize( a ) && \
-				length <= getBNMaxSize( b ) ); 
+				length <= getBNMaxSize( b ) && \
+				length <= getBNMaxSize( r ) ); 
 
 	/* Add the two values, propagating the carry if required */
 	carry = bn_add_words( r->d, a->d, b->d, length );
@@ -51,12 +54,12 @@ BOOLEAN BN_uadd( INOUT_PTR BIGNUM *r,
 		REQUIRES_B( length < getBNMaxSize( r ) );
 		r->d[ length++ ] = 1;
 		}
+	REQUIRES_B( length <= getBNMaxSize( r ) );
 	r->top = length;
-	ENSURES_B( length <= getBNMaxSize( r ) );
-	BN_set_negative( r, FALSE );
 	CK( BN_clear_top( r, oldTop ) );
 	if( bnStatusError( bnStatus ) )
 		return( FALSE );
+	BN_set_negative( r, FALSE );
 
 	ENSURES_B( sanityCheckBignum( r ) );
 
@@ -78,28 +81,28 @@ BOOLEAN BN_usub( INOUT_PTR BIGNUM *r,
 	assert( isReadPtr( a, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( b, sizeof( BIGNUM ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) );
 	REQUIRES_B( sanityCheckBignum( b ) );
 	REQUIRES_B( BN_cmp( a, b ) >= 0 );
 	REQUIRES_B( length >= 0 && \
 				length <= getBNMaxSize( a ) && \
-				length <= getBNMaxSize( b ) ); 
+				length <= getBNMaxSize( b ) && \
+				length <= getBNMaxSize( r ) ); 
 
 	/* Subtract the two values.  The carry should be zero since a >= b */
 	carry = bn_sub_words( r->d, a->d, b->d, length );
 	ENSURES_B( !carry );
+	REQUIRES_B( length <= getBNMaxSize( r ) );
 	r->top = length;
-	ENSURES_B( r->top <= getBNMaxSize( r ) );
-	BN_set_negative( r, FALSE );
-	CK( BN_clear_top( r, oldTop ) );
-	if( bnStatusError( bnStatus ) )
-		return( FALSE );
-
+	
 	/* The subtraction may have reduced the size of the resulting value so 
-	   we have to normalise it before we return */
-	CK( BN_normalise( r ) );
+	   we have to clean it up and normalise the result before we return */
+	CK( BN_clear_top_normalise( r, oldTop ) );
 	if( bnStatusError( bnStatus ) )
 		return( FALSE );
+	BN_set_negative( r, FALSE );
 
 	ENSURES_B( sanityCheckBignum( r ) );
 
@@ -121,6 +124,8 @@ BOOLEAN BN_add( INOUT_PTR BIGNUM *r,
 
 	/* a can be negative via the BN_mod_inverse() used in Montgomery 
 	   ops */
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) );
 	REQUIRES_B( sanityCheckBignum( b ) && !BN_is_negative( b ) );
 
@@ -152,6 +157,8 @@ BOOLEAN BN_sub( INOUT_PTR BIGNUM *r,
 	assert( isReadPtr( a, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( b, sizeof( BIGNUM ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) && !BN_is_negative( a ) );
 	REQUIRES_B( sanityCheckBignum( b ) && !BN_is_negative( b ) );
 
@@ -175,12 +182,12 @@ BOOLEAN BN_sub( INOUT_PTR BIGNUM *r,
 *																			*
 ****************************************************************************/
 
-/* Shift a bignum left or right */
+/* Shift a bignum left or right.  "If I were you, I'd shift" - Len Beadell */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 BOOLEAN BN_lshift( INOUT_PTR BIGNUM *r, 
 				   IN_PTR const BIGNUM *a, 
-				   IN_RANGE( 0, bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
+				   IN_RANGE( 1, bytesToBits( CRYPT_MAX_PKCSIZE ) - 1 ) \
 						const int shiftAmount )
 	{
 	const int wordShiftAmount = shiftAmount / BN_BITS2;
@@ -190,19 +197,18 @@ BOOLEAN BN_lshift( INOUT_PTR BIGNUM *r,
 	const int oldTop = r->top;
 	const int iterationBound = getBNMaxSize( a );
 	BN_ULONG *rData = r->d;
+	int bnStatus = BN_STATUS;
 	LOOP_INDEX i;
 
 	assert( isWritePtr( r, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( a, sizeof( BIGNUM ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) && !BN_is_zero( a ) );
 	REQUIRES_B( shiftAmount > 0 && \
 				shiftAmount < bytesToBits( CRYPT_MAX_PKCSIZE ) );
 	REQUIRES_B( a->top + wordShiftAmount < getBNMaxSize( r ) );
-
-	/* Copy across the sign bit.  a can be negative via the BN_mod_inverse() 
-	   used in Montgomery ops */
-	BN_set_negative( r, BN_is_negative( a ) );
 
 	/* If we're shifting a word at a time then it's just a straight copy 
 	   operation */
@@ -227,7 +233,8 @@ BOOLEAN BN_lshift( INOUT_PTR BIGNUM *r,
 		BN_ULONG left, right = 0;
 
 		/* Shift everything up by taking two words and extracting out the 
-		   single word of shifted data that we need */
+		   single word of shifted data that we need.  Since we're dealing 
+		   with BN_ULONGs here checkOverflowShift() isn't useful */
 		LOOP_EXT_REV( i = a->top - 1, i >= 0, i--, iterationBound ) 
 			{
 			ENSURES_B( LOOP_INVARIANT_REV( i, 0, a->top - 1 ) );
@@ -242,6 +249,7 @@ BOOLEAN BN_lshift( INOUT_PTR BIGNUM *r,
 
 		/* Set the new top based on what we've shifted up */
 		r->top = a->top + wordShiftAmount;
+		ENSURES_B( r->top <= getBNMaxSize( r ) );
 		if( rData[ r->top ] != 0 )
 			{
 			/* We shifted bits off the end of the last word, extend the 
@@ -250,7 +258,9 @@ BOOLEAN BN_lshift( INOUT_PTR BIGNUM *r,
 			ENSURES_B( r->top <= getBNMaxSize( r ) );
 			}
 		}
-	BN_clear_top( r, oldTop );
+	CK( BN_clear_top( r, oldTop ) );
+	if( bnStatusError( bnStatus ) )
+		return( FALSE );
 
 	/* Clear the space that we've shifted up from.  This can become an issue 
 	   when r == a */
@@ -263,6 +273,12 @@ BOOLEAN BN_lshift( INOUT_PTR BIGNUM *r,
 		}
 	ENSURES_B( LOOP_BOUND_OK );
 
+	/* Copy across the sign bit.  a can be negative via the BN_mod_inverse() 
+	   used in Montgomery ops.  We have to do this after we've shifted the 
+	   data into r because doing it at the start could end up trying to set
+	   a negative zero */
+	BN_set_negative( r, BN_is_negative( a ) );
+
 	ENSURES_B( sanityCheckBignum( r ) );
 
 	return( TRUE );
@@ -271,7 +287,7 @@ BOOLEAN BN_lshift( INOUT_PTR BIGNUM *r,
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 BOOLEAN BN_rshift( INOUT_PTR BIGNUM *r, 
 				   IN_PTR const BIGNUM *a, 
-				   IN_RANGE( 0, bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
+				   IN_RANGE( 1, bytesToBits( CRYPT_MAX_PKCSIZE ) - 1 ) \
 						const int shiftAmount )
 	{
 	const int wordShiftAmount = shiftAmount / BN_BITS2;
@@ -282,11 +298,14 @@ BOOLEAN BN_rshift( INOUT_PTR BIGNUM *r,
 	const int oldTop = r->top;
 	const int iterationBound = getBNMaxSize( a );
 	BN_ULONG *rData = r->d;
+	int bnStatus = BN_STATUS;
 	LOOP_INDEX i;
 
 	assert( isWritePtr( r, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( a, sizeof( BIGNUM ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) && !BN_is_negative( a ) );
 	REQUIRES_B( shiftAmount > 0 && \
 				shiftAmount < bytesToBits( CRYPT_MAX_PKCSIZE ) );
@@ -297,8 +316,6 @@ BOOLEAN BN_rshift( INOUT_PTR BIGNUM *r,
 	   BN_mod_inverse() that iterate until a certain value is reached */
 	if( BN_is_zero( a ) )
 		{
-		int bnStatus = BN_STATUS;
-
 		CK( BN_zero( r ) );
 		ENSURES_B( bnStatusOK( bnStatus ) );
 
@@ -335,7 +352,8 @@ BOOLEAN BN_rshift( INOUT_PTR BIGNUM *r,
 		/* Shift everything down by taking two words and extracting out the 
 		   single word of shifted data that we need.  Since we're taking two 
 		   words at a time (i.e. reading ahead by one word), we only iterate
-		   to wordsToShift - 1 */
+		   to wordsToShift - 1.  In addition since we're dealing with 
+		   BN_ULONGs here checkOverflowShift() isn't useful */
 		left = aData[ wordShiftAmount ];
 		LOOP_EXT( i = 0, i < wordsToShift - 1, i++, iterationBound ) 
 			{
@@ -357,7 +375,9 @@ BOOLEAN BN_rshift( INOUT_PTR BIGNUM *r,
 			rData[ r->top++ ] = left;
 		ENSURES_B( r->top <= getBNMaxSize( r ) );
 		}
-	BN_clear_top( r, oldTop );
+	CK( BN_clear_top( r, oldTop ) );
+	if( bnStatusError( bnStatus ) )
+		return( FALSE );
 
 	ENSURES_B( sanityCheckBignum( r ) );
 
@@ -411,8 +431,8 @@ BOOLEAN BN_add_word( INOUT_PTR BIGNUM *a, const BN_ULONG w )
 	   top word has the value 1 */
 	if( i >= a->top )
 		{
+		REQUIRES_B( a->top < getBNMaxSize( a ) );
 		aData[ a->top++ ] = 1;
-		ENSURES_B( a->top <= getBNMaxSize( a ) );
 		}
 
 	ENSURES_B( sanityCheckBignum( a ) );
@@ -492,8 +512,8 @@ BOOLEAN BN_mul_word( INOUT_PTR BIGNUM *a, const BN_ULONG w )
 	word = bn_mul_words( aData, aData, a->top, w );
 	if( word > 0 )
 		{
+		REQUIRES_B( a->top < getBNMaxSize( a ) );
 		aData[ a->top++ ] = word;
-		ENSURES_B( a->top <= getBNMaxSize( a ) );
 		}
 
 	ENSURES_B( sanityCheckBignum( a ) );
@@ -560,9 +580,9 @@ static BOOLEAN bn_square( INOUT_PTR BN_ULONG *r,
 	const int max = length * 2;
 	LOOP_INDEX i;
 
-	assert( isReadPtrDynamic( r, sizeof( BN_ULONG ) * length ) );
+	assert( isWritePtrDynamic( r, sizeof( BN_ULONG ) * ( length * 2 ) ) );
 	assert( isReadPtrDynamic( a, sizeof( BN_ULONG ) * length ) );
-	assert( isReadPtrDynamic( tmp, sizeof( BN_ULONG ) * ( length * 2 ) ) );
+	assert( isWritePtrDynamic( tmp, sizeof( BN_ULONG ) * ( length * 2 ) ) );
 
 	REQUIRES_B( length > 0 && length <= BIGNUM_ALLOC_WORDS );
 
@@ -618,11 +638,13 @@ BOOLEAN BN_sqr( INOUT_PTR BIGNUM *r,
 	assert( isReadPtr( a, sizeof( BIGNUM ) ) );
 	assert( isWritePtr( bnCTX, sizeof( BN_CTX ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) && !BN_is_zero( a ) && \
 				!BN_is_negative( a ) );
 	REQUIRES_B( sanityCheckBNCTX( bnCTX ) );
 	REQUIRES_B( length > 0 && length < BIGNUM_ALLOC_WORDS );
-	REQUIRES_B( 2 * a->top <= getBNMaxSize( r ) );
+	REQUIRES_B( 2 * length <= getBNMaxSize( r ) );
 
 	BN_CTX_start( bnCTX );
 	if( a == r )
@@ -635,6 +657,10 @@ BOOLEAN BN_sqr( INOUT_PTR BIGNUM *r,
 			BN_CTX_end( bnCTX );
 			return( FALSE );
 			}
+		
+		/* We've switched to using a different bignum for the result, make 
+		   sure that it fits there too */
+		REQUIRES_B( 2 * length <= getBNMaxSize( rTmp ) );
 		}
 	oldTop = rTmp->top;
 
@@ -659,7 +685,12 @@ BOOLEAN BN_sqr( INOUT_PTR BIGNUM *r,
 		ENSURES_B( !checkOverflowDec( rTmp->top ) );
 		rTmp->top--;
 		}
-	BN_clear_top( rTmp, oldTop );
+	CK( BN_clear_top( rTmp, oldTop ) );
+	if( bnStatusError( bnStatus ) )
+		{
+		BN_CTX_end_ext( bnCTX, BIGNUM_EXT_MUL1 );
+		return( getBnStatusBool( bnStatus ) );
+		}
 	if( rTmp != r )
 		{
 		/* Since the input was the same as the output we need to copy the 
@@ -702,6 +733,8 @@ BOOLEAN BN_isqrt( INOUT_PTR BIGNUM *r,
 	assert( isReadPtr( a, sizeof( BIGNUM ) ) );
 	assert( isWritePtr( bnCTX, sizeof( BN_CTX ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) && !BN_is_zero( a ) && \
 				!BN_is_negative( a ) );
 	REQUIRES_B( r != a );
@@ -722,18 +755,16 @@ BOOLEAN BN_isqrt( INOUT_PTR BIGNUM *r,
 	noBits = roundUp( noBits - 3, 4 );
 	BN_clear( one );
 	CK( BN_set_bit( one, noBits ) );
-	if( BN_cmp( one, a ) <= 0 )
+	if( bnStatusOK( bnStatus ) && BN_cmp( one, a ) <= 0 )
 		CK( BN_lshift( one, one, 2 ) );
-	if( BN_cmp( one, a ) > 0 )
-		{
+	if( bnStatusOK( bnStatus ) && BN_cmp( one, a ) > 0 )
 		CK( BN_rshift( one, one, 2 ) );
-		}
 	if( bnStatusError( bnStatus ) )
 		{
 		BN_CTX_end( bnCTX );
 		return( getBnStatusBool( bnStatus ) );
 		}
-	assert( BN_cmp( one, a ) <= 0 );
+	REQUIRES_B( BN_cmp( one, a ) <= 0 );
 
 	/* Iterate the abacus algorithm until we get a result:
 
@@ -747,6 +778,11 @@ BOOLEAN BN_isqrt( INOUT_PTR BIGNUM *r,
 		return res */
 	CKPTR( BN_copy( op, a ) );
 	CK( BN_zero( r ) );
+	if( bnStatusError( bnStatus ) )
+		{
+		BN_CTX_end( bnCTX );
+		return( getBnStatusBool( bnStatus ) );
+		}
 	LOOP_EXT_WHILE( BN_cmp_word( one, 0 ) > 0, 
 					bnWordsToBits( BIGNUM_ALLOC_WORDS ) / 2 )
 		{
@@ -755,7 +791,7 @@ BOOLEAN BN_isqrt( INOUT_PTR BIGNUM *r,
 				bnWordsToBits( BIGNUM_ALLOC_WORDS ) / 2 ) );
 
 		CK( BN_add( tmp, r, one ) );
-		if( BN_cmp( op, tmp ) >= 0 )
+		if( bnStatusOK( bnStatus ) && BN_cmp( op, tmp ) >= 0 )
 			{
 			CK( BN_sub( op, op, tmp ) );
 			CK( BN_lshift( tmp, one, 1 ) );
@@ -813,7 +849,7 @@ static BOOLEAN calculateMultiplier( OUT_PTR BN_ULONG *multiplier,
 	BN_ULONG mult, multRemainder;
 
 	assert( isWritePtr( multiplier, sizeof( BN_ULONG ) ) );
-	assert( isReadPtr( numeratorData, sizeof( BN_ULONG ) * 3 ) );
+	assert( isReadPtr( &numeratorData[ -2 ], sizeof( BN_ULONG ) * 3 ) );
 
 	/* Clear return value */
 	*multiplier = 0;
@@ -830,7 +866,8 @@ static BOOLEAN calculateMultiplier( OUT_PTR BN_ULONG *multiplier,
 	/* Calculate the initial estimate for the multiplier */
   #ifdef BN_DIV2W
 	/* Double-word divide available (most modern compilers), use this if 
-	   possible */
+	   possible.  Since we're dealing with BN_ULONG/BN_ULLONG here 
+	   checkOverflowShift() isn' useful */
 	mult = ( BN_ULONG ) \
 		( ( ( ( ( BN_ULLONG ) numeratorMSW ) << BN_BITS2 ) | numeratorMSWnext ) / divisorMSW );
   #else
@@ -865,7 +902,7 @@ static BOOLEAN calculateMultiplier( OUT_PTR BN_ULONG *multiplier,
 				   in both cases), so we just stick with the portable 
 				   version.  See also the long comment on this in 
 				   misc/safety.h */
-				ENSURES( multRemainder + divisorMSW < divisorMSW );
+				ENSURES_B( multRemainder + divisorMSW < divisorMSW );
 				}
 			}
 		}
@@ -888,7 +925,7 @@ static BOOLEAN calculateMultiplier( OUT_PTR BN_ULONG *multiplier,
 	BN_ULONG mult, multRemainder, tempWordLow, tempWordHigh;
 
 	assert( isWritePtr( multiplier, sizeof( BN_ULONG ) ) );
-	assert( isReadPtr( numeratorData, sizeof( BN_ULONG ) * 2 ) );
+	assert( isReadPtr( &numeratorData[ -2 ], sizeof( BN_ULONG ) * 3 ) );
 
 	/* Clear return value */
 	*multiplier = 0;
@@ -945,7 +982,7 @@ static BOOLEAN calculateMultiplier( OUT_PTR BN_ULONG *multiplier,
 				{
 				mult--;
 
-				ENSURES( multRemainder + divisorMSW < divisorMSW );
+				ENSURES_B( multRemainder + divisorMSW < divisorMSW );
 				}
 			}
 		}
@@ -992,7 +1029,7 @@ BOOLEAN BN_div( INOUT_PTR_OPT BIGNUM *quotient,
 	const int iterationBound = getBNMaxSize( numerator );
 	const int oldQuotientSize = ( quotient != NULL ) ? quotient->top : 0;
 	int numeratorWordCount, divisorWordCount, wordsToProcess;
-	int normalisationShiftAmt, divisorBits, bnStatus = BN_STATUS;
+	int normalisationShiftAmt, divisorBits, cmpResult, bnStatus = BN_STATUS;
 	LOOP_INDEX i;
 
 	assert( quotient == NULL || isWritePtr( quotient, sizeof( BIGNUM ) ) );
@@ -1014,9 +1051,10 @@ BOOLEAN BN_div( INOUT_PTR_OPT BIGNUM *quotient,
 	/* Check for the simplest case of divisor > numerator, resulting in 
 	   either quotient = zero, remainder = numerator, or quotient = one,
 	   remainder = zero */
-	if( BN_ucmp( divisor, numerator ) >= 0 ) 
+	cmpResult = BN_ucmp( divisor, numerator );
+	if( cmpResult >= 0 ) 
 		{
-		if( BN_ucmp( divisor, numerator ) == 0 )
+		if( cmpResult == 0 )
 			{
 			if( quotient != NULL )
 				CK( BN_one( quotient ) );
@@ -1038,6 +1076,13 @@ BOOLEAN BN_div( INOUT_PTR_OPT BIGNUM *quotient,
 
 	BN_CTX_start( bnCTX );
 	normalisedNumerator = BN_CTX_get_ext( bnCTX, BIGNUM_EXT_MUL1 );
+	if( normalisedNumerator == NULL )
+		{
+		/* The BN_CTX_get_ext() failed, use a standard BN_CTX_end() to clean 
+		   up */
+		BN_CTX_end( bnCTX );
+		return( FALSE );
+		}
 	normalisedDivisor = BN_CTX_get( bnCTX );
 	if( quotient != NULL )
 		result = quotient;
@@ -1049,8 +1094,7 @@ BOOLEAN BN_div( INOUT_PTR_OPT BIGNUM *quotient,
 		result = BN_CTX_get( bnCTX );
 		}
 	temp = BN_CTX_get( bnCTX );
-	if( normalisedNumerator == NULL || normalisedDivisor == NULL || \
-		result == NULL || temp == NULL )
+	if( normalisedDivisor == NULL || result == NULL || temp == NULL )
 		{
 		BN_CTX_end_ext( bnCTX, BIGNUM_EXT_MUL1 );
 		return( FALSE );
@@ -1059,7 +1103,7 @@ BOOLEAN BN_div( INOUT_PTR_OPT BIGNUM *quotient,
 
 	/* Normalise the numerator and divisor */
 	divisorBits = BN_num_bits( divisor );
-	ENSURES( !cryptStatusError( divisorBits ) );
+	ENSURES_B( !cryptStatusError( divisorBits ) );
 	normalisationShiftAmt = BN_BITS2 - ( divisorBits % BN_BITS2 );
 	CK( BN_lshift( normalisedDivisor, divisor, normalisationShiftAmt ) );
 	normalisationShiftAmt += BN_BITS2;
@@ -1079,9 +1123,9 @@ BOOLEAN BN_div( INOUT_PTR_OPT BIGNUM *quotient,
 	   the value at the end of this function */
 	if( normalisedNumerator->top < 3 ) 
 		{
-		normalisedNumerator->d[ normalisedNumerator->top++ ] = 0;
-		ENSURES_B( normalisedNumerator->top <= \
+		REQUIRES_B( normalisedNumerator->top < \
 							getBNMaxSize( normalisedNumerator ) );
+		normalisedNumerator->d[ normalisedNumerator->top++ ] = 0;
 		}
 
 	/* Now that we've finished fiddling the numerator and divisor, remember 
@@ -1144,8 +1188,7 @@ BOOLEAN BN_div( INOUT_PTR_OPT BIGNUM *quotient,
 
 	/* Iterate through every word of numerator/divisor performing a divide 
 	   step on each one */
-	LOOP_EXT( i = 0, i < wordsToProcess - 1, ( i++, numeratorData-- ), 
-			  iterationBound ) 
+	LOOP_EXT( i = 0, i < wordsToProcess - 1, i++, iterationBound ) 
 		{
 		BN_ULONG multiplier DUMMY_INIT, word;
 
@@ -1169,8 +1212,8 @@ BOOLEAN BN_div( INOUT_PTR_OPT BIGNUM *quotient,
 		word = bn_mul_words( temp->d, normalisedDivisor->d, 
 							 divisorWordCount, multiplier );
 		temp->d[ divisorWordCount ] = word;
+		REQUIRES_B( numeratorDataCurrent > &normalisedNumerator->d[ 0 ] );
 		numeratorDataCurrent--;
-		ENSURES_B( numeratorDataCurrent >= &normalisedNumerator->d[ 0 ] );
 		if( bn_sub_words( numeratorDataCurrent, numeratorDataCurrent, 
 						  temp->d, divisorWordCount + 1 ) ) 
 			{
@@ -1184,15 +1227,19 @@ BOOLEAN BN_div( INOUT_PTR_OPT BIGNUM *quotient,
 
 		/* Store the current result and move on to the next word.  We have 
 		   to be careful here because at the last loop iteration the
-		   resultData pointer will move out of range, which doesn't cause a
-		   problem because it's never used beyond this point but is a 
-		   certificational weakness so we don't update the pointer for that
-		   case */
+		   resultData/numeratorData pointer will move out of range, which 
+		   doesn't cause a problem because it's never used beyond this point 
+		   but is a certificational weakness so we don't update the pointers 
+		   for that case */
 		if( i >= wordsToProcess - 2 )
 			*resultData = multiplier;
 		else
+			{
 			*resultData-- = multiplier;
+			numeratorData--;
+			}
 		ENSURES_B( resultData >= &result->d[ 0 ] );
+		ENSURES_B( numeratorData >= &normalisedNumerator->d[ 0 ] );
 		}
 	ENSURES_B( LOOP_BOUND_OK );
 
@@ -1220,7 +1267,16 @@ BOOLEAN BN_div( INOUT_PTR_OPT BIGNUM *quotient,
 			BN_CTX_end_ext( bnCTX, BIGNUM_EXT_MUL1 );
 			return( FALSE );
 			}
-		BN_set_negative( remainder, isNegative );
+		if( !( isNegative && BN_is_zero( remainder ) ) )
+			BN_set_negative( remainder, isNegative );
+		}
+	else
+		{
+		/* The numerator is denormalised but we still have to re-normalise 
+		   it even though we're about to clean it up because the cleanup 
+		   won't risk messing with a potentially corrupted bignum, meaning 
+		   one that fails a sanityCheckBignum() */
+		( void ) BN_normalise( normalisedNumerator );
 		}
 	BN_CTX_end_ext( bnCTX, BIGNUM_EXT_MUL1 );
 
@@ -1253,6 +1309,8 @@ BOOLEAN BN_nnmod( INOUT_PTR BIGNUM *r,
 	assert( isReadPtr( d, sizeof( BIGNUM ) ) );
 	assert( isWritePtr( bnCTX, sizeof( BN_CTX ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( m ) && !BN_is_zero( m ) );
 	REQUIRES_B( sanityCheckBignum( d ) && !BN_is_zero( d ) && \
 				!BN_is_negative( d ) );
@@ -1282,13 +1340,15 @@ BOOLEAN BN_mod_add_quick( INOUT_PTR BIGNUM *r,
 						  IN_PTR const BIGNUM *b,
 						  IN_PTR const BIGNUM *m )
 	{
-	LOOP_INDEX bnStatus = BN_STATUS;
+	int bnStatus = BN_STATUS, LOOP_ITERATOR;
 
 	assert( isWritePtr( r, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( a, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( b, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( m, sizeof( BIGNUM ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) && !BN_is_zero( a ) && \
 				!BN_is_negative( a ) );
 	REQUIRES_B( sanityCheckBignum( b ) && !BN_is_zero( b ) && \
@@ -1323,13 +1383,15 @@ BOOLEAN BN_mod_sub_quick( INOUT_PTR BIGNUM *r,
 						  IN_PTR const BIGNUM *b,
 						  IN_PTR const BIGNUM *m )
 	{
-	LOOP_INDEX bnStatus = BN_STATUS;
+	int bnStatus = BN_STATUS, LOOP_ITERATOR;
 
 	assert( isWritePtr( r, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( a, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( b, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( m, sizeof( BIGNUM ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) && !BN_is_zero( a ) && \
 				!BN_is_negative( a ) );
 	REQUIRES_B( sanityCheckBignum( b ) && !BN_is_zero( b ) && \
@@ -1364,7 +1426,7 @@ BOOLEAN BN_mod_sub_quick( INOUT_PTR BIGNUM *r,
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
 BOOLEAN BN_mod_lshift_quick( BIGNUM *r, const BIGNUM *a,
-							 IN_RANGE( 0, bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
+							 IN_RANGE( 1, bytesToBits( CRYPT_MAX_PKCSIZE ) - 1 ) \
 								const int shiftAmount,
 							 const BIGNUM *m )
 	{
@@ -1374,6 +1436,8 @@ BOOLEAN BN_mod_lshift_quick( BIGNUM *r, const BIGNUM *a,
 	assert( isReadPtr( a, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( m, sizeof( BIGNUM ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) && !BN_is_zero( a ) && \
 				!BN_is_negative( a ) );
 	REQUIRES_B( shiftAmount > 0 && \
@@ -1465,6 +1529,8 @@ BOOLEAN BN_mod_mul( INOUT_PTR BIGNUM *r,
 	assert( isReadPtr( m, sizeof( BIGNUM ) ) );
 	assert( isWritePtr( ctx, sizeof( BN_CTX ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) && !BN_is_zero( a ) && \
 				!BN_is_negative( a ) );
 	REQUIRES_B( sanityCheckBignum( b ) && !BN_is_zero( b ) && \
@@ -1487,6 +1553,8 @@ BOOLEAN BN_mod_mul( INOUT_PTR BIGNUM *r,
 	tmp = BN_CTX_get_ext( ctx, BIGNUM_EXT_MONT );
 	if( tmp == NULL )
 		{
+		/* The BN_CTX_get_ext() failed, use a standard BN_CTX_end() to clean 
+		   up */
 		BN_CTX_end( ctx );
 		return( FALSE );
 		}
@@ -1517,6 +1585,8 @@ BOOLEAN BN_mod_sqr( INOUT_PTR BIGNUM *r,
 	assert( isReadPtr( m, sizeof( BIGNUM ) ) );
 	assert( isWritePtr( ctx, sizeof( BN_CTX ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) && !BN_is_zero( a ) && \
 				!BN_is_negative( a ) );
 	REQUIRES_B( sanityCheckBignum( m ) && !BN_is_zero( m ) && \
@@ -1536,6 +1606,8 @@ BOOLEAN BN_mod_sqr( INOUT_PTR BIGNUM *r,
 	tmp = BN_CTX_get_ext( ctx, BIGNUM_EXT_MONT );
 	if( tmp == NULL )
 		{
+		/* The BN_CTX_get_ext() failed, use a standard BN_CTX_end() to clean 
+		   up */
 		BN_CTX_end( ctx );
 		return( FALSE );
 		}
@@ -1574,6 +1646,8 @@ BOOLEAN BN_mod_mul_montgomery( INOUT_PTR BIGNUM *r,
 	assert( isReadPtr( bnMontCTX, sizeof( BN_MONT_CTX ) ) );
 	assert( isWritePtr( bnCTX, sizeof( BN_CTX ) ) );
 
+	REQUIRES_B( sanityCheckBignum( r ) && \
+				!( r->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBignum( a ) && !BN_is_zero( a ) && \
 				!BN_is_negative( a ) );
 	REQUIRES_B( sanityCheckBignum( b ) && !BN_is_zero( b ) && \
@@ -1590,6 +1664,8 @@ BOOLEAN BN_mod_mul_montgomery( INOUT_PTR BIGNUM *r,
 	tmp = BN_CTX_get_ext( bnCTX, BIGNUM_EXT_MONT );
 	if( tmp == NULL )
 		{
+		/* The BN_CTX_get_ext() failed, use a standard BN_CTX_end() to clean 
+		   up */
 		BN_CTX_end( bnCTX );
 		return( FALSE );
 		}
@@ -1652,7 +1728,7 @@ int BN_ucmp( const BIGNUM *bignum1, const BIGNUM *bignum2 )
 	assert( isReadPtr( bignum1, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( bignum2, sizeof( BIGNUM ) ) );
 
-	REQUIRES_B( bignum1top >= 0 && bignum1top < getBNMaxSize( bignum1 ) );
+	REQUIRES_B( bignum1top >= 0 && bignum1top <= BIGNUM_ALLOC_WORDS );
 				/* There's not really any error return value that we can use 
 				   here, the best that we can do is return zero on error */
 
@@ -1667,11 +1743,13 @@ int BN_ucmp( const BIGNUM *bignum1, const BIGNUM *bignum2 )
 
 STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int BN_ucmp_words( const BN_ULONG *bignumData1, 
-				   IN_RANGE( 0, BIGNUM_ALLOC_WORDS ) const int bignum1Length, 
+				   IN_RANGE( 0, BIGNUM_ALLOC_WORDS ) \
+						const int bignum1Length, 
 				   const BIGNUM *bignum2 )
 	{
 	assert( bignum1Length == 0 || \
-			isReadPtrDynamic( bignumData1, bignum1Length ) );
+			isReadPtrDynamic( bignumData1, \
+							  bignum1Length * sizeof( BN_ULONG  ) ) );
 	assert( isReadPtr( bignum2, sizeof( BIGNUM ) ) );
 
 	REQUIRES_B( bignum1Length >= 0 && bignum1Length <= BIGNUM_ALLOC_WORDS );
@@ -1693,8 +1771,10 @@ int bn_cmp_words( const BN_ULONG *bignumData1, const BN_ULONG *bignumData2,
 	{
 	LOOP_INDEX i;
 
-	assert( length == 0 || isReadPtrDynamic( bignumData1, length ) );
-	assert( length == 0 || isReadPtrDynamic( bignumData2, length ) );
+	assert( length == 0 || \
+			isReadPtrDynamic( bignumData1, length * sizeof( BN_ULONG ) ) );
+	assert( length == 0 || \
+			isReadPtrDynamic( bignumData2, length * sizeof( BN_ULONG ) ) );
 
 	REQUIRES_B( length >= 0 && length <= BIGNUM_ALLOC_WORDS );
 				/* There's not really any error return value that we can use 
@@ -1732,22 +1812,25 @@ int bn_cmp_part_words( const BN_ULONG *a, const BN_ULONG *b,
 								 BIGNUM_ALLOC_WORDS_EXT ) const int dl )
 	{
 	const BN_ULONG *data = ( dl < 0 ) ? b : a;
-	const int max = ( dl < 0 ) ? -dl + cl : dl + cl;
+	const int maxPos = ( dl < 0 ) ? -dl + cl : dl + cl;
 	LOOP_INDEX i;
+
+	/* We can't do an isReadPtr() on these because of the weird way in which
+	   the lengths are provided */
 
 	REQUIRES_B( cl >= 0 && cl < BIGNUM_ALLOC_WORDS_EXT );
 	REQUIRES_B( dl > -BIGNUM_ALLOC_WORDS_EXT && \
 				dl < BIGNUM_ALLOC_WORDS_EXT );
-	REQUIRES_B( max >= 0 && max < BIGNUM_ALLOC_WORDS_EXT );
+	REQUIRES_B( maxPos >= 0 && maxPos < BIGNUM_ALLOC_WORDS_EXT );
 				/* There's not really any error return value that we can use 
 				   here, the best that we can do is return zero on error */
 
 	/* Compare the overflow portions of length dl.  If any of the overflow
 	   portion is nonzero then a or b is larger, depending on whether dl is
 	   positive or negative */
-	LOOP_EXT( i = cl, i < max, i++, BIGNUM_ALLOC_WORDS_EXT )
+	LOOP_EXT( i = cl, i < maxPos, i++, BIGNUM_ALLOC_WORDS_EXT )
 		{
-		ENSURES_B( LOOP_INVARIANT_EXT( i, cl, max - 1,
+		ENSURES_B( LOOP_INVARIANT_EXT( i, cl, maxPos - 1,
 									   BIGNUM_ALLOC_WORDS_EXT ) );
 
 		if( data[ i ] != 0 )

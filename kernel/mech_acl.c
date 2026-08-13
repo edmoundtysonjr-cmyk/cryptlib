@@ -449,7 +449,7 @@ static const MECHANISM_ACL mechanismDeriveACL[] = {
 	  { MKACP_S( 16, CRYPT_MAX_KEYSIZE ),	/* Key data */
 		MKACP_S( MIN_NAME_LENGTH, MAX_ATTRIBUTE_SIZE ),/* Keying material */
 		MKACP_N( CRYPT_ALGO_MD5, CRYPT_ALGO_SHA256 ),/* Hash algo */
-		MKACP_N( 0, 0 ),					/* Hash parameters */
+		MKACP_N( 0, CRYPT_MAX_HASHSIZE ),	/* Hash parameters */
 		MKACP_S( 8, 8 ),					/* Salt */
 		MKACP_N( 0, MAX_KEYSETUP_HASHSPECIFIER ) } }, /* Iterations (0 = don't iterate) */
 #endif /* USE_PGP || USE_PGPKEYS */
@@ -461,7 +461,7 @@ static const MECHANISM_ACL mechanismDeriveACL[] = {
 		MKACP_S( MIN_NAME_LENGTH, CRYPT_MAX_TEXTSIZE ),/* Keying material */
 		MKACP_N( CRYPT_ALGO_SHA1, CRYPT_ALGO_SHA1 ),/* Hash algo */
 		MKACP_N( 0, 0 ),					/* Hash parameters */
-		MKACP_S( 9, 512 ),					/* Salt (+ ID byte) */
+		MKACP_S( 1 + 8, 1 + CRYPT_MAX_HASHSIZE ),	/* Salt (+ ID byte) */
 		MKACP_N( 1, MAX_KEYSETUP_ITERATIONS ) } },	/* Iterations */
 #endif /* USE_PKCS12 */
 

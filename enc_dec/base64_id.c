@@ -1,15 +1,11 @@
 /****************************************************************************
 *																			*
 *					 cryptlib PKI UserID En/Decoding Routines				*
-*						Copyright Peter Gutmann 1998-2012					*
+*						Copyright Peter Gutmann 1998-2025					*
 *																			*
 ****************************************************************************/
 
-#if defined( INC_ALL )
-  #include "crypt.h"
-#else
-  #include "crypt.h"
-#endif /* Compiler-specific includes */
+#include "crypt.h"
 
 #ifdef USE_BASE64ID
 

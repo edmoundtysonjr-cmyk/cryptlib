@@ -54,7 +54,7 @@ static BOOLEAN sanityCheckScoreboardEntry( const SCOREBOARD_ENTRY *scoreboardEnt
 	assert( isReadPtr( scoreboardEntry, sizeof( SCOREBOARD_ENTRY ) ) );
 
 	/* Check lookup information */
-	if( scoreboardEntry->sessionIDlength <= 0 || \
+	if( scoreboardEntry->sessionIDlength < SCOREBOARD_KEY_MIN || \
 		scoreboardEntry->sessionIDlength > SCOREBOARD_KEY_SIZE )
 		{
 		DEBUG_PUTS(( "sanityCheckScoreboardEntry: Lookup information" ));
@@ -88,6 +88,9 @@ static BOOLEAN sanityCheckScoreboardEntry( const SCOREBOARD_ENTRY *scoreboardEnt
 
 	return( TRUE );
 	}
+#else
+  #define sanityCheckScoreboard( x )		TRUE
+  #define sanityCheckScoreboardEntry( x )	TRUE
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 /* Check whether a scoreboard entry is empty.  This checks a number of 
@@ -95,6 +98,7 @@ static BOOLEAN sanityCheckScoreboardEntry( const SCOREBOARD_ENTRY *scoreboardEnt
    single value, if this check declares the value non-empty then it has to
    pass a sanityCheckScoreboardEntry() check immediately afterwards */
 
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 static BOOLEAN isEmptyEntry( const SCOREBOARD_ENTRY *scoreboardEntryPtr )
 	{
 	assert( isReadPtr( scoreboardEntryPtr, sizeof( SCOREBOARD_ENTRY ) ) );
@@ -115,7 +119,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 8 ) ) \
 static int addEntryData( INOUT_PTR SCOREBOARD_ENTRY *scoreboardEntryPtr, 
 						 IN_INT_Z const int keyCheckValue,
 						 IN_BUFFER( keyLength ) const void *key, 
-						 IN_LENGTH_SHORT_MIN( SCOREBOARD_KEY_MIN ) \
+						 IN_RANGE( SCOREBOARD_KEY_MIN, SCOREBOARD_KEY_SIZE ) \
 							const int keyLength, 
 						 IN_INT_Z const int altKeyCheckValue,
 						 IN_BUFFER_OPT( altKeyLength ) const void *altKey, 
@@ -132,12 +136,12 @@ static int addEntryData( INOUT_PTR SCOREBOARD_ENTRY *scoreboardEntryPtr,
 	assert( isReadPtr( scoreboardEntryInfo, sizeof( SCOREBOARD_ENTRY_INFO ) ) );
 
 	REQUIRES( keyCheckValue >= 0 );
-	REQUIRES( isShortIntegerRangeMin( keyLength, SCOREBOARD_KEY_MIN ) );
+	REQUIRES( rangeCheck( keyLength, SCOREBOARD_KEY_MIN, 
+						  SCOREBOARD_KEY_SIZE ) );
 	REQUIRES( ( altKey == NULL && altKeyLength == 0 && \
 				altKeyCheckValue == 0 ) || \
 			  ( altKey != NULL && \
-				isShortIntegerRangeMin( altKeyLength, \
-										SCOREBOARD_KEY_MIN ) && \
+				isShortIntegerRangeMin( altKeyLength, MIN_DNS_SIZE ) && \
 				altKeyCheckValue >= 0 ) );
 	REQUIRES( currentTime > MIN_TIME_VALUE );
 
@@ -199,7 +203,8 @@ static int findEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 					  IN_ENUM( SCOREBOARD_KEY ) \
 							const SCOREBOARD_KEY_TYPE keyType,
 					  IN_BUFFER( keyLength ) const void *key, 
-					  IN_LENGTH_SHORT_MIN( 2 ) const int keyLength, 
+					  IN_RANGE( SCOREBOARD_KEY_MIN, SCOREBOARD_KEY_SIZE ) \
+							const int keyLength, 
 					  const time_t currentTime, 
 					  OUT_INT_SHORT_Z int *position )
 	{
@@ -212,7 +217,7 @@ static int findEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 	BOOLEAN dataHashed = FALSE;
 	time_t oldestTime = currentTime;
 	const int checkValue = checksumData( key, keyLength );
-	int nextFreeEntry = CRYPT_ERROR, lastUsedEntry = 0, oldestEntry = 0;
+	int nextFreeEntry = CRYPT_ERROR, lastUsedEntry = -1, oldestEntry = 0;
 	LOOP_INDEX i;
 	int matchPosition = CRYPT_ERROR;
 
@@ -221,7 +226,11 @@ static int findEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 	assert( isWritePtr( position, sizeof( int ) ) );
 
 	REQUIRES( isEnumRange( keyType, SCOREBOARD_KEY ) );
-	REQUIRES( isShortIntegerRangeMin( keyLength, SCOREBOARD_KEY_MIN ) );
+	REQUIRES( ( keyType != SCOREBOARD_KEY_FQDN && 
+				rangeCheck( keyLength, SCOREBOARD_KEY_MIN, \
+							SCOREBOARD_KEY_SIZE ) ) || \
+			  ( keyType == SCOREBOARD_KEY_FQDN && 
+				rangeCheck( keyLength, MIN_DNS_SIZE, MAX_DNS_SIZE ) ) );
 	REQUIRES( currentTime > MIN_TIME_VALUE );
 
 	/* Clear return value */
@@ -240,14 +249,11 @@ static int findEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 									 scoreboardInfo->lastEntry - 1,
 									 SCOREBOARD_ENTRIES + 1 ) );
 
-		/* If this entry has expired, delete it.  This will still work on
-		   systems vulnerable to the Y2038 problem because for signed time_t
-		   it'll wrap to a negative value and always be cleared and for 
-		   unsigned time_t it's not a problem for awhile yet.  It's ugly, 
-		   but all it means is that there'll be less efficient caching of
-		   values */
+		/* If this entry has expired, delete it.  We have to be careful how
+		   we do the time check because of the potential for triggering the 
+		   Y2038 problem */
 		scoreboardEntryPtr = &scoreboardInfo->index[ i ];
-		if( scoreboardEntryPtr->timeStamp + SCOREBOARD_TIMEOUT < currentTime )
+		if( scoreboardEntryPtr->timeStamp < currentTime - SCOREBOARD_TIMEOUT )
 			zeroise( scoreboardEntryPtr, sizeof( SCOREBOARD_ENTRY ) );
 
 		/* Check for a free entry and the oldest non-free entry.  We could
@@ -307,7 +313,7 @@ static int findEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 				}
 			}
 		}
-	ENSURES( i < FAILSAFE_ITERATIONS_MAX );
+	ENSURES( LOOP_BOUND_OK );
 
 	/* If the total number of entries has shrunk due to old entries expiring,
 	   reduce the overall scoreboard-used size */
@@ -403,7 +409,7 @@ static int findEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 6, 7 ) ) \
 static int addEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo, 
 					 IN_BUFFER( keyLength ) const void *key, 
-					 IN_LENGTH_SHORT_MIN( SCOREBOARD_KEY_MIN ) \
+					 IN_RANGE( SCOREBOARD_KEY_MIN, SCOREBOARD_KEY_SIZE ) \
 						const int keyLength, 
 					 IN_BUFFER_OPT( altKeyLength ) const void *altKey, 
 					 IN_LENGTH_SHORT_Z const int altKeyLength, 
@@ -414,7 +420,7 @@ static int addEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 	const time_t currentTime = getTime( GETTIME_NONE );
 	const BOOLEAN isClient = ( altKey != NULL ) ? TRUE : FALSE;
 	int checkValue, altCheckValue = 0, altPosition DUMMY_INIT;
-	int position, altStatus = CRYPT_ERROR, status;
+	int position, positionToAdd, altStatus = CRYPT_ERROR, status;
 
 	assert( isWritePtr( scoreboardInfo, sizeof( SCOREBOARD_INFO ) ) );
 	assert( isReadPtrDynamic( key, keyLength ) );
@@ -424,11 +430,14 @@ static int addEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 					   sizeof( SCOREBOARD_ENTRY_INFO ) ) );
 	assert( isWritePtr( uniqueID, sizeof( int ) ) );
 
-	REQUIRES( isShortIntegerRangeMin( keyLength, SCOREBOARD_KEY_MIN ) );
+	REQUIRES( rangeCheck( keyLength, SCOREBOARD_KEY_MIN, 
+						  SCOREBOARD_KEY_SIZE ) );
 	REQUIRES( ( altKey == NULL && altKeyLength == 0 ) || \
 			  ( altKey != NULL && \
-				isShortIntegerRangeMin( altKeyLength, \
-										SCOREBOARD_KEY_MIN ) ) );
+				isShortIntegerRangeMin( altKeyLength, MIN_DNS_SIZE ) ) );
+			  /* In abstract this is a secondary key, in practice as used by
+			     cryptlib it's always an FQDN used to distinguish different
+			     (virtual) hosts that may share the same session cache */
 
 	/* Clear return value */
 	*uniqueID = CRYPT_ERROR;
@@ -519,7 +528,10 @@ static int addEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 			assert( DEBUG_WARN );
 			return( CRYPT_ERROR_NOTFOUND );
 			}
+			
+		/* It's an update of an existing entry */
 		scoreboardEntryPtr->timeStamp = currentTime;
+		*uniqueID = scoreboardEntryPtr->uniqueID;
 
 		return( CRYPT_OK );
 		}
@@ -529,17 +541,19 @@ static int addEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 	   the alt.key (FQDN) */
 	if( cryptStatusOK( altStatus ) )
 		{
-		/* Case 4-C, add at location 'altPosition' */
-		ENSURES( position != altPosition );
-		scoreboardEntryPtr = &scoreboardIndex[ altPosition ];
+		/* Case 4-C, add at location 'altPosition'.  With a probability of
+		   1 / SCOREBOARD_ENTRIES this could be the same as 'position' if 
+		   the scoreboard is full and 'position' is the LRU entry */
+		positionToAdd = altPosition;
 		}
 	else
 		{
 		/* Cases 1-S + 3-C, add at location 'position' */
 		ENSURES( altKey == NULL || \
-				 ( altStatus == OK_SPECIAL && position == altPosition ) )
-		scoreboardEntryPtr = &scoreboardIndex[ position ];
+				 ( altStatus == OK_SPECIAL && position == altPosition ) );
+		positionToAdd = position;
 		}
+	scoreboardEntryPtr = &scoreboardIndex[ positionToAdd ];
 
 	/* It's either an empty entry being added or an existing entry being 
 	   updated */
@@ -567,10 +581,12 @@ static int addEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 				scoreboardInfo->uniqueID++;
 
 	/* If we've used a new entry, update the position-used index */
-	if( position >= scoreboardInfo->lastEntry )
+	if( positionToAdd >= scoreboardInfo->lastEntry )
 		{
-		REQUIRES( !checkOverflowAdd( position, 1 ) );
-		scoreboardInfo->lastEntry = position + 1;
+		REQUIRES( !checkOverflowAdd( positionToAdd, 1 ) );
+		scoreboardInfo->lastEntry = positionToAdd + 1;
+		ENSURES( rangeCheck( scoreboardInfo->lastEntry, 
+							 0, SCOREBOARD_ENTRIES ) );
 		}
 
 	return( CRYPT_OK );
@@ -583,7 +599,8 @@ static int lookupScoreboard( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 							 IN_ENUM( SCOREBOARD_KEY ) \
 								const SCOREBOARD_KEY_TYPE keyType,
 							 IN_BUFFER( keyLength ) const void *key, 
-							 IN_LENGTH_SHORT_MIN( 8 ) const int keyLength, 
+							 IN_RANGE( SCOREBOARD_KEY_MIN, SCOREBOARD_KEY_SIZE ) \
+								const int keyLength, 
 						     OUT_PTR SCOREBOARD_ENTRY_INFO *scoreboardEntryInfo,
 							 OUT_INT_Z int *uniqueID )
 	{
@@ -598,7 +615,8 @@ static int lookupScoreboard( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 	assert( isWritePtr( uniqueID, sizeof( int ) ) );
 
 	REQUIRES( isEnumRange( keyType, SCOREBOARD_KEY ) );
-	REQUIRES( isShortIntegerRangeMin( keyLength, SCOREBOARD_KEY_MIN ) );
+	REQUIRES( rangeCheck( keyLength, SCOREBOARD_KEY_MIN, 
+						  SCOREBOARD_KEY_SIZE ) );
 	REQUIRES( sanityCheckScoreboard( scoreboardInfo ) );
 
 	/* Clear return values */
@@ -659,15 +677,19 @@ static int lookupScoreboard( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 ****************************************************************************/
 
 /* Add and delete entries to/from the scoreboard.  These are just wrappers
-   for the local scoreboard-access function, for use by external code */
+   for the local scoreboard-access function, for use by external code.  Note
+   that the annotation for keyLength uses a hardcoded value to match what's
+   in session/scorebrd.h, which doesn't have access to the internal-use 
+   SCOREBOARD_KEY_MIN definition */
 
-CHECK_RETVAL_RANGE( 0, MAX_INTLENGTH ) STDC_NONNULL_ARG( ( 1, 3, 5 ) ) \
+CHECK_RETVAL_RANGE( 0, MAX_INTLENGTH - 100 ) STDC_NONNULL_ARG( ( 1, 3, 5 ) ) \
 int lookupScoreboardEntry( INOUT_PTR TYPECAST( SCOREBOARD_INFO * ) \
 								struct SC *scoreboardInfoPtr,
 						   IN_ENUM( SCOREBOARD_KEY ) \
 								const SCOREBOARD_KEY_TYPE keyType,
 						   IN_BUFFER( keyLength ) const void *key, 
-						   IN_LENGTH_SHORT_MIN( 4 ) const int keyLength, 
+						   IN_RANGE( 4, MAX_SESSIONID_SIZE ) \
+								const int keyLength, 
 						   OUT_PTR \
 								SCOREBOARD_ENTRY_INFO *scoreboardEntryInfo )
 	{
@@ -679,9 +701,13 @@ int lookupScoreboardEntry( INOUT_PTR TYPECAST( SCOREBOARD_INFO * ) \
 	assert( isWritePtr( scoreboardEntryInfo, 
 						sizeof( SCOREBOARD_ENTRY_INFO ) ) );
 
+	static_assert( SCOREBOARD_KEY_MIN == 4,
+				   "SCOREBOARD_KEY_MIN size" );
+
 	REQUIRES( sanityCheckScoreboard( scoreboardInfo ) );
 	REQUIRES( isEnumRange( keyType, SCOREBOARD_KEY ) );
-	REQUIRES( isShortIntegerRangeMin( keyLength, SCOREBOARD_KEY_MIN ) );
+	REQUIRES( rangeCheck( keyLength, SCOREBOARD_KEY_MIN, 
+						  SCOREBOARD_KEY_SIZE ) );
 
 	/* Clear return values */
 	memset( scoreboardEntryInfo, 0, sizeof( SCOREBOARD_ENTRY_INFO ) );
@@ -695,12 +721,13 @@ int lookupScoreboardEntry( INOUT_PTR TYPECAST( SCOREBOARD_INFO * ) \
 	return( cryptStatusError( status ) ? status : uniqueID );
 	}
 
-CHECK_RETVAL_RANGE( 0, MAX_INTLENGTH - 1 ) STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
+CHECK_RETVAL_RANGE( 0, MAX_INTLENGTH - 100 ) STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
 int addScoreboardEntry( INOUT_PTR struct SC *scoreboardInfoPtr,
 						IN_BUFFER( keyLength ) const void *key, 
-						IN_LENGTH_SHORT_MIN( SCOREBOARD_KEY_MIN ) \
+						IN_RANGE( 4, MAX_SESSIONID_SIZE ) \
 							const int keyLength, 
-						const SCOREBOARD_ENTRY_INFO *scoreboardEntryInfo )
+						IN_PTR \
+							const SCOREBOARD_ENTRY_INFO *scoreboardEntryInfo )
 	{
 	SCOREBOARD_INFO *scoreboardInfo = scoreboardInfoPtr;
 	int uniqueID, status;
@@ -710,7 +737,8 @@ int addScoreboardEntry( INOUT_PTR struct SC *scoreboardInfoPtr,
 	assert( isReadPtr( scoreboardEntryInfo, sizeof( SCOREBOARD_ENTRY_INFO ) ) );
 
 	REQUIRES( sanityCheckScoreboard( scoreboardInfo ) );
-	REQUIRES( isShortIntegerRangeMin( keyLength, SCOREBOARD_KEY_MIN ) );
+	REQUIRES( rangeCheck( keyLength, SCOREBOARD_KEY_MIN, 
+						  SCOREBOARD_KEY_SIZE ) );
 
 	/* Add the entry to the scoreboard */
 	status = krnlEnterMutex( MUTEX_SCOREBOARD );
@@ -725,14 +753,16 @@ int addScoreboardEntry( INOUT_PTR struct SC *scoreboardInfoPtr,
 	return( cryptStatusError( status ) ? status : uniqueID );
 	}
 
-CHECK_RETVAL_RANGE( 0, MAX_INTLENGTH - 1 ) STDC_NONNULL_ARG( ( 1, 2, 4, 6 ) ) \
+CHECK_RETVAL_RANGE( 0, MAX_INTLENGTH - 100 ) STDC_NONNULL_ARG( ( 1, 2, 4, 6 ) ) \
 int addScoreboardEntryEx( INOUT_PTR struct SC *scoreboardInfoPtr,
 						  IN_BUFFER( keyLength ) const void *key, 
-						  IN_LENGTH_SHORT_MIN( SCOREBOARD_KEY_MIN ) \
+						  IN_RANGE( 4, MAX_SESSIONID_SIZE ) \
 								const int keyLength, 
-						  IN_BUFFER( keyLength ) const void *altKey, 
-						  IN_LENGTH_SHORT_MIN( 2 ) const int altKeyLength, 
-						  const SCOREBOARD_ENTRY_INFO *scoreboardEntryInfo )
+						  IN_BUFFER( altKeyLength ) const void *altKey, 
+						  IN_RANGE( MIN_DNS_SIZE, MAX_DNS_SIZE ) \
+								const int altKeyLength, 
+						  IN_PTR \
+							const SCOREBOARD_ENTRY_INFO *scoreboardEntryInfo )
 	{
 	SCOREBOARD_INFO *scoreboardInfo = scoreboardInfoPtr;
 	int uniqueID, status;
@@ -743,8 +773,12 @@ int addScoreboardEntryEx( INOUT_PTR struct SC *scoreboardInfoPtr,
 	assert( isReadPtr( scoreboardEntryInfo, sizeof( SCOREBOARD_ENTRY_INFO ) ) );
 
 	REQUIRES( sanityCheckScoreboard( scoreboardInfo ) );
-	REQUIRES( isShortIntegerRangeMin( keyLength, SCOREBOARD_KEY_MIN ) );
-	REQUIRES( isShortIntegerRangeMin( altKeyLength, SCOREBOARD_KEY_MIN ) );
+	REQUIRES( rangeCheck( keyLength, SCOREBOARD_KEY_MIN, 
+						  SCOREBOARD_KEY_SIZE ) );
+	REQUIRES( rangeCheck( altKeyLength, MIN_DNS_SIZE, MAX_DNS_SIZE ) );
+			  /* In abstract this is a secondary key, in practice as used by
+			     cryptlib it's always an FQDN used to distinguish different
+			     (virtual) hosts that may share the same session cache */
 
 	/* Add the entry to the scoreboard */
 	status = krnlEnterMutex( MUTEX_SCOREBOARD );
@@ -783,9 +817,10 @@ void deleteScoreboardEntry( INOUT_PTR TYPECAST( SCOREBOARD_INFO * ) \
 		{
 		SCOREBOARD_ENTRY *scoreboardEntryPtr;
 
-		ENSURES_V( LOOP_INVARIANT_EXT( i, 0, 
-									   scoreboardInfo->lastEntry - 1,
-									   SCOREBOARD_ENTRIES ) );
+		ENSURES_KRNLMUTEX_V( LOOP_INVARIANT_EXT( i, 0, 
+												 scoreboardInfo->lastEntry - 1,
+												 SCOREBOARD_ENTRIES ),
+							 MUTEX_SCOREBOARD );
 
 		/* If it's an empty entry (due to it having expired or being 
 		   deleted), skip it and continue */
@@ -793,9 +828,10 @@ void deleteScoreboardEntry( INOUT_PTR TYPECAST( SCOREBOARD_INFO * ) \
 		if( isEmptyEntry( scoreboardEntryPtr ) )
 			continue;
 
-		REQUIRES_V( sanityCheckScoreboardEntry( scoreboardEntryPtr ) );
+		ENSURES_KRNLMUTEX_V( sanityCheckScoreboardEntry( scoreboardEntryPtr ),
+							 MUTEX_SCOREBOARD );
 
-		/* If we've found the entry that we're after, clear it and exit */
+		/* If we've found the entry that we're after, clear it and continue */
 		if( scoreboardEntryPtr->uniqueID == uniqueID )
 			{
 			zeroise( scoreboardEntryPtr, sizeof( SCOREBOARD_ENTRY ) );
@@ -847,6 +883,18 @@ static BOOLEAN selfTest( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo )
 	if( cryptStatusError( status ) )
 		return( FALSE );
 
+	/* Add the second entry again, so an update of an existing entry, and 
+	   make sure that we get back the same uniqueID */
+	scoreboardEntryInfo.data = "test value 2";
+	scoreboardEntryInfo.dataSize = 12;
+	status = foundUniqueID = \
+		addScoreboardEntry( scoreboardInfo, "test key 2", 10,
+							&scoreboardEntryInfo );
+	if( cryptStatusError( status ) )
+		return( FALSE );
+	if( foundUniqueID != uniqueID2 )
+		return( FALSE );
+
 	/* Read them back and delete them */
 	status = foundUniqueID = \
 		lookupScoreboardEntry( scoreboardInfo, SCOREBOARD_KEY_SESSIONID_SVR, 
@@ -879,7 +927,7 @@ static BOOLEAN selfTest( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo )
 
 	/* SCOREBOARD_KEY_MIN is currently 32 bits / 4 bytes, but we need more than
 	   4 bytes to store the hex-string unique key we're using for testing */
-	static_assert( SCOREBOARD_KEY_MIN < 8, 
+	static_assert( SCOREBOARD_KEY_MIN <= 8, 
 				   "SCOREBOARD_KEY_MIN size" ); 
 
 	/* Verify that filling the scoreboard is handled correctly */
@@ -910,6 +958,9 @@ static BOOLEAN selfTest( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo )
 		return( FALSE );
 	}
 #endif /* NDEBUG */
+
+	/* Reset the scoreboard to clear out the testing data */
+	memset( scoreboardInfo, 0, sizeof( SCOREBOARD_INFO ) );
 
 	return( TRUE );
 	}

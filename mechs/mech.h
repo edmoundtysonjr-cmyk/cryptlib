@@ -222,7 +222,7 @@ int getCmsKeyIdentifier( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 							BYTE *keyID, 
 						 IN_LENGTH_SHORT_MIN( 32 ) \
 							const int keyIDMaxLength,
-						 OUT_LENGTH_BOUNDED_Z( keyIDMaxLength ) \
+						 OUT_LENGTH_BOUNDED_SHORT_Z( keyIDMaxLength ) \
 							int *keyIDlength );
 
 /* Prototypes for functions in obj_qry.c */
@@ -230,7 +230,8 @@ int getCmsKeyIdentifier( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int getPgpPacketInfo( INOUT_PTR STREAM *stream, 
 					  OUT_PTR QUERY_INFO *queryInfo,
-					  const QUERYOBJECT_TYPE objectTypeHint );
+					  IN_ENUM( QUERYOBJECT ) \
+							const QUERYOBJECT_TYPE objectTypeHint );
 
 /* Prototypes for signature functions in sign.c */
 

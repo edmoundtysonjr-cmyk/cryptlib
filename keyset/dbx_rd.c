@@ -326,9 +326,12 @@ int presenceCheck( INOUT_PTR DBMS_INFO *dbmsInfo,
 						&encodedKeyIDlength, keyIDtype, keyID, KEYID_SIZE );
 	if( cryptStatusError( status ) )
 		return( CRYPT_ARGERROR_STR1 );
-	strlcpy_s( sqlBuffer, MAX_SQL_QUERY_SIZE, selectString );
-	strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, keyName );
-	strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, " = ?" );
+	status = strlcpy_s( sqlBuffer, MAX_SQL_QUERY_SIZE, selectString );
+	ENSURES( cryptStatusOK( status ) );
+	status = strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, keyName );
+	ENSURES( cryptStatusOK( status ) );
+	status = strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, " = ?" );
+	ENSURES( cryptStatusOK( status ) );
 	initBoundData( boundDataPtr );
 	setBoundData( boundDataPtr, 0, encodedKeyID, encodedKeyIDlength );
 	return( dbmsQuery( sqlBuffer, NULL, 0, NULL, boundDataPtr,
@@ -440,9 +443,12 @@ int getItemData( INOUT_PTR DBMS_INFO *dbmsInfo,
 		const char *selectString = getSelectString( itemType );
 
 		ENSURES( keyName != NULL && selectString != NULL );
-		strlcpy_s( sqlBuffer, MAX_SQL_QUERY_SIZE, selectString );
-		strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, keyName );
-		strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, " = ?" );
+		status = strlcpy_s( sqlBuffer, MAX_SQL_QUERY_SIZE, selectString );
+		ENSURES( cryptStatusOK( status ) );
+		status = strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, keyName );
+		ENSURES( cryptStatusOK( status ) );
+		status = strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, " = ?" );
+		ENSURES( cryptStatusOK( status ) );
 		queryString = sqlBuffer;
 		initBoundData( boundDataPtr );
 		setBoundData( boundDataPtr, 0, keyValue, keyValueLength );
@@ -964,7 +970,8 @@ static int setSpecialItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 	   dbmsFormatQuery() tries to sanitise the query as much as it can but 
 	   in general we rely on developers reading the warnings in the 
 	   documentation about the appropriate use of this capability */
-	strlcpy_s( sqlBuffer, MAX_SQL_QUERY_SIZE, selectString );
+	status = strlcpy_s( sqlBuffer, MAX_SQL_QUERY_SIZE, selectString );
+	ENSURES( cryptStatusOK( status ) );
 	sqlLength = strnlen_s( sqlBuffer, MAX_SQL_QUERY_SIZE );
 	REQUIRES( !checkOverflowSub( MAX_SQL_QUERY_SIZE - 1, sqlLength ) );
 	status = dbmsFormatQuery( sqlBuffer + sqlLength, 

@@ -1054,6 +1054,12 @@
    generates code that produces an 11% slowdown out of sheer 
    bloodymindedness.
 
+   Another example, from "Finding Bugs Compiler Knows but Doesn't Tell You: 
+   Dissecting Undefined Behavior Optimizations in LLVM", Zekai Wu et al,
+   Black Hat Europe 2020, contains a step-by-step walkthrough of how LLVM
+   silently removes a bounds check from code so that it produces incorrect
+   output when run.
+
    This compiler behaviour also has serious consequences for constant-time 
    code that then gets broken by compilers, where carefully-written constant-
    time code that's been formally verified to be free of side-channels has 
@@ -1087,15 +1093,28 @@
    CISB", with just under 2/3 of programmers not knowing about UB-induced 
    CISB and over half of them either taking more than two hours to sort out 
    a UB bug or not being able to sort it out at all.
+   
+   The way that LLVM handles this is by annotating code with various 
+   attributes like mustprogress, dereferencable, undef/noundef, and inbounds
+   and then passing the result on to the optimizer.  If it can prove, guided
+   by the annotations, that the code triggers UB, then it's game over for 
+   the code.  So instead of the optimiser acting to generate the most
+   efficient/optimal code, it acts as a pen-tester that, when it wins, gets
+   to break users code, a truly bizarre way to look at things.  To put this
+   into perspective, imagine if engineering software behaved like this.
+   The first electrocution due to a design rules check failing or a bridge
+   collapsing would result in the software vendor being sued into oblivion,
+   but for a compiler it's just the way of things.
 
    The icing on the cake is that all of this breakage produces little gain 
    in performance, see "Exploiting Undefined Behavior in C/C++ Programs for
    Optimization: A Study on the Performance Impact", Lucian Popescu and 
-   Nuno Lopes, PoPL'25, which found that "for the benchmarks and UB 
-   categories that we evaluated, the end-to-end performance gains are 
-   minimal.  Moreover, when performance regresses, it can often be recovered 
-   through small improvements to optimization algorithms or by using link-
-   time optimizations".
+   Nuno Lopes, PoPL'25, which found that "for the benchmarks [a wide range
+   of software including openssl, llvm, ngspice, sqlite, encode-flac, 
+   jpegxl, and many others] and UB categories that we evaluated, the end-to-
+   end performance gains are minimal.  Moreover, when performance regresses, 
+   it can often be recovered through small improvements to optimization 
+   algorithms or by using link-time optimizations".
 
    The distinct double guard when using __has_attribute() below is 
    necessary here because gcc chokes if it sees the __has_attribute() on 

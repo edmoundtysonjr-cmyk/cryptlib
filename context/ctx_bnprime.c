@@ -1218,7 +1218,7 @@ int loadDHparams( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				  IN_LENGTH_PKC const int requestedKeySize,
 				  IN_BOOL const BOOLEAN useAltParams )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const DH_DOMAINPARAMS *domainParams = NULL;
 #ifdef CREATE_BIGNUM_VALUES
 	int status;
@@ -1230,12 +1230,16 @@ int loadDHparams( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( requestedKeySize >= MIN_PKCSIZE && \
 			  requestedKeySize <= CRYPT_MAX_PKCSIZE );
 	REQUIRES( isBooleanValue( useAltParams ) );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Convert the fixed-format bignums to encoded BIGNUMs */
 #ifdef CREATE_BIGNUM_VALUES
-	checkDHdata();
-	status = loadDHparamsFixed( contextInfoPtr->objectHandle, 
-								bitsToBytes( 2048 ), FALSE );
+	status = checkDHdata();
+	if( cryptStatusOK( status ) )
+		{
+		status = loadDHparamsFixed( contextInfoPtr->objectHandle, 
+									bitsToBytes( 2048 ), FALSE );
+		}
 	if( cryptStatusError( status ) )
 		return( status );
 	if( pkcInfo->domainParams != NULL )
@@ -1726,9 +1730,9 @@ static int eccChecksums[ 8 + 8 ];
 
 /* Check that the DH key data is valid */
 
-CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static BOOLEAN hashECCparams( const ECC_DOMAIN_PARAMS *eccParams,
-							  IN_BUFFER( 20 ) const void *hashValue )
+							  IN_BUFFER( 16 ) const void *hashValue )
 	{
 	HASH_FUNCTION hashFunction;
 	HASHINFO hashInfo;
@@ -1737,6 +1741,7 @@ static BOOLEAN hashECCparams( const ECC_DOMAIN_PARAMS *eccParams,
 	int hashSize;
 
 	assert( isReadPtr( eccParams, sizeof( ECC_DOMAIN_PARAMS ) ) );
+	assert( isReadPtr( hashValue, 16 ) );
 
 	getHashParameters( CRYPT_ALGO_SHA1, 0, &hashFunction, &hashSize );
 	hashFunction( hashInfo, NULL, 0, eccParams->p, curveSize, HASH_STATE_START );
@@ -1780,7 +1785,6 @@ static int initCheckECCdata( void )
 		}
 	ENSURES( LOOP_BOUND_OK );
 	ENSURES( i < FAILSAFE_ARRAYSIZE( domainParamTbl, ECC_DOMAIN_PARAMS ) );
-	eccChecksumsSet = TRUE;
 
 	return( CRYPT_OK );
 	}
@@ -2492,7 +2496,7 @@ int loadECCparams( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				   IN_ENUM( CRYPT_ECCCURVE ) \
 						const CRYPT_ECCCURVE_TYPE curveType )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const ECC_DOMAINPARAMS *domainParams;
 	int curveSizeBits, status;
 
@@ -2500,6 +2504,7 @@ int loadECCparams( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isEnumRange( curveType, CRYPT_ECCCURVE ) );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Convert the fixed-format bignums to encoded BIGNUMs */
 #ifdef CREATE_BIGNUM_VALUES

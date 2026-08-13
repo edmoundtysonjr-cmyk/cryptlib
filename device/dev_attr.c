@@ -134,6 +134,16 @@ static int getRandomChecked( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 		if( cryptStatusOK( status ) && \
 			( length < MIN_KEYSIZE || checkEntropy( data, length ) ) )
 			return( CRYPT_OK );
+		if( status == CRYPT_ERROR_SIGNALLED || \
+			status == CRYPT_ERROR_INTERNAL )
+			{
+			/* Certain error conditions are non-recoverable.  Others like
+			   CRYPT_ERROR_RANDOM should be able to recover on a retry, and
+			   the rest are indeterminate, but since this will completely
+			   stop any ability to use cryptlib we allow at least a few
+			   retries before giving up */
+			break;
+			}
 		}
 	ENSURES( LOOP_BOUND_OK );
 
@@ -225,6 +235,9 @@ int getDeviceAttribute( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 	REQUIRES( isAttribute( attribute ) || \
 			  isInternalAttribute( attribute ) );
 
+	/* Clear return value */
+	*valuePtr = 0;
+
 	switch( attribute )
 		{
 		case CRYPT_ATTRIBUTE_ERRORTYPE:
@@ -262,6 +275,8 @@ int getDeviceAttribute( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 		case CRYPT_IATTRIBUTE_HWSTORAGE:
 			REQUIRES( deviceInfoPtr->type == CRYPT_DEVICE_HARDWARE );
 
+			if( !isHandleRangeValid( deviceInfoPtr->iCryptKeyset ) )
+				return( CRYPT_ERROR_NOTFOUND );
 			*valuePtr = deviceInfoPtr->iCryptKeyset;
 			return( CRYPT_OK );
 #endif /* CONFIG_CRYPTO_HW1 || CONFIG_CRYPTO_HW2 */
@@ -276,12 +291,12 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
 int getDeviceAttributeS( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 						 INOUT_PTR MESSAGE_DATA *msgData, 
 						 IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE attribute,
-						 MESSAGE_FUNCTION_EXTINFO *messageExtInfo )
+						 INOUT_PTR MESSAGE_FUNCTION_EXTINFO *messageExtInfo )
 	{
 	assert( isWritePtr( deviceInfoPtr, sizeof( DEVICE_INFO ) ) );
 	assert( isWritePtr( msgData, sizeof( MESSAGE_DATA ) ) );
 	assert( isWritePtr( messageExtInfo, \
-			sizeof( MESSAGE_FUNCTION_EXTINFO ) ) );
+						sizeof( MESSAGE_FUNCTION_EXTINFO ) ) );
 
 	REQUIRES( sanityCheckDevice( deviceInfoPtr ) );
 	REQUIRES( isAttribute( attribute ) || \
@@ -366,6 +381,7 @@ int getDeviceAttributeS( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 			int status;
 
 			REQUIRES( controlFunction != NULL );
+			REQUIRES( msgData->length == sizeof( time_t ) );
 
 			/* If the device doesn't contain a time source then we can't 
 			   provide time information */
@@ -405,7 +421,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 4 ) ) \
 int setDeviceAttribute( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 						IN_INT_Z const int value, 
 						IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE attribute,
-						MESSAGE_FUNCTION_EXTINFO *messageExtInfo )
+						INOUT_PTR MESSAGE_FUNCTION_EXTINFO *messageExtInfo )
 	{
 	const DEV_CONTROLFUNCTION controlFunction = \
 				( DEV_CONTROLFUNCTION ) \
@@ -413,7 +429,7 @@ int setDeviceAttribute( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 
 	assert( isWritePtr( deviceInfoPtr, sizeof( DEVICE_INFO ) ) );
 	assert( isWritePtr( messageExtInfo, \
-			sizeof( MESSAGE_FUNCTION_EXTINFO ) ) );
+						sizeof( MESSAGE_FUNCTION_EXTINFO ) ) );
 
 	REQUIRES( sanityCheckDevice( deviceInfoPtr ) );
 #if defined( USE_HARDWARE ) || defined( USE_TPM )
@@ -439,7 +455,7 @@ int setDeviceAttributeS( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 						 IN_BUFFER( dataLength ) const void *data,
 						 IN_LENGTH const int dataLength,
 						 IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE attribute,
-						 MESSAGE_FUNCTION_EXTINFO *messageExtInfo )
+						 INOUT_PTR MESSAGE_FUNCTION_EXTINFO *messageExtInfo )
 	{
 	const DEV_CONTROLFUNCTION controlFunction = \
 				( DEV_CONTROLFUNCTION ) \
@@ -449,7 +465,7 @@ int setDeviceAttributeS( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 	assert( isWritePtr( deviceInfoPtr, sizeof( DEVICE_INFO ) ) );
 	assert( isReadPtrDynamic( data, dataLength ) );
 	assert( isWritePtr( messageExtInfo, \
-			sizeof( MESSAGE_FUNCTION_EXTINFO ) ) );
+						sizeof( MESSAGE_FUNCTION_EXTINFO ) ) );
 
 	REQUIRES( sanityCheckDevice( deviceInfoPtr ) );
 	REQUIRES( isIntegerRangeNZ( dataLength ) );
@@ -476,7 +492,7 @@ int setDeviceAttributeS( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 								  messageExtInfo );
 		if( cryptStatusError( status ) )
 			return( status );
-		assert( !isMessageObjectUnlocked( messageExtInfo ) );
+		REQUIRES( !isMessageObjectUnlocked( messageExtInfo ) );
 
 		/* The user has logged in, if the token has a hardware RNG grab 256 
 		   bits of entropy and send it to the system device.  Since we have 

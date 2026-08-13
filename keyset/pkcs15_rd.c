@@ -122,6 +122,8 @@ static int copyObjectPayloadInfo( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
 	switch( type )
 		{
 		case PKCS15_OBJECT_PUBKEY:
+			if( pkcs15infoPtr->pubKeyData != NULL )
+				return( CRYPT_ERROR_DUPLICATE );
 			pkcs15infoPtr->type = PKCS15_SUBTYPE_NORMAL;
 			pkcs15infoPtr->pubKeyData = ( void * ) object;
 			pkcs15infoPtr->pubKeyDataSize = objectLength;
@@ -130,6 +132,8 @@ static int copyObjectPayloadInfo( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
 			break;
 
 		case PKCS15_OBJECT_PRIVKEY:
+			if( pkcs15infoPtr->privKeyData != NULL )
+				return( CRYPT_ERROR_DUPLICATE );
 			pkcs15infoPtr->type = PKCS15_SUBTYPE_NORMAL;
 			pkcs15infoPtr->privKeyData = ( void * ) object;
 			pkcs15infoPtr->privKeyDataSize = objectLength;
@@ -138,6 +142,8 @@ static int copyObjectPayloadInfo( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
 			break;
 
 		case PKCS15_OBJECT_CERT:
+			if( pkcs15infoPtr->certData != NULL )
+				return( CRYPT_ERROR_DUPLICATE );
 			if( pkcs15infoPtr->type == PKCS15_SUBTYPE_NONE )
 				pkcs15infoPtr->type = PKCS15_SUBTYPE_CERT;
 			pkcs15infoPtr->certData = ( void * ) object;
@@ -159,6 +165,8 @@ static int copyObjectPayloadInfo( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
 			return( OK_SPECIAL );
 
 		case PKCS15_OBJECT_DATA:
+			if( pkcs15infoPtr->dataData != NULL )
+				return( CRYPT_ERROR_DUPLICATE );
 			pkcs15infoPtr->type = PKCS15_SUBTYPE_DATA;
 			pkcs15infoPtr->dataType = pkcs15objectInfo->dataType;
 			pkcs15infoPtr->dataData = ( void * ) object;
@@ -171,7 +179,10 @@ static int copyObjectPayloadInfo( INOUT_PTR PKCS15_INFO *pkcs15infoPtr,
 			   typically a non-cryptlib data object, we record it as such 
 			   and remember the data contents but leave it as an empty 
 			   (non-useful) object entry */
-			DEBUG_DIAG(( "Found unrecognised object subtype" ));
+			DEBUG_DIAG(( "Found unrecognised object subtype, size %d",
+						 objectLength ));
+			if( pkcs15infoPtr->dataData != NULL )
+				return( CRYPT_ERROR_DUPLICATE );
 			pkcs15infoPtr->type = PKCS15_SUBTYPE_UNRECOGNISED;
 			pkcs15infoPtr->dataType = CRYPT_ATTRIBUTE_NONE;
 			pkcs15infoPtr->dataData = ( void * ) object;
@@ -434,7 +445,21 @@ int readPkcs15Keyset( INOUT_PTR STREAM *stream,
 				{
 				if( status != OK_SPECIAL )
 					{
+					clFree( "readKeyset", object );
 					pkcs15Free( pkcs15info, maxNoPkcs15objects );
+					if( status == CRYPT_ERROR_DUPLICATE )
+						{
+						/* This is a should-never-occur situation since it 
+						   means that there are two (or more) objects 
+						   present with the same primary key, which is
+						   supposed to be unique.  In theory we could skip 
+						   it and continue but it's enough of a problem 
+						   sign that we bail out */
+						retExt( CRYPT_ERROR_DUPLICATE, 
+								( CRYPT_ERROR_DUPLICATE, errorInfo, 
+								  "Multiple conflicting object entries "
+								  "found in keyset" ) );
+						}
 					return( status );
 					}
 

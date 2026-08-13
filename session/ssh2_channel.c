@@ -420,10 +420,7 @@ static const SSH_CHANNEL_INFO *getCurrentChannelInfo( const SESSION_INFO *sessio
 	if( channelID == UNUSED_CHANNEL_ID )
 		return( ( SSH_CHANNEL_INFO * ) &nullChannel );
 
-	channelInfoPtr = findChannelByID( sessionInfoPtr,
-									  ( channelType == CHANNEL_READ ) ? \
-										sshInfo->currReadChannel : \
-										sshInfo->currWriteChannel );
+	channelInfoPtr = findChannelByID( sessionInfoPtr, channelID );
 	return( ( channelInfoPtr == NULL ) ? \
 			( SSH_CHANNEL_INFO * ) &nullChannel : channelInfoPtr );
 	}
@@ -681,6 +678,8 @@ int setChannelExtAttribute( const SESSION_INFO *sessionInfoPtr,
 	switch( attribute )
 		{
 		case SSH_ATTRIBUTE_ACTIVE:
+			REQUIRES( value == TRUE );
+
 			channelInfoPtr->flags |= CHANNEL_FLAG_ACTIVE;
 			return( CRYPT_OK );
 
@@ -850,7 +849,7 @@ int addChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* Make sure that we haven't exceeded the maximum number of channels */
 	LOOP_MAX( ( channelCount = 0, \
 				attributeListPtr = DATAPTR_GET( sessionInfoPtr->attributeList ) ), 
-			  channelCount <= SSH_MAX_CHANNELS && attributeListPtr != NULL,
+			  channelCount < SSH_MAX_CHANNELS && attributeListPtr != NULL,
 			  attributeListPtr = DATAPTR_GET( attributeListPtr->next ) )
 		{
 		ENSURES( LOOP_INVARIANT_MAX_XXX( channelCount, 0, 
@@ -865,7 +864,7 @@ int addChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			}
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( channelCount > SSH_MAX_CHANNELS )
+	if( channelCount >= SSH_MAX_CHANNELS )
 		{
 		retExt( CRYPT_ERROR_OVERFLOW,
 				( CRYPT_ERROR_OVERFLOW, SESSION_ERRINFO, 
@@ -1035,6 +1034,9 @@ int enqueueResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   one until it's been sent */
 	REQUIRES( respPtr->type == 0 );
 
+	/* Encode the response.  This takes advantage of the persistent state
+	   of stream errors to return the first error status encountered without
+	   needing to have a long chain of cryptStatusOK() checks */
 	respPtr->type = type;
 	sMemOpen( &stream, respPtr->data, SSH_MAX_RESPONSESIZE );
 	if( noParams > 0 )

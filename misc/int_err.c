@@ -7,11 +7,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>	/* Needed on some systems for macro-mapped *printf()'s */
-#if defined( INC_ALL )
-  #include "crypt.h"
-#else
-  #include "crypt.h"
-#endif /* Compiler-specific includes */
+#include "crypt.h"
 
 #ifdef USE_ERRMSGS
 
@@ -61,8 +57,12 @@ static BOOLEAN formatErrorString( OUT_ALWAYS ERROR_INFO *errorInfo,
 				vsprintf_s( errorInfo->errorString, MAX_ERRMSG_SIZE, 
 							format, argPtr ); 
 	if( errorInfo->errorStringLength <= 0 || \
-		errorInfo->errorStringLength > MAX_ERRMSG_SIZE )
+		errorInfo->errorStringLength >= MAX_ERRMSG_SIZE )
 		{
+		/* Note the range check of >= MAX_ERRMSG_SIZE, this is because a
+		   valid vsprintf_s() call will return 1...MAX_ERRMSG_SIZE - 1, and
+		   MAX_ERRMSG_SIZE when it truncates the result, the last byte being
+		   the '\0' */
 		DEBUG_DIAG(( "Invalid error string data" ));
 		assert( DEBUG_WARN );
 		setErrorString( errorInfo, 
@@ -147,7 +147,7 @@ static void appendErrorString( INOUT_PTR ERROR_INFO *errorInfo,
 #ifndef NDEBUG
 	/* Null-terminate the string for use with DEBUG_DIAG() and similar */
 	errorInfo->errorString[ errorInfo->errorStringLength ] = '\0';
-#endif /* NDEBUG */
+#endif /* !NDEBUG */
 	}
 
 /****************************************************************************
@@ -172,9 +172,7 @@ void setErrorString( OUT_PTR ERROR_INFO *errorInfo,
 	/* Clear return value */
 	clearErrorInfo( errorInfo );
 
-	/* Since we're already in an error-handling function we don't use the 
-	   REQUIRES() predicate (which would result in an infinite page fault)
-	   but make the sanity-checking of parameters explicit */
+	/* Make sure that we've been given a valid string to set */
 	if( stringLength <= 0 || stringLength > MAX_ERRMSG_SIZE )
 		{
 		DEBUG_DIAG(( "Invalid error string data" ));
@@ -198,7 +196,7 @@ void copyErrorInfo( OUT_PTR ERROR_INFO *destErrorInfo,
 	assert( isWritePtr( destErrorInfo, sizeof( ERROR_INFO ) ) );
 	assert( isReadPtr( srcErrorInfo, sizeof( ERROR_INFO ) ) );
 
-	memset( destErrorInfo, 0, sizeof( ERROR_INFO ) );
+	clearErrorInfo( destErrorInfo );
 	if( srcErrorInfo->errorStringLength > 0 )
 		{
 		setErrorString( destErrorInfo, srcErrorInfo->errorString, 
@@ -231,7 +229,7 @@ int readErrorInfo( OUT_PTR ERROR_INFO *errorInfo,
 		return( status );
 	errorInfo->errorStringLength = msgData.length;
 	ENSURES( errorInfo->errorStringLength > 0 && \
-			 errorInfo->errorStringLength < MAX_ERRMSG_SIZE );
+			 errorInfo->errorStringLength <= MAX_ERRMSG_SIZE );
 
 	return( CRYPT_OK );
 	}
@@ -244,12 +242,7 @@ int readErrorInfo( OUT_PTR ERROR_INFO *errorInfo,
 
 /* Exit after recording a detailed error message.  This is used by lower-
    level code to provide more information to the caller than a basic error 
-   code.  Felix qui potuit rerum cognoscere causas.
-
-   Since we're already in an error-handling function when we call these 
-   functions we don't use the REQUIRES() predicate (which would result in an 
-   infinite page fault) but make the sanity-checking of parameters 
-   explicit */
+   code.  Felix qui potuit rerum cognoscere causas */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 2, 3 ) ) STDC_PRINTF_FN( 3, 4 ) \
 int retExtFn( IN_ERROR const int status, 
@@ -316,7 +309,7 @@ int retExtObjFn( IN_ERROR const int status,
 	ERROR_INFO extErrorInfo;
 	va_list argPtr;
 	BOOLEAN errorStringOK;
-	int errorStringLength, extErrorStatus;
+	int extErrorStatus;
 
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
 	assert( isReadPtr( format, 4 ) );
@@ -357,8 +350,8 @@ int retExtObjFn( IN_ERROR const int status,
 		   here */
 		return( status );
 		}
-	errorStringLength = errorInfo->errorStringLength;
-	ENSURES( errorStringLength > 0 && errorStringLength < MAX_ERRMSG_SIZE );
+	ENSURES( errorInfo->errorStringLength > 0 && \
+			 errorInfo->errorStringLength <= MAX_ERRMSG_SIZE );
 
 	/* Check whether there's any additional error information available */
 	extErrorStatus = readErrorInfo( &extErrorInfo, extErrorObject );
@@ -503,12 +496,16 @@ int retExtAdditionalFn( IN_ERROR const int status,
 	extErrorStringLength = vsprintf_s( extErrorString, MAX_ERRMSG_SIZE, 
 									   format, argPtr ); 
 	va_end( argPtr );
-	if( extErrorStringLength <= 0 || extErrorStringLength >= MAX_ERRMSG_SIZE )
+	if( extErrorStringLength <= 0 || \
+		extErrorStringLength >= MAX_ERRMSG_SIZE )
 		{
-		DEBUG_DIAG(( "Invalid error string data" ));
+		/* We couldn't format the additional information, we'll have to rely 
+		   on the primary error string.  See the comment in 
+		   formatErrorString() for the handling of the vsprintf_s() return
+		   value */
+		DEBUG_DIAG(( "Invalid secondary error string data, returning only "
+					 "primary error string" ));
 		assert( DEBUG_WARN );
-		setErrorString( errorInfo, 
-						"(Couldn't record error information)", 35 );
 		return( status );
 		}
 
@@ -534,8 +531,12 @@ int retExtSanFn( IN_ERROR const int status,
 	char string1Buffer[ CRYPT_MAX_TEXTSIZE + 8 ];
 	char string2Buffer[ CRYPT_MAX_TEXTSIZE + 8 ];
 	char string3Buffer[ CRYPT_MAX_TEXTSIZE + 8 ];
-	const char *string1Ptr = string1, *string2Ptr = string2;
-	const char *string3Ptr = string3;
+	const char *string1Ptr = ( const char * ) string1;
+	const char *string2Ptr = ( string2 != NULL ) ? \
+							 ( const char * ) string2 : "";
+	const char *string3Ptr = ( string3 != NULL ) ? \
+							 ( const char * ) string3 : "";
+							 /* Sanitised to char * below */
 
 	assert( isReadPtr( formatString, 16 ) );
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
@@ -596,7 +597,12 @@ int retExtSanFn( IN_ERROR const int status,
 	/* Format the error message.  Some of the string pointers may be NULL
 	   but this is OK, it's a printf-style varargs function that only takes
 	   the arguments it needs, so for example { "...%s...", string1Ptr, 
-	   NULL, NULL } */
+	   NULL, NULL }.
+	   
+	   However this requires that the caller match %s's to valid pointers, 
+	   to catch any errors we initialise the string pointers to empty 
+	   strings so if there happen to be more %s's than string args they'll 
+	   just get printed as empty strings */
 	retExt( status,
 			( status, errorInfo, formatString, string1Ptr, 
 			  string2Ptr, string3Ptr ) );
@@ -671,6 +677,7 @@ const char *getAlgoName( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 		{ CRYPT_ALGO_RC2, "RC2" },
 		{ CRYPT_ALGO_RC4, "RC4" },
 		{ CRYPT_ALGO_AES, "AES" },
+		{ CRYPT_ALGO_CHACHA20, "ChaCha20" },
 		/* PKC algorithms */
 		{ CRYPT_ALGO_DH, "DH" },
 		{ CRYPT_ALGO_RSA, "RSA" },
@@ -678,8 +685,9 @@ const char *getAlgoName( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 		{ CRYPT_ALGO_ELGAMAL, "ElGamal" },
 		{ CRYPT_ALGO_ECDSA,	"ECDSA" },
 		{ CRYPT_ALGO_ECDH, "ECDH" },
-		{ CRYPT_ALGO_25519,	"Curve25519" },
+		{ CRYPT_ALGO_25519,	"X25519" },
 		{ CRYPT_ALGO_ED25519, "Ed25519" },
+		{ CRYPT_ALGO_MLKEM, "ML-KEM" },
 		/* Hash algorithms */
 		{ CRYPT_ALGO_MD5, "MD5" },
 		{ CRYPT_ALGO_SHA1, "SHA1" },
@@ -796,13 +804,13 @@ const char *getCertHolderName( const CRYPT_CERTIFICATE iCryptCert,
 	MESSAGE_DATA msgData;
 	int value, status;
 
+	assert( isWritePtr( buffer, bufSize ) );
+
 	REQUIRES_EXT( isHandleRangeValid( iCryptCert ), "<Unknown>" );
 	REQUIRES_EXT( isShortIntegerRangeMin( bufSize, 16 ), "<Unknown>" );
 
-	assert( isWritePtr( buffer, bufSize ) );
-
 	/* Clear return value */
-	memset( buffer, 0, min( bufSize, 16 ) );
+	memset( buffer, 0, min( 16, bufSize ) );
 
 	/* Read the holder name from the certificate and return it to the caller 
 	   ready for use in a print statement */
@@ -887,11 +895,11 @@ void formatHexData( OUT_BUFFER_FIXED( hexTextMaxLen ) char *hexText,
 	ENSURES_V( hexDataLen > 10 );
 
 	/* It's more than 10 bytes, only output the first 6 and last 4 bytes.  
-	   The potential expansion factor is ( hexDataLen * 3 ) + 1 (+3 for the 
-	   ellipses, but -2 for the absent spaces at the start and end of the 
-	   string).  Since we limit the data quantity displayed to 10 bytes we 
-	   never output more than 31 characters of text which again is well 
-	   under the 48-byte minimum buffer size */
+	   The potential expansion factor is ( hexDataLen * 3 ) + 3 (+4 for the 
+	   "... ", but -1 for the absent space at the end of the string).  
+	   Since we limit the data quantity displayed to 10 bytes we never 
+	   output more than 31 characters of text which again is well under the 
+	   48-byte minimum buffer size */
 	length = sprintf_s( hexText, hexTextMaxLen, 
 						"%02X %02X %02X %02X %02X %02X ... %02X %02X %02X %02X",
 						hexData[ 0 ], hexData[ 1 ], hexData[ 2 ], 

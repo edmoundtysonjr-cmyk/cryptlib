@@ -246,7 +246,7 @@
    on a new line and let IntelliSense tell you what it is, or to use
    #if _MSC_VER == / >= 19xx #error Bang #endif */
 
-#define VS_LATEST_VERSION           1950
+#define VS_LATEST_VERSION           1951
 
 #ifdef _SCCTK
   #define __IBM4758__
@@ -288,6 +288,7 @@
   #define VC_GE_2002( version )		( ( version ) >= 1300 )
   #define VC_LT_2005( version )		( ( version ) < 1400 )
   #define VC_GE_2005( version )		( ( version ) >= 1400 )
+  #define VC_LE_2008( version )		( ( version ) <= 1500 )
   #define VC_EQ_2008( version )		( ( version ) == 1500 )
   #define VC_GE_2008( version )		( ( version ) >= 1500 )
   #define VC_LT_2010( version )		( ( version ) < 1600 )
@@ -417,8 +418,8 @@
   /* Conversely, some errors are only reported as warnings, with the 
      compiler continuing with invalid code, so we convert them to actual
      errors.  Some of these really are just warnings, e.g. C4090, but in
-     that case we want the compiler to stop and tell us about them so we
-     can fix them */
+     that case we want the compiler to stop and tell us about them so that 
+     we can fix them */
   #pragma warning( error: 4002 )	/* Incorrect number of args to macro */
   #pragma warning( error: 4003 )	/* Also incorrect no.of args to macro */
   #pragma warning( error: 4020 )	/* Incorrect no.of args to function */
@@ -426,7 +427,12 @@
   #pragma warning( error: 4026 )	/* Also diff.types for fn.params */
   #pragma warning( error: 4090 )	/* different 'const' qualifiers */
   #pragma warning( error: 4098 )	/* Void function returning a value */
+  #if VC_LE_2008( _MSC_VER )
+	#pragma warning( error: 4456 )	/* Declaration hides previous local declaration */
+  #endif /* VC++ 2008 or newer */
   #pragma warning( error: 4553 )	/* '==' has no effect; did you mean '=' */
+  #pragma warning( error: 4555 )	/* expr.has no effect; expected expr.with side-effect */
+  #pragma warning( error: 4701 )	/* Potentially uninitialized local variable */
 #endif /* Visual C++ */
 
 /* Under VC++/VS a number of warnings are disabled by default, including 

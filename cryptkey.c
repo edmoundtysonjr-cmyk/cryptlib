@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							cryptlib Keyset Routines						*
-*						Copyright Peter Gutmann 1995-2024					*
+*						Copyright Peter Gutmann 1995-2025					*
 *																			*
 ****************************************************************************/
 
@@ -125,8 +125,27 @@ BOOLEAN sanityCheckKeyset( const KEYSET_INFO *keysetInfoPtr )
 				!isHandleRangeValid( fileInfo->iHardwareDevice ) )
   #endif /* CONFIG_CRYPTO_HW1 || CONFIG_CRYPTO_HW2 */
 				{
-				DEBUG_PUTS(( "sanityCheckKeyset: File info" ));
+				DEBUG_PUTS(( "sanityCheckKeyset: Hardware file info" ));
 				return( FALSE );
+				}
+			if( fileInfo->storage != NULL )
+				{
+				if( !isIntegerRangeNZ( fileInfo->storageTotalSize ) || \
+					!rangeCheck( fileInfo->storageUsedSize, 0, \
+								 fileInfo->storageTotalSize ) )
+					{
+					DEBUG_PUTS(( "sanityCheckKeyset: Hardware storage parameters" ));
+					return( FALSE );
+					}
+				}
+			else
+				{
+				if( fileInfo->storageTotalSize != 0 || \
+					fileInfo->storageUsedSize != 0 )
+					{
+					DEBUG_PUTS(( "sanityCheckKeyset: Spurious hardware storage parameters" ));
+					return( FALSE );
+					}
 				}
 #endif /* USE_HARDWARE || USE_TPM */
 			break;
@@ -265,6 +284,8 @@ static BOOLEAN checkKeysetFunctions( IN_PTR const KEYSET_INFO *keysetInfoPtr )
 
 	return( TRUE );
 	}
+#else
+  #define checkKeysetFunctions( x )		TRUE
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 /* Prepare to update a keyset, performing various access checks and pre-
@@ -304,7 +325,7 @@ static int initKeysetUpdate( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 		memset( keyIDbuffer, 0, min( 16, keyIdMaxLength ) );
 		}
 
-	/* If we're in the middle of a query we can't do anything else */
+	/* If we're in the middle of a query then we can't do anything else */
 	if( FNPTR_ISSET( keysetInfoPtr->isBusyFunction ) )
 		{
 		const KEY_ISBUSY_FUNCTION isBusyFunction = \
@@ -339,9 +360,9 @@ static int initKeysetUpdate( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 		sMemConnect( &stream, keyIDinfo->keyID, keyIDinfo->keyIDlength );
 		status = readSequence( &stream, &length );
 		if( cryptStatusOK( status ) )
-			payloadStart = stell( &stream );
+			status = payloadStart = stell( &stream );
 		sMemDisconnect( &stream );
-		if( cryptStatusOK( status ) )
+		if( !cryptStatusError( status ) )
 			{
 			HASH_FUNCTION hashFunction;
 			BYTE buffer[ 8 + 8 ];
@@ -359,6 +380,8 @@ static int initKeysetUpdate( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 			hashFunction( hashInfo, NULL, 0, buffer, stell( &stream ), 
 						  HASH_STATE_START );
 			sMemClose( &stream );
+			REQUIRES( !checkOverflowSub( keyIDinfo->keyIDlength, 
+										 payloadStart ) );
 			hashFunction( hashInfo, keyIDbuffer, keyIdMaxLength, 
 						  ( BYTE * ) keyIDinfo->keyID + payloadStart, 
 						  keyIDinfo->keyIDlength - payloadStart, 
@@ -749,7 +772,7 @@ static int openKeysetStream( INOUT_PTR STREAM *stream,
 				sFileClose( stream );
 				return( CRYPT_ERROR_BADDATA );
 				}
-			sseek( stream, 0 );
+			( void ) sseek( stream, 0 );
 			sioctlSet( stream, STREAM_IOCTL_IOBUFFER, 0 );
 			}
 
@@ -959,8 +982,9 @@ static int completeKeysetFileOpen( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 		}
 
 	/* If we've got the keyset open in read-only mode then we don't need to 
-	   touch it again since everything is cached in-memory, so we can close 
-	   the file stream */
+	   touch it again since everything is cached in-memory except for the
+	   arbitrarily-large PGP public keyrings, so we can close the file 
+	   stream */
 	if( ( keysetInfoPtr->subType == KEYSET_SUBTYPE_PKCS12 || \
 		  keysetInfoPtr->subType == KEYSET_SUBTYPE_PKCS15 || \
 		  keysetInfoPtr->subType == KEYSET_SUBTYPE_PGP_PRIVATE ) && \
@@ -1065,10 +1089,21 @@ static void completeMemstreamClose( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 
 	/* Tell the backing device what to do with the memory-mapped keyset 
 	   data */
+#if defined( CONFIG_CRYPTO_HW1 ) || defined( CONFIG_CRYPTO_HW2 )
+	REQUIRES_V( fileInfo->iHardwareDevice == CRYPTO_OBJECT_HANDLE || \
+				isHandleRangeValid( fileInfo->iHardwareDevice ) );
+#else
+	REQUIRES_V( isHandleRangeValid( fileInfo->iHardwareDevice ) );
+#endif /* CONFIG_CRYPTO_HW1 || CONFIG_CRYPTO_HW2 */
 	status = krnlSendMessage( fileInfo->iHardwareDevice, 
 							  IMESSAGE_SETATTRIBUTE, &dataSize, 
 							  CRYPT_IATTRIBUTE_COMMITNOTIFY );
-	ENSURES_V( cryptStatusOK( status ) );
+	if( cryptStatusError( status ) )
+		{
+		DEBUG_DIAG(( "Couldn't update memory-mapped keyset to backing "
+					 "device" ));
+		retIntError_Void();
+		}
 	}
 #endif /* USE_HARDWARE || USE_TPM  */
 
@@ -1145,7 +1180,7 @@ static int keysetMessageFunction( INOUT_PTR TYPECAST( KEYSET_INFO * ) \
 								  IN_INT_Z const int messageValue )
 	{
 	KEYSET_INFO *keysetInfoPtr = ( KEYSET_INFO * ) objectInfoPtr;
-	int status;
+	int status = CRYPT_OK;
 
 	assert( isWritePtr( objectInfoPtr, sizeof( KEYSET_INFO ) ) );
 
@@ -1157,8 +1192,6 @@ static int keysetMessageFunction( INOUT_PTR TYPECAST( KEYSET_INFO * ) \
 	/* Process the destroy object message */
 	if( message == MESSAGE_DESTROY )
 		{
-		int shutdownStatus = CRYPT_OK;
-		
 		/* If the keyset is active, perform any required cleanup functions */
 		if( TEST_FLAG( keysetInfoPtr->flags, KEYSET_FLAG_OPEN ) )
 			{
@@ -1178,11 +1211,13 @@ static int keysetMessageFunction( INOUT_PTR TYPECAST( KEYSET_INFO * ) \
 				/* Keysets for which the KEYSET_FLAG_INCOMPLETE flag is set
 				   can fail as part of a normal shutdown, for everything 
 				   else we let the user know that something has gone wrong */
-				if( status == CRYPT_ERROR_INCOMPLETE && \
-					TEST_FLAG( keysetInfoPtr->flags, KEYSET_FLAG_INCOMPLETE ) )
-					shutdownStatus = CRYPT_ERROR_INCOMPLETE;
-				else
+				if( !( status == CRYPT_ERROR_INCOMPLETE && \
+					   TEST_FLAG( keysetInfoPtr->flags, \
+								  KEYSET_FLAG_INCOMPLETE ) ) )
+					{
+					DEBUG_DIAG(( "Error %d shutting down keyset", status ));
 					assert( DEBUG_WARN );
+					}
 
 				/* The shutdown failed for some reason.  This can only 
 				   really ever happen for file keysets (which includes 
@@ -1210,9 +1245,8 @@ static int keysetMessageFunction( INOUT_PTR TYPECAST( KEYSET_INFO * ) \
 					SET_FLAG( keysetInfoPtr->flags, KEYSET_FLAG_EMPTY );
 					}
 
-				/* Continue with the cleanup, eating any non-incomplete 
-				   error status but remembering that there was a problem in 
-				   case this is needed later */
+				/* Continue with the cleanup, remembering that there was a 
+				   problem in case this is needed later */
 #if defined( USE_HARDWARE ) || defined( USE_TPM )
 				shutdownFailed = TRUE;
 #endif /* USE_HARDWARE || USE_TPM */
@@ -1229,7 +1263,7 @@ static int keysetMessageFunction( INOUT_PTR TYPECAST( KEYSET_INFO * ) \
 				completeKeysetFileClose( keysetInfoPtr );
 			}
 
-		return( shutdownStatus );
+		return( status );
 		}
 
 	/* Process attribute get/set/delete messages */
@@ -1316,9 +1350,35 @@ static int keysetMessageFunction( INOUT_PTR TYPECAST( KEYSET_INFO * ) \
 		if( message == MESSAGE_SETATTRIBUTE_S )
 			{
 			const MESSAGE_DATA *msgData = ( MESSAGE_DATA * ) messageDataPtr;
+			const BOOLEAN isMetadata = \
+						( messageValue == CRYPT_IATTRIBUTE_CONFIGDATA || \
+						  messageValue == CRYPT_IATTRIBUTE_USERINDEX || \
+						  messageValue == CRYPT_IATTRIBUTE_USERID || \
+						  messageValue == CRYPT_IATTRIBUTE_USERINFO ) ? \
+						TRUE : FALSE;
 
-			return( setKeysetAttributeS( keysetInfoPtr, msgData->data, 
-										 msgData->length, messageValue ) );
+			/* Some attributes are actually metadata used to update a keyset 
+			   which means they're classed as writes, so we have to perform 
+			   the usual keyset-write check here */
+			if( isMetadata )
+				{
+				REQUIRES( keysetInfoPtr->type == KEYSET_FILE && \
+						  keysetInfoPtr->subType == KEYSET_SUBTYPE_PKCS15 );
+				
+				if( TEST_FLAG( keysetInfoPtr->flags, KEYSET_FLAG_READONLY ) )
+					return( CRYPT_ERROR_PERMISSION );
+				}
+				
+			status = setKeysetAttributeS( keysetInfoPtr, msgData->data, 
+										  msgData->length, messageValue );
+			if( cryptStatusOK( status ) && isMetadata )
+				{
+				/* The metadata update succeeded, remember that the keyset 
+				   data has changed */
+				SET_FLAG( keysetInfoPtr->flags, KEYSET_FLAG_DIRTY );
+				}
+			
+			return( status );
 			}
 
 		retIntError();
@@ -1491,7 +1551,10 @@ static int keysetMessageFunction( INOUT_PTR TYPECAST( KEYSET_INFO * ) \
 				  keyIDinfo.keyIDlength < MAX_ATTRIBUTE_SIZE );
 		REQUIRES( deleteItemFunction != NULL );
 
-		/* Delete the key */
+		/* Delete the key.  We don't have to do an 
+		   isFileKeysetAccessPermitted() for deletes, unlike get or set, 
+		   because we're acting on typeless items, not specific object 
+		   subtypes that have restrictions for some file keysets keysets */
 		resetErrorInfo( keysetInfoPtr );
 		status = initKeysetUpdate( keysetInfoPtr, &keyIDinfo, keyIDbuffer,
 								   KEYID_SIZE, FALSE );
@@ -1566,6 +1629,7 @@ static int keysetMessageFunction( INOUT_PTR TYPECAST( KEYSET_INFO * ) \
 		REQUIRES( getNextItemFunction != NULL );
 
 		/* Fetch the next certificate in a sequence from the keyset */
+		resetErrorInfo( keysetInfoPtr );
 		return( getNextItemFunction( keysetInfoPtr, 
 							&getnextcertInfo->cryptHandle, 
 							getnextcertInfo->auxInfo, getnextcertInfo->flags ) );
@@ -1578,10 +1642,12 @@ static int keysetMessageFunction( INOUT_PTR TYPECAST( KEYSET_INFO * ) \
 
 		REQUIRES( messageValue >= CRYPT_CERTACTION_CERT_CREATION && \
 				  messageValue <= CRYPT_CERTACTION_LAST_USER );
+		REQUIRES( keysetInfoPtr->type == KEYSET_DBMS );
+		REQUIRES( keysetInfoPtr->keysetDBMS->certMgmtFunction != NULL );
 
 		/* Perform the certificate management operation */
 		resetErrorInfo( keysetInfoPtr );
-		status = initKeysetUpdate( keysetInfoPtr, NULL, NULL, 0, TRUE );
+		status = initKeysetUpdate( keysetInfoPtr, NULL, NULL, 0, FALSE );
 		if( cryptStatusError( status ) )
 			return( status );
 		status = keysetInfoPtr->keysetDBMS->certMgmtFunction( keysetInfoPtr,
@@ -1717,10 +1783,18 @@ static int openKeyset( OUT_HANDLE_OPT CRYPT_KEYSET *iCryptKeyset,
 	   create the keyset object */
 	if( keysetType == CRYPT_KEYSET_FILE )
 		{
+		BOOLEAN fileReadOnly;
+		
 		status = openKeysetStream( &stream, name, nameLength, options, 
-								   &isReadOnly, &keysetSubType );
+								   &fileReadOnly, &keysetSubType );
 		if( cryptStatusError( status ) )
 			return( status );
+		
+		/* If the user hasn't requested that the keyset be opened in read-
+		   only mode but the file itself is read-only, change the overall 
+		   mode to read-only */
+		if( !isReadOnly && fileReadOnly )
+			isReadOnly = TRUE;
 
 		/* If the keyset contains the full set of search keys and index
 		   information needed to handle all keyset operations (e.g. 
@@ -1958,6 +2032,7 @@ int createKeyset( INOUT_PTR MESSAGE_CREATEOBJECT_INFO *createInfo,
 	if( cryptStatusError( initStatus ) || cryptStatusError( status ) )
 		return( cryptStatusError( initStatus ) ? initStatus : status );
 	createInfo->cryptHandle = iCryptKeyset;
+
 	return( CRYPT_OK );
 	}
 
@@ -2013,7 +2088,7 @@ int createKeysetIndirect( INOUT_PTR MESSAGE_CREATEOBJECT_INFO *createInfo,
 			return( CRYPT_ERROR_BADDATA );
 			}
 		streamConnected = TRUE;
-		sseek( &stream, 0 );
+		( void ) sseek( &stream, 0 );
 		}
 
 	/* Create the keyset object */
@@ -2116,11 +2191,16 @@ int createKeysetIndirect( INOUT_PTR MESSAGE_CREATEOBJECT_INFO *createInfo,
 		SET_FLAG( keysetInfoPtr->flags, KEYSET_FLAG_EMPTY );
 
 	ENSURES( sanityCheckKeyset( keysetInfoPtr ) );
-		
-	createInfo->cryptHandle = iCryptKeyset;
 
-	return( krnlSendMessage( iCryptKeyset, IMESSAGE_SETATTRIBUTE,
-							 MESSAGE_VALUE_OK, CRYPT_IATTRIBUTE_STATUS ) );
+	/* We've finished setting up the object-type-specific info, tell the
+	   kernel that the object is ready for use */
+	status = krnlSendMessage( iCryptKeyset, IMESSAGE_SETATTRIBUTE,
+							  MESSAGE_VALUE_OK, CRYPT_IATTRIBUTE_STATUS );
+	if( cryptStatusError( status ) )
+		return( status );
+	createInfo->cryptHandle = iCryptKeyset;
+		
+	return( CRYPT_OK );
 	}
 #endif /* USE_HARDWARE || USE_TPM */
 

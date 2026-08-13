@@ -23,7 +23,9 @@
 
 #if ( defined( _MSC_VER ) || defined( __GNUC__ ) || defined( __clang__ ) ) && \
 	defined( USE_RSA_SUITES )
-  #pragma message( "  Warning: RSA keyex is insecure and present for testing only, this should not be used in a production environment." )
+  #pragma message( "  Warning: RSA keyex is insecure and present for testing only, " )
+  #pragma message( "           this should not be used in a production environment." )
+  #pragma message( "    " )  
 #endif /* Notify insecure keyex use */
 
 /****************************************************************************
@@ -118,7 +120,7 @@ BOOLEAN sanityCheckTLSHandshakeInfo( IN_PTR \
 		handshakeInfo->sessionHashSize < 0 || \
 		handshakeInfo->sessionHashSize > CRYPT_MAX_HASHSIZE || \
 		handshakeInfo->premasterSecretSize < 0 || \
-		handshakeInfo->premasterSecretSize > KEYEX_SECRET_STORAGE_SIZE + 8 )
+		handshakeInfo->premasterSecretSize > KEYEX_SECRET_STORAGE_SIZE )
 		{
 		DEBUG_PUTS(( "sanityCheckTLSHandshakeInfo: Hello hash/premaster information" ));
 		return( FALSE );
@@ -282,12 +284,11 @@ static int initHandshakeInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	const PROTOCOL_INFO *protocolInfo = \
 							DATAPTR_GET( sessionInfoPtr->protocolInfo );
 
-	ENSURES( protocolInfo != NULL );
-
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 
 	REQUIRES( isBooleanValue( isServer ) );
+	ENSURES( protocolInfo != NULL );
 
 	memset( handshakeInfo, 0, sizeof( TLS_HANDSHAKE_INFO ) );
 	if( isServer )
@@ -306,19 +307,6 @@ static int initHandshakeInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		sessionInfoPtr->sessionTLS->maxVersion = \
 			( sessionInfoPtr->version > 0 ) ? \
 			sessionInfoPtr->version : protocolInfo->maxVersion;
-		}
-	if( sessionInfoPtr->privateKey != CRYPT_ERROR )
-		{
-		/* Now that we've got the version numbering set up, make sure that 
-		   the key we're using is compatible with the protocol version */
-		if( sessionInfoPtr->privateKeyAlgo == CRYPT_ALGO_ED25519 && \
-			sessionInfoPtr->sessionTLS->maxVersion < TLS_MINOR_VERSION_TLS13 )
-			{
-			retExt( CRYPT_ERROR_NOTAVAIL,
-					( CRYPT_ERROR_NOTAVAIL, SESSION_ERRINFO, 
-					  "Ed25519 keys can only be used with TLS 1.3 and "
-					  "newer" ) );
-			}
 		}
 	return( initHandshakeCryptInfo( sessionInfoPtr, handshakeInfo ) );
 	}
@@ -720,7 +708,7 @@ int readTLSCertChain( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			{
 			/* A certificate context value is only valid if it's coming from
 			   the client */
-			if( isServer || certContextLength > CRYPT_MAX_HASHSIZE )
+			if( !isServer || certContextLength > CRYPT_MAX_HASHSIZE )
 				status = CRYPT_ERROR_BADDATA;
 			else
 				{
@@ -1084,6 +1072,29 @@ static int commonStartup( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		/* Initialise the handshake information */
 		status = initHandshakeInfo( sessionInfoPtr, &handshakeInfo, 
 									isServer );
+#ifdef USE_TLS13
+		if( cryptStatusOK( status ) && \
+			sessionInfoPtr->privateKey != CRYPT_ERROR )
+			{
+			/* Now that we've got the version numbering set up, make sure 
+			   that the key we're using is compatible with the protocol 
+			   version */
+			if( sessionInfoPtr->privateKeyAlgo == CRYPT_ALGO_ED25519 && \
+				sessionInfoPtr->sessionTLS->maxVersion < TLS_MINOR_VERSION_TLS13 )
+				{
+				/* This is a special-case error because we need to return 
+				   additional information alongside the error code, so we 
+				   can't just drop through to the error handler that 
+				   follows */
+				( void ) abortStartup( sessionInfoPtr, &handshakeInfo, FALSE, 
+									   CRYPT_ERROR_NOTAVAIL );
+				retExt( CRYPT_ERROR_NOTAVAIL,
+						( CRYPT_ERROR_NOTAVAIL, SESSION_ERRINFO, 
+						  "Ed25519 keys can only be used with TLS 1.3 and "
+						  "newer" ) );
+				}
+			}
+#endif /* USE_TLS13 */
 		if( cryptStatusError( status ) )
 			{
 			return( abortStartup( sessionInfoPtr, &handshakeInfo, FALSE, 
@@ -1110,7 +1121,7 @@ static int commonStartup( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			}
 		ENSURES( handshakeInfo.completedHSstate == HANDSHAKE_STATE_BEGIN );
 
-		/* If w're continuing with TLS 1.3, switch to the TLS 1.3 protocol 
+		/* If we're continuing with TLS 1.3, switch to the TLS 1.3 protocol 
 		   stack */
 #ifdef USE_TLS13
 		if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 )

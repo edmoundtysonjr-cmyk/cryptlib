@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					cryptlib Prime Generation/Checking Routines				*
-*						Copyright Peter Gutmann 1997-2016					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -45,8 +45,9 @@
 /* Enable the following to cross-check the Miller-Rabin test using an 
    alternative form of the Miller-Rabin test that merges the test loop and 
    the modexp at the start.  Note that this displays diagnostic timing 
-   output and expects to use Pentium performance counters for timing so it's 
-   only (optionally) enabled for Win32 debug */
+   output and expects to use Pentium performance counters for timing, and 
+   also uses the original (non-cryptlib) bignum data structures so won't
+   compile without code updates */
 
 #if defined( __WIN32__ ) && !defined( NDEBUG ) && 0
   #define CHECK_PRIMETEST
@@ -115,7 +116,7 @@ static int getRandomData( INOUT_PTR_OPT void *dummy,
    portion of the test process and the remainder of the checking.  Destroys 
    param6 + 7 */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4, 5, 6, 7 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4, 5, 6 ) ) \
 static int witnessOld( INOUT_PTR PKC_INFO *pkcInfo, INOUT_PTR BIGNUM *a, 
 					   INOUT_PTR BIGNUM *n1, INOUT_PTR BIGNUM *mont_n1, 
 					   INOUT_PTR BIGNUM *mont_1, INOUT_PTR BN_MONT_CTX *montCTX_n )
@@ -129,7 +130,6 @@ static int witnessOld( INOUT_PTR PKC_INFO *pkcInfo, INOUT_PTR BIGNUM *a,
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
 	assert( isWritePtr( a, sizeof( BIGNUM ) ) );
-	assert( isWritePtr( n, sizeof( BIGNUM ) ) );
 	assert( isWritePtr( n1, sizeof( BIGNUM ) ) );
 	assert( isWritePtr( mont_n1, sizeof( BIGNUM ) ) );
 	assert( isWritePtr( mont_1, sizeof( BIGNUM ) ) );
@@ -141,7 +141,7 @@ static int witnessOld( INOUT_PTR PKC_INFO *pkcInfo, INOUT_PTR BIGNUM *a,
 	REQUIRES( sanityCheckBignum( mont_n1 ) );
 	REQUIRES( sanityCheckBignum( mont_1 ) );
 	REQUIRES( sanityCheckBNMontCTX( montCTX_n ) );
-	REQUIRES( k > 0 && k <= bytesToBits( CRYPT_MAX_PKCSIZE );
+	REQUIRES( k > 0 && k <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
 
 	/* All values are manipulated in their Montgomery form so before we 
 	   begin we have to convert a to this form as well */
@@ -307,7 +307,8 @@ static int primeProbableOld( INOUT_PTR PKC_INFO *pkcInfo,
 CHECK_RETVAL_RANGE( FALSE, TRUE ) STDC_NONNULL_ARG( ( 1, 2, 3, 4, 5, 7 ) ) \
 static int witness( INOUT_PTR PKC_INFO *pkcInfo, INOUT_PTR BIGNUM *a, 
 					const BIGNUM *n, const BIGNUM *n_1, const BIGNUM *u, 
-					IN_LENGTH_PKC const int k, 
+					IN_RANGE( 1, bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
+						const int k, 
 					INOUT_PTR BN_MONT_CTX *montCTX_n )
 	{
 	LOOP_INDEX i;
@@ -318,7 +319,7 @@ static int witness( INOUT_PTR PKC_INFO *pkcInfo, INOUT_PTR BIGNUM *a,
 	assert( isReadPtr( n, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( n_1, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( u, sizeof( BIGNUM ) ) );
-	assert( isReadPtr( montCTX_n, sizeof( BN_MONT_CTX ) ) );
+	assert( isWritePtr( montCTX_n, sizeof( BN_MONT_CTX ) ) );
 
 	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 	REQUIRES( sanityCheckBignum( a ) );
@@ -340,7 +341,11 @@ static int witness( INOUT_PTR PKC_INFO *pkcInfo, INOUT_PTR BIGNUM *a,
 		{
 		ENSURES( LOOP_INVARIANT_LARGE( i, 1, k - 1 ) );
 
-		/* x(i) = x(i-1)^2 mod n */
+		/* x(i) = x(i-1)^2 mod n.  BN_mod_mul() allows the first three 
+		   arguments to be the same, and in fact is more efficient if the
+		   two multiplicands are since it then turns into a squaring
+		   operation, so the line of code below isn't as suspicious as
+		   it looks */
 		CK( BN_mod_mul( a, a, a, n, &pkcInfo->bnCTX ) );
 		if( bnStatusError( bnStatus ) )
 			return( getBnStatus( bnStatus ) );
@@ -367,8 +372,6 @@ static int witness( INOUT_PTR PKC_INFO *pkcInfo, INOUT_PTR BIGNUM *a,
 		}
 	ENSURES( LOOP_BOUND_OK );
 
-	ENSURES( sanityCheckBignum( a ) );
-
 	return( TRUE );
 	}
 
@@ -392,8 +395,8 @@ int primeProbable( INOUT_PTR PKC_INFO *pkcInfo,
 				   OUT_PTR BOOLEAN *isPrime )
 	{
 	BIGNUM *a = &pkcInfo->tmp1, *n_1 = &pkcInfo->tmp2, *u = &pkcInfo->tmp3;
-	LOOP_INDEX i;
-	int k, bnStatus = BN_STATUS, status;
+	LOOP_INDEX i, k;
+	int bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
 	assert( isWritePtr( n, sizeof( BIGNUM ) ) );
@@ -405,6 +408,19 @@ int primeProbable( INOUT_PTR PKC_INFO *pkcInfo,
 	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 	REQUIRES( sanityCheckBignum( n ) );
 	REQUIRES( noChecks >= 1 && noChecks <= MAX_NO_PRIME_CHECKS );
+
+	/* A check to document a condition that's required for the following
+	   tests.  This can never occur because the smallest n value that we 
+	   ever generate has 120 bits, but if it wasn't then we'd run into a 
+	   problem where a >= n behaves as a mod n which is zero when a == n, 
+	   so a^u mod n in witness() is zero which is neither 1 nor n - 1 and 
+	   so it'd get reported as composite even if it was prime.  
+	   
+	   The test below documents this by verifying that n is larger than the 
+	   largest entry in the sieve, 17389, although we'll never get anywhere 
+	   close to that because we only check up to the first 
+	   MAX_NO_PRIME_CHECKS entries */
+	REQUIRES( BN_cmp_word( n, 18000 ) >= 0 );
 
 	/* Clear return value */
 	*isPrime = FALSE;
@@ -425,8 +441,12 @@ int primeProbable( INOUT_PTR PKC_INFO *pkcInfo,
 		return( getBnStatus( bnStatus ) );
 	LOOP_LARGE( k = 1, !BN_is_bit_set( n_1, k ), k++ )
 		{
-		/* No loop body */ 
-		ENSURES( LOOP_INVARIANT_LARGE_XXX( k, 1, 1024 ) );
+		/* No loop body.  The bound of FAILSAFE_ITERATIONS_LARGE = 1000 is 
+		   somewhat arbitrary and serves as a generic upper-bound value 
+		   based on the use of LOOP_LARGE which triggers at the same value,
+		   since we should never be seeing a run of 1k zero bits in a 
+		   bignum */ 
+		ENSURES( LOOP_INVARIANT_LARGE( k, 1, FAILSAFE_ITERATIONS_LARGE ) );
 		}
 	ENSURES( LOOP_BOUND_OK );
 	CK( BN_rshift( u, n_1, k ) );
@@ -514,7 +534,7 @@ int primeProbable( INOUT_PTR PKC_INFO *pkcInfo,
 	}
 
 /* Perform a Fermat primality test to the base 2 as a quick screening 
-   alternative to a full M-R test */
+   alternative to a full M-R test.  Destroys tmp1 */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4 ) ) \
 int primeProbableFermat( INOUT_PTR PKC_INFO *pkcInfo, 
@@ -531,6 +551,7 @@ int primeProbableFermat( INOUT_PTR PKC_INFO *pkcInfo,
 
 	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 	REQUIRES( sanityCheckBignum( n ) );
+	REQUIRES( sanityCheckBNMontCTX( montCTX_n ) );
 	REQUIRES( !BN_is_zero( &montCTX_n->N ) );
 
 	/* Clear return value */
@@ -575,15 +596,9 @@ static int generatePrimeEx( INOUT_PTR PKC_INFO *pkcInfo,
 							IN_INT_OPT const int exponent,
 							IN_PTR_OPT const GET_RANDOM_INFO *getRandomInfo )
 	{
-	const GETRANDOMDATA_FUNCTION getRandomFunction = \
-			( getRandomInfo != NULL ) ? \
-				( GETRANDOMDATA_FUNCTION ) \
-				FNPTR_GET( getRandomInfo->getRandomFunction ) : getRandomData;
-	void *getRandomState = ( getRandomInfo != NULL ) ? \
-			getRandomInfo->getRandomState : NULL;
 	const int noChecks = getNoPrimeChecks( noBits );
 	BOOLEAN *sieveArray, primeFound = FALSE;
-	int oldOffset = 0, bnStatus = BN_STATUS, status, LOOP_ITERATOR;
+	int status, LOOP_ITERATOR;
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
 	assert( isWritePtr( candidate, sizeof( BIGNUM ) ) );
@@ -603,7 +618,7 @@ static int generatePrimeEx( INOUT_PTR PKC_INFO *pkcInfo,
 	REQUIRES( exponent == CRYPT_UNUSED || \
 			  ( exponent >= 17 && exponent < INT_MAX - 1000 && \
 			  getRandomInfo == NULL ) );
-	REQUIRES( getRandomFunction != NULL );
+	REQUIRES( noChecks >= 1 && noChecks <= MAX_NO_PRIME_CHECKS );
 
 	/* Start with a cryptographically strong odd random number ("There is a 
 	   divinity in odd numbers", William Shakespeare, "Merry Wives of 
@@ -620,24 +635,28 @@ static int generatePrimeEx( INOUT_PTR PKC_INFO *pkcInfo,
 								SIEVE_SIZE * sizeof( BOOLEAN ) ) ) == NULL )
 		return( CRYPT_ERROR_MEMORY );
 
-	LOOP_LARGE_WHILE( !primeFound && !cryptStatusError( status ) )
+	/* Use the sieve to look for possible primes and if that fails retry.  
+	   The retry essentially never happens so it's not clear how many
+	   we should allow before declaring a problem, FAILSAFE_ITERATIONS_SMALL 
+	   should be enough while FAILSAFE_ITERATIONS_LARGE is a DoS, for now we 
+	   use FAILSAFE_ITERATIONS_MED as a tradeoff */
+	LOOP_MED_WHILE( !primeFound && !cryptStatusError( status ) )
 		{
 		LOOP_INDEX_ALT offset;
-		int startPoint DUMMY_INIT;
+		int startPoint DUMMY_INIT, oldOffset = 0, bnStatus = BN_STATUS;
 
-		ENSURES( LOOP_INVARIANT_LARGE_GENERIC() );
+		ENSURES_PTR( LOOP_INVARIANT_MED_GENERIC(), sieveArray );
 
 		/* Set up the sieve array for the number and pick a random starting
-		   point */
+		   point.  This will need to be changed if deterministic keygen is
+		   ever added since it bypasses the (optional) user-supplied 
+		   randomness source */
 		status = initSieve( sieveArray, SIEVE_SIZE, candidate );
 		if( cryptStatusOK( status ) )
-			{
-			status = getRandomFunction( getRandomState, &startPoint, 
-										sizeof( int ) );
-			}
+			status = startPoint = getRandomInteger();
 		if( cryptStatusError( status ) )
 			break;
-		startPoint &= SIEVE_SIZE - 1;
+		startPoint %= SIEVE_SIZE;
 		if( startPoint <= 0 )
 			startPoint = 1;		/* Avoid getting stuck on zero */
 
@@ -658,10 +677,12 @@ static int generatePrimeEx( INOUT_PTR PKC_INFO *pkcInfo,
 #endif /* CHECK_PRIMETEST */
 			BN_ULONG remainder DUMMY_INIT;
 
-			ENSURES( LOOP_INVARIANT_EXT_XXX_ALT( offset, 1, SIEVE_SIZE - 1,
-												 SIEVE_SIZE + 1 ) );
-
-			ENSURES( offset != oldOffset );
+			ENSURES_PTR( \
+				LOOP_INVARIANT_EXT_XXX_ALT( offset, 1, SIEVE_SIZE - 1,
+											SIEVE_SIZE + 1 ), sieveArray );
+					 /* We have to use LOOP_INVARIANT_EXT_XXX_ALT() here 
+					    because the loop index both starts at and is 
+					    advanced by an unknown value */
 
 			/* If this candidate is divisible by anything, continue */
 			if( sieveArray[ offset ] != 0 )
@@ -728,6 +749,8 @@ static int generatePrimeEx( INOUT_PTR PKC_INFO *pkcInfo,
 
 				status = bn_strong_lucas_selfridge( &isPrime, candidate, 
 													&pkcInfo->bnCTX );
+				if( !isPrime )
+					primeFound = FALSE;
 				}
 #else
 			status = primeProbable( pkcInfo, candidate, noChecks, 
@@ -741,6 +764,7 @@ static int generatePrimeEx( INOUT_PTR PKC_INFO *pkcInfo,
 			/* If it's not for RSA use then we've found our candidate */
 			if( exponent == CRYPT_UNUSED )
 				break;
+			primeFound = FALSE;		/* Default to fail-closed */
 
 			/* It's for use with RSA, check the RSA condition that
 			   gcd( p - 1, exp ) == 1.  Since exp is a small prime we can do
@@ -751,22 +775,23 @@ static int generatePrimeEx( INOUT_PTR PKC_INFO *pkcInfo,
 			CK( BN_add_word( candidate, 1 ) );
 			if( bnStatusError( bnStatus ) )
 				{
+				/* Depending on which operation failed the candidate may be 
+				   left at x-1, but we're bailing out with an error so the 
+				   caller won't be doing anything with it anyway */ 
 				status = getBnStatus( bnStatus );
 				break;
 				}
 			if( remainder > 0 )
 				{
+				/* It's an RSA prime, we're done */
 				primeFound = TRUE;
 				break;
 				}
-
-			/* It's a prime, but not the right sort of prime */
-			primeFound = FALSE;
 			}
-		ENSURES( LOOP_BOUND_OK_ALT );
+		ENSURES_PTR( LOOP_BOUND_OK_ALT, sieveArray );
 		}
-	ENSURES( LOOP_BOUND_OK );
-	ENSURES( cryptStatusError( status ) || primeFound );
+	ENSURES_PTR( LOOP_BOUND_OK, sieveArray );
+	ENSURES_PTR( cryptStatusError( status ) || primeFound, sieveArray );
 
 	/* Clean up */
 	zeroise( sieveArray, sizeof( BOOLEAN ) * SIEVE_SIZE );
@@ -774,6 +799,7 @@ static int generatePrimeEx( INOUT_PTR PKC_INFO *pkcInfo,
 	if( cryptStatusError( status ) )
 		return( status );
 
+	ENSURES( primeFound );	/* Ensure we really did get here correctly */
 	ENSURES( sanityCheckBignum( candidate ) );
 
 	return( CRYPT_OK );
@@ -836,7 +862,9 @@ int generatePrimeRSA( INOUT_PTR PKC_INFO *pkcInfo,
    The parameters also allow for two additional inputs, the first a fixed-
    length seed for DSA/ECDSA deterministic signatures to deal with potential 
    RNG issues, the second a user-definable randomness function for 
-   verifiable generation of DLP parameters.
+   verifiable generation of DLP parameters.  This capability is only present 
+   for possible future use with the parameter always hardcoded to NULL, so 
+   we check for it not being NULL in debug mode.
 
    We don't need to pagelock the bignum buffer that we're using because it's 
    being accessed continuously while there's data in it so there's little 
@@ -873,10 +901,15 @@ int generateBignumEx( OUT_PTR BIGNUM *bignum,
 			  /* The lower bound may be zero if we're generating e.g. a 
 			     blinding value or some similar non-key-data value */
 	REQUIRES( ( seed == NULL && seedLength == 0 ) || \
-			  ( seed != NULL && isShortIntegerRangeNZ( seedLength ) ) );
+			  ( seed != NULL && isShortIntegerRangeMin( seedLength, 8 ) ) );
 	REQUIRES( getRandomFunction != NULL );
 	REQUIRES( noBytes >= bitsToBytes( 120 ) && \
 			  noBytes <= CRYPT_MAX_PKCSIZE );
+
+	/* A secondary check, the deterministic generation capability is present
+	   for future use but we always use the default system randomness 
+	   function */
+	assert( getRandomInfoPtr == NULL );
 
 	/* Clear the return value */
 	bnStatus = BN_zero( bignum );
@@ -891,9 +924,13 @@ int generateBignumEx( OUT_PTR BIGNUM *bignum,
 		}
 
 	/* Mix in the seed value if there's one present.  This is used for 
-	   DLP/ECDLP operations where the (phenomenally low) likelihood of the 
-	   RNG producing repeated values would lead to a loss of the private
-	   key */
+	   DLP/ECDLP operations to generate the k value where the (phenomenally 
+	   low) likelihood of the RNG producing repeated values would lead to a 
+	   loss of the private key.
+	   
+	   We have to truncate the seed, either a hash value when signing or the 
+	   data to be encrypted when encrypting, because k is sized to match the
+	   shorter q rather than the keysize-length p */
 	if( seed != NULL )
 		{
 		const BYTE *seedPtr = seed;
@@ -917,7 +954,10 @@ int generateBignumEx( OUT_PTR BIGNUM *bignum,
 	buffer[ 0 ] &= 0xFF >> ( -noBits & 7 );
 	buffer[ 0 ] |= high >> ( -noBits & 7 );
 	if( noBits & 7 )
+		{
+		REQUIRES( !checkOverflowShift( high, noBits & 7 ) );
 		buffer[ 1 ] |= ( high << ( noBits & 7 ) ) & 0xFF;
+		}
 
 	/* Turn the contents of the buffer into a bignum */
 	REQUIRES( !checkOverflowSub( noBytes, 8 ) );
@@ -942,9 +982,10 @@ int generateBignum( OUT_PTR BIGNUM *bignum,
 
 #if 0
 
-/* Composite value that passes the primeProbable() test as described in 
-   "Prime and Prejudice: Primality Testing Under Adversarial Conditions",
-   Martin Albrecht, Jake Massimo, Kenny Paterson and Juraj Somorovsky.
+/* Test code for a composite value that passes the primeProbable() test as 
+   described in "Prime and Prejudice: Primality Testing Under Adversarial 
+   Conditions", Martin Albrecht, Jake Massimo, Kenny Paterson and Juraj 
+   Somorovsky.
 
    This is an expected result, see the long comment in primeProbable().
    

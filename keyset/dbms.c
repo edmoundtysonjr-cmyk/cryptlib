@@ -253,10 +253,10 @@ static int performStaticQuery( INOUT_PTR DBMS_INFO *dbmsInfo,
 
 /* In order to allow general certificate database queries we have to be able 
    to process user-supplied query strings.  The cryptlib manual contains 
-   strong warnings about the correct way to do this (if it's done at all), 
-   the best that we can do is apply assorted safety checks of the query data 
-   to try and reduce the chances of SQL injection.  Unfortunately this can 
-   get arbitrarily complicated:
+   strong warnings about the correct way to do this, the best that we can do 
+   is apply assorted safety checks of the query data to try and reduce the 
+   chances of SQL injection.  Unfortunately this can get arbitrarily 
+   complicated:
 
 	';	The standard SQL-injection method, used with values like
 		'foo; DROP TABLE bar', or '1=1' to return all entries in a table.
@@ -276,9 +276,18 @@ static int performStaticQuery( INOUT_PTR DBMS_INFO *dbmsInfo,
    would turn into ABCD, or further escaping the encoding with values like 
    'sel'+'ect') there are also any number of backend-specific custom 
    keywords and ways of escaping keywords that we can't know about and 
-   therefore can't easily strip */
+   therefore can't easily strip.  For example users can alter the escape 
+   character, for example with SQL Server's ESCAPE '\', or REPLACE() 
+   characters, or any number of other tricks.
+   
+   In general though what we're doing here isn't trying to avoid every type
+   of malicious SQL string, since the query is coming from the user rather 
+   than an external untrusted source so they'd be attacking themselves, but 
+   merely to protect against accidental problems due to stray special 
+   characters */
 
-#define	SQL_ESCAPE	'\''
+#define	SQL_ESCAPE_CHAR			'\\'
+#define SQL_QUOTE_ESCAPE_CHAR	'\''
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 static int copyChar( OUT_BUFFER( bufMaxLen, *bufPos ) char *buffer, 
@@ -309,9 +318,10 @@ static int copyChar( OUT_BUFFER( bufMaxLen, *bufPos ) char *buffer,
 		ch == '\\' || ch == ';' || ch == '%' )
 		{
 		/* Escape the character */
-		buffer[ position++ ] = SQL_ESCAPE;
 		if( position >= bufMaxLen )
 			return( CRYPT_ERROR_OVERFLOW );
+		buffer[ position++ ] = ( ch == '\'' ) ? SQL_QUOTE_ESCAPE_CHAR : \
+												SQL_ESCAPE_CHAR;
 		}
 
 	/* Bypass various dangerous SQL "enhancements".  For Windows ODBC (at
@@ -322,9 +332,9 @@ static int copyChar( OUT_BUFFER( bufMaxLen, *bufPos ) char *buffer,
 	   we also strip these */
 	if( ch != '|' && ch != '{' && ch != '}' )
 		{
-		buffer[ position++ ] = intToByte( ch );
 		if( position >= bufMaxLen )
 			return( CRYPT_ERROR_OVERFLOW );
+		buffer[ position++ ] = intToByte( ch );
 		}
 
 	/* Make sure that we haven't overflowed the output buffer.  This 

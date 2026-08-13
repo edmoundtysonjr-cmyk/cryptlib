@@ -185,8 +185,10 @@ int readMacInfo( INOUT_PTR STREAM *stream,
 		   transaction */
 		return( readNull( stream ) );
 		}
+	if( cryptStatusError( status ) )
+		return( status );	/* Residual error from peekTag() */
 	readSequence( stream, NULL );
-	status = readOctetString( stream, salt, &saltLength, 4, 
+	status = readOctetString( stream, salt, &saltLength, 8, 
 							  CRYPT_MAX_HASHSIZE );
 	if( cryptStatusOK( status ) )
 		status = readAlgoID( stream, &algorithm, ALGOID_CLASS_HASH );
@@ -196,7 +198,7 @@ int readMacInfo( INOUT_PTR STREAM *stream,
 		{
 		status = readShortInteger( stream, &value );
 		if( cryptStatusOK( status ) )
-			status = readAlgoID( stream, &algorithm, ALGOID_CLASS_HASH );
+			status = readAlgoID( stream, &algorithm, ALGOID_CLASS_MAC );
 		if( cryptStatusOK( status ) && algorithm != CRYPT_ALGO_HMAC_SHA1 )
 			status = CRYPT_ERROR_NOTAVAIL;
 		}

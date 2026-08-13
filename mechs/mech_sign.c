@@ -27,7 +27,13 @@
    minimal ASN.1 functionality in order to encode and decode MessageDigest
    records in signatures.  The following bare-bones functions provide this
    support, these are extremely cut-down versions of code normally found in 
-   asn1_rd.c and asn1_ext.c */
+   asn1_rd.c and asn1_ext.c.
+   
+   Note that this code was created for cryptlib 3.4.3 for use in a specific 
+   severely memory-constrained environment and hasn't been maintained since 
+   2015.  It most likely won't compile any more without significant updates
+   to bring it in line with current code, as well as changes to perform more
+   rigorous checking of data */
 
 #ifndef USE_INT_ASN1
 
@@ -220,8 +226,8 @@ static int readMessageDigest( INOUT_PTR STREAM *stream,
 		buffer[ 1 ] > 32 + CRYPT_MAX_HASHSIZE )
 		return( CRYPT_ERROR_BADDATA );
 	if( buffer[ 2 ] != BER_SEQUENCE || \
-		buffer[ 3 ] < 3 + 2 + MIN_HASHSIZE || \
-		buffer[ 3 ] > 32 + CRYPT_MAX_HASHSIZE )
+		buffer[ 3 ] < MIN_OID_SIZE || \
+		buffer[ 3 ] > MAX_OID_SIZE + 2 )
 		return( CRYPT_ERROR_BADDATA );
 	if( buffer[ 4 ] != BER_OBJECT_IDENTIFIER || \
 		buffer[ 5 ] < MIN_OID_SIZE ||
@@ -589,6 +595,10 @@ static int sign( INOUT_PTR MECHANISM_SIGN_INFO *mechanismInfo,
 		return( CRYPT_OK );
 		}
 
+	/* Make sure that the signature fits in the output */
+	if( length > mechanismInfo->signatureLength )
+		return( CRYPT_ERROR_OVERFLOW );
+
 	/* Get the hash data and determine the encoded payload size */
 	setMessageData( &msgData, hash, CRYPT_MAX_HASHSIZE );
 	status = krnlSendMessage( mechanismInfo->hashContext,
@@ -655,6 +665,10 @@ static int sign( INOUT_PTR MECHANISM_SIGN_INFO *mechanismInfo,
 		}
 	ENSURES( cryptStatusError( status ) || stell( &stream ) == length );
 	sMemDisconnect( &stream );
+	zeroise( hash, CRYPT_MAX_HASHSIZE );
+#ifdef USE_TLS
+	zeroise( hash2, CRYPT_MAX_HASHSIZE );
+#endif /* USE_TLS */
 	if( cryptStatusError( status ) )
 		{
 		REQUIRES( isShortIntegerRangeNZ( mechanismInfo->signatureLength ) ); 
@@ -677,6 +691,7 @@ static int sign( INOUT_PTR MECHANISM_SIGN_INFO *mechanismInfo,
 							  length );
 	if( cryptStatusError( status ) )
 		{
+		zeroise( preSigData, CRYPT_MAX_PKCSIZE );
 		REQUIRES( isShortIntegerRangeNZ( mechanismInfo->signatureLength ) ); 
 		zeroise( mechanismInfo->signature, mechanismInfo->signatureLength );
 		return( status );
@@ -923,12 +938,13 @@ int sigcheckTLS( STDC_UNUSED void *dummy,
 #ifdef USE_PSS
 
 /* Trim leading bits in the PSS padding to match the RSA modulus size.  The 
-   RFC requires that we "set the leftmost 8 * emLen - emBits bits of the 
-   leftmost octet in maskedDB to zero", where "emLen = ceil( ( modulus 
-   length in bits - 1 ) / 8 )" and emBits = "(intended) length in bits of an 
-   encoded message EM", which is probably the same as the modulus length in 
-   bits.  The intended effect seems to be to trim the PSS padding to one 
-   less than the modulus size in bits.
+   RFC requires (RFC 8017 section 9.1.2) that we "set the leftmost 
+   8 * emLen - emBits bits of the leftmost octet in maskedDB to zero", where 
+   "emLen = ceil( ( modulus length in bits - 1 ) / 8 )" and 
+   emBits = "(intended) length in bits of an encoded message EM", which is 
+   probably the same as the modulus length in bits.  The intended effect 
+   seems to be to trim the PSS padding to one less than the modulus size in 
+   bits.  We also have to verify the same when we check the signature.
    
    This serves no cryptographic purpose apart from being incredibly awkward 
    to implement, both because clues on what's required are scattered all 
@@ -969,6 +985,7 @@ static int getKeysizeBits( const CRYPT_CONTEXT iCryptContext )
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
+	REQUIRES( rangeCheck( nLength, MIN_PKCSIZE, CRYPT_MAX_PKCSIZE ) );
 
 	/* Count the number of leading zero bits.  There are all sorts of clever
 	   hacks to do this faster than a simple scan, but for eight bits in a
@@ -1025,9 +1042,37 @@ static int trimLeadingBits( INOUT_BYTE BYTE *leadingByte,
 		return( CRYPT_OK );
 		}
 	*leadingByte &= 0xFF >> shiftAmount;
+
 	return( CRYPT_OK );
 	}
-	
+
+CHECK_RETVAL_BOOL \
+static BOOLEAN checkLeadingBits( IN_BYTE const int leadingByte,
+								 IN_LENGTH_PKC const int dataLenBytes,
+								 IN_RANGE( bytesToBits( MIN_PKCSIZE ),
+										   bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
+									const int pkcSizeBits )
+	{
+	const int shiftAmount = \
+				( bytesToBits( dataLenBytes ) + 1 ) - pkcSizeBits;
+
+	REQUIRES_B( leadingByte >= 0 && leadingByte <= 0xFF );
+	REQUIRES_B( dataLenBytes >= MIN_PKCSIZE && \
+				dataLenBytes <= CRYPT_MAX_PKCSIZE );
+	REQUIRES_B( pkcSizeBits >= bytesToBits( MIN_PKCSIZE ) && \
+				pkcSizeBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
+	REQUIRES_B( !checkOverflowSub( bytesToBits( dataLenBytes ) + 1, \
+								   pkcSizeBits ) );
+	if( shiftAmount <= 0 )
+		return( TRUE );				/* No-op */
+	if( shiftAmount > 8 )
+		return( ( leadingByte == 0 ) ? TRUE : FALSE );
+
+	/* Check that the bits that need to be trimmed are actually trimmed */
+	return( ( leadingByte == ( leadingByte & ( 0xFF >> shiftAmount ) ) ) ? \
+			TRUE : FALSE );
+	}
+
 /* Generate the mHash value by hashing '0x00 x 8 || hash || salt' */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 4, 6 ) ) \
@@ -1052,6 +1097,9 @@ static int generateMHash( OUT_BUFFER_FIXED( mHashMaxLen ) BYTE *mHash,
 	REQUIRES( isHashAlgo( hashAlgo ) );
 	REQUIRES( hashSize >= MIN_HASHSIZE && hashSize <= CRYPT_MAX_HASHSIZE );
 	REQUIRES( saltLen >= MIN_HASHSIZE && saltLen <= CRYPT_MAX_HASHSIZE );
+
+	/* Clear return value */
+	memset( mHash, 0, min( 16, mHashMaxLen ) );
 
 	getHashAtomicParameters( hashAlgo, hashSize, &hashFunctionAtomic, 
 							 &hashFunctionSize );
@@ -1262,6 +1310,13 @@ static int recoverPssDataBlock( OUT_BUFFER( mHashMaxLen, *mHashLen ) \
 	ENSURES( padLen > 16 && padLen + ( 2 * hashSize ) + 1 == dataLen && \
 			 padLen < CRYPT_MAX_PKCSIZE - ( MIN_HASHSIZE * 2 ) );
 
+	/* Make sure the leading bits of maskedDB are of the correct shape 
+	   (see the comment for trimLeadingBits() for why this is pointless), 
+	   but we do it anyway so that we can claim compliance with the spec */
+	if( !checkLeadingBits( byteToInt( ( ( const BYTE * ) data )[ 0 ] ), 
+						   dataLen, pkcSizeBits ) )
+		return( CRYPT_ERROR_BADDATA );
+
 	/* dbMask = MGF1( hash, hashSize ) */
 	status = mgf1( dbMask, dbLen, ( BYTE * ) data + dbLen, hashSize, 
 				   hashAlgo, hashSize );
@@ -1324,7 +1379,7 @@ int signPSS( STDC_UNUSED void *dummy,
 	BYTE preSigData[ CRYPT_MAX_PKCSIZE + 8 ];
 	BOOLEAN_INT sideChannelProtectionLevel DUMMY_INIT;
 	CFI_CHECK_TYPE CFI_CHECK_VALUE = CFI_CHECK_INIT;
-	int length, keySizeBits DUMMY_INIT, hashSize, status;
+	int length, keySizeBits DUMMY_INIT, hashSize DUMMY_INIT, status;
 
 	UNUSED_ARG_OPT( dummy );
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_SIGN_INFO ) ) );
@@ -1343,7 +1398,7 @@ int signPSS( STDC_UNUSED void *dummy,
 	if( cryptStatusOK( status ) )
 		{
 		status = getHashAlgoParams( mechanismInfo->hashContext,
-									&hashAlgo, NULL );
+									&hashAlgo, &hashSize );
 		}
 	if( cryptStatusOK( status ) )
 		{
@@ -1358,6 +1413,13 @@ int signPSS( STDC_UNUSED void *dummy,
 		return( status );
 	ANALYSER_HINT( length > MIN_PKCSIZE && length <= CRYPT_MAX_PKCSIZE );
 	CFI_CHECK_UPDATE( "getPkcAlgoParams" );
+
+	/* Make sure that the key is large enough to fit the hash.  This can 
+	   only happen with something like a 1024-bit key combined with a 
+	   SHA-512 hash, which is unlikely to occur given cryptlib's hardcoded 
+	   default of SHA-256 everywhere */
+	if( ( hashSize * 2 ) + 8 > length )
+		return( CRYPT_ERROR_NOTAVAIL );
 
 	/* If this is just a length check, we're done */
 	if( mechanismInfo->signature == NULL )
@@ -1380,19 +1442,23 @@ int signPSS( STDC_UNUSED void *dummy,
 							  CRYPT_CTXINFO_HASHVALUE );
 	if( cryptStatusError( status ) )
 		return( status );
-	hashSize = msgData.length;
 	setMessageData( &msgData, salt, hashSize );
 	status = krnlSendMessage( SYSTEM_OBJECT_HANDLE, 
 							  IMESSAGE_GETATTRIBUTE_S, &msgData, 
 							  CRYPT_IATTRIBUTE_RANDOM_NONCE );
 	if( cryptStatusError( status ) )
+		{
+		zeroise( hash, CRYPT_MAX_HASHSIZE ); 
 		return( status );
+		}
 	CFI_CHECK_UPDATE( "IMESSAGE_GETATTRIBUTE_S" );
 
 	/* Encode the payload */
 	status = generatePssDataBlock( mechanismInfo->signature, length, 
 								   salt, hashSize, hashAlgo, hash, hashSize, 
 								   keySizeBits );
+	zeroise( hash, CRYPT_MAX_HASHSIZE ); 
+	zeroise( salt, CRYPT_MAX_HASHSIZE );
 	if( cryptStatusError( status ) )
 		{
 		REQUIRES( isShortIntegerRangeNZ( mechanismInfo->signatureLength ) ); 
@@ -1416,6 +1482,7 @@ int signPSS( STDC_UNUSED void *dummy,
 							  length );
 	if( cryptStatusError( status ) )
 		{
+		zeroise( preSigData, CRYPT_MAX_PKCSIZE );
 		REQUIRES( isShortIntegerRangeNZ( mechanismInfo->signatureLength ) ); 
 		zeroise( mechanismInfo->signature, mechanismInfo->signatureLength );
 		return( status );
@@ -1439,6 +1506,7 @@ int signPSS( STDC_UNUSED void *dummy,
 			return( status );
 			}
 		}
+	zeroise( preSigData, CRYPT_MAX_PKCSIZE );
 	CFI_CHECK_UPDATE( "checkRecoveredSignature" );
 
 	ENSURES( CFI_CHECK_SEQUENCE_5( "getPkcAlgoParams", 
@@ -1471,7 +1539,7 @@ int sigcheckPSS( STDC_UNUSED void *dummy,
 	if( cryptStatusOK( status ) )
 		{
 		status = getHashAlgoParams( mechanismInfo->hashContext,
-									&hashAlgo, NULL );
+									&hashAlgo, &hashSize );
 		}
 	if( cryptStatusOK( status ) )
 		{
@@ -1488,6 +1556,16 @@ int sigcheckPSS( STDC_UNUSED void *dummy,
 		return( status );
 	ANALYSER_HINT( length > MIN_PKCSIZE && length <= CRYPT_MAX_PKCSIZE );
 	CFI_CHECK_UPDATE( "getPkcAlgoParams" );
+
+	/* Make sure that the key is large enough to fit the hash.  This can 
+	   only happen with something like a 1024-bit key combined with a 
+	   SHA-512 hash, which is unlikely to occur given cryptlib's hardcoded 
+	   default of SHA-256 everywhere */
+	if( ( hashSize * 2 ) + 8 > length )
+		{
+		zeroise( hash, CRYPT_MAX_HASHSIZE );
+		return( CRYPT_ERROR_NOTAVAIL );
+		}
 
 	/* Format the input data as required for the signature check to work */
 	status = adjustPKCS1Data( decryptedSignature, CRYPT_MAX_PKCSIZE,
@@ -1565,11 +1643,15 @@ typedef enum {
 	TEST_NONE,				/* No data block manipulation type */
 	TEST_NORMAL,			/* Standard test */
 	TEST_CORRUPT_START,		/* Corrupt starting byte */
+#ifdef USE_PSS
+	TEST_CORRUPT_LEADINGBITS,/* Corrupt leading bits */
+#endif /* USE_PSS */
 	TEST_CORRUPT_BLOCKTYPE,	/* Corrupt block type */
 	TEST_CORRUPT_PADDING,	/* Corrupt padding data */
 	TEST_CORRUPT_END,		/* Corrupt ending byte */
 	TEST_CORRUPT_OID,		/* Corrupt encoded OID data */
 	TEST_CORRUPT_HASH,		/* Corrupt hash value */
+	TEST_EXTRADATA,			/* Extra data follows hash */
 #ifdef USE_PSS
 	TEST_CORRUPT_MASKEDDB,	/* Corrupt masked DB */
 	TEST_CORRUPT_SALT,		/* Corrupt PSS salt */
@@ -1589,7 +1671,7 @@ static void manipulateDataBlock( INOUT_BUFFER_FIXED( length ) BYTE *buffer,
 								 IN_LENGTH_PKC const int payloadStart,
 								 IN_ENUM( TEST ) const TEST_TYPE testType )
 	{
-	assert( isWritePtr( buffer, length ) );
+	assert( isWritePtrDynamic( buffer, length ) );
 
 	REQUIRES_V( length >= 128 && length <= CRYPT_MAX_PKCSIZE );
 	REQUIRES_V( payloadStart >= 20 && payloadStart < length );
@@ -1605,6 +1687,13 @@ static void manipulateDataBlock( INOUT_BUFFER_FIXED( length ) BYTE *buffer,
 			/* Corrupt the PKCS #1 leading zero */
 			buffer[ 0 ]++;
 			break;
+
+#ifdef USE_PSS
+		case TEST_CORRUPT_LEADINGBITS:
+			/* Corrupt a PSS leading bit that should have been trimmed */
+			buffer[ 0 ] |= 0x80;
+			break;
+#endif /* USE_PSS */
 
 		case TEST_CORRUPT_BLOCKTYPE:
 			/* Corrupt the PKCS #1 block type */
@@ -1652,6 +1741,14 @@ static void manipulateDataBlock( INOUT_BUFFER_FIXED( length ) BYTE *buffer,
 			   OCTET STRING wrapper */
 			assert( buffer[ payloadStart - 2 ] == 0x04 );
 			buffer[ payloadStart + 8 ]++;
+			break;
+
+		case TEST_EXTRADATA:
+			/* Move the hash up so that it's followed by spurious extra 
+			   bytes */
+			memmove( buffer + 8, buffer + 10, length - 10 );
+			buffer[ length - 2 ] = 0x00;
+			buffer[ length - 1 ] = 0x00;
 			break;
 
 #ifdef USE_PSS
@@ -1718,10 +1815,13 @@ static int testPKCS1( IN_ENUM( TEST ) const TEST_TYPE testType )
 	   put in */
 	sMemConnect( &stream, buffer, length );
 	status = decodePKCS1( &stream, length );
-	if( cryptStatusError( status ) )
-		return( status );
-	return( compareHashInfo( &stream, DEFAULT_HASH_ALGO, hash, 
-							 DEFAULT_HASH_PARAM ) );
+	if( cryptStatusOK( status ) )
+		{
+		status = compareHashInfo( &stream, DEFAULT_HASH_ALGO, hash, 
+							 DEFAULT_HASH_PARAM );
+		}
+	sMemDisconnect( &stream );
+	return( status );
 #else
   #if defined( _MSC_VER ) || defined( __GNUC__ ) || defined( __clang__ )
 	#pragma message( "  Skipping PKCS #1 self-test since CRYPT_MAX_PKCSIZE < 2048 bits." )
@@ -1861,11 +1961,13 @@ int signSelftest( STDC_UNUSED void *dummy,
 		{ TEST_CORRUPT_END, CRYPT_ERROR_BADDATA },
 		{ TEST_CORRUPT_OID, CRYPT_ERROR_NOTAVAIL },
 		{ TEST_CORRUPT_HASH, CRYPT_ERROR_SIGNATURE },
+		{ TEST_EXTRADATA, CRYPT_ERROR_BADDATA },
 			{ TEST_NONE }, { TEST_NONE }
 		};
 #ifdef USE_PSS
 	static const TEST_INFO pssTestInfo[] = {
 		{ TEST_CORRUPT_START, CRYPT_ERROR_BADDATA },
+		{ TEST_CORRUPT_LEADINGBITS, CRYPT_ERROR_BADDATA },
 		{ TEST_CORRUPT_MASKEDDB, CRYPT_ERROR_BADDATA },
 		{ TEST_CORRUPT_MHASH, CRYPT_ERROR_BADDATA },
 		{ TEST_CORRUPT_BC, CRYPT_ERROR_BADDATA },

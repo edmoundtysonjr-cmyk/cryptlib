@@ -197,7 +197,7 @@ static int writeCipherSuiteList( INOUT_PTR STREAM *stream,
 			!( suiteFlags & ( CIPHERSUITE_FLAG_TLS12 | \
 							  CIPHERSUITE_FLAG_TLS13 ) ) )
 			{
-			/* If the minimum version is set to TLS 1.2 then we disallowe 
+			/* If the minimum version is set to TLS 1.2 then we disallow 
 			   suites from older TLS versions, which in practice means all
 			   of the SHA-1 suites, with TLS 1.2 and above using only SHA-2 */
 			suiteIndex++;
@@ -534,7 +534,7 @@ static int processCertRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   length and therefore fragmented packet we can't use readUniversal16() 
 	   but have to apply custom processing that deals with over-long 
 	   packets.  We're also more careful than usual in checking the length
-	   to make sure that someone can't mess with us using a fragemented
+	   to make sure that someone can't mess with us using a fragmented
 	   packet */
 	status = length = readUint16( stream );		/* caNameListLen */
 	if( cryptStatusError( status ) )
@@ -1531,12 +1531,12 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   extension that we don't know about.  Because of this we perform
 	   basic validity checks on any supplemental data messages that arrive
 	   but otherwise ignore them */
-	status = refreshHSStream( sessionInfoPtr, handshakeInfo );
-	if( cryptStatusError( status ) )
-		return( status );
 #if 0	/* 18/2/26 This code was present from 3.3.1 in 2006 until 3.4.9 in
 				   2026 without ever being triggered so it's unlikely to be 
 				   needed */
+	status = refreshHSStream( sessionInfoPtr, handshakeInfo );
+	if( cryptStatusError( status ) )
+		return( status );
 	if( sPeek( stream ) == TLS_HAND_SUPPLEMENTAL_DATA )
 		{
 		status = checkHSPacketHeader( sessionInfoPtr, stream, &length,

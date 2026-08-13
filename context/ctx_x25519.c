@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					cryptlib 25519 Key Exchange Routines					*
-*					  Copyright Peter Gutmann 2023-2024						*
+*					  Copyright Peter Gutmann 2023-2025						*
 *																			*
 ****************************************************************************/
 
@@ -41,6 +41,14 @@
 /* The size of the Curve25519 components */
 
 #define CURVE25519_SIZE		32
+
+/* Prototype for function in context/kg_25519.c */
+
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
+BOOLEAN checkX25519PublicValue( IN_BUFFER( CURVE25519_SIZE ) \
+									const void *pubValue,
+								IN_LENGTH_FIXED( CURVE25519_SIZE )
+									const int pubValueLength );
 
 /****************************************************************************
 *																			*
@@ -103,12 +111,12 @@
 typedef BYTE POINT_DATA[ CURVE25519_SIZE ];
 
 static const POINT_DATA invalidPointData[] = {
-	/* 0 (order 4) */
+	/* 0 (order 2) */
 	{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 	  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 	  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 	  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-	/* 1 (order 1) */
+	/* 1 (order 4) */
 	{ 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 	  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 	  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
@@ -123,17 +131,17 @@ static const POINT_DATA invalidPointData[] = {
 	  0xB1, 0xD0, 0xB1, 0x55, 0x9C, 0x83, 0xEF, 0x5B, 
 	  0x04, 0x44, 0x5C, 0xC4, 0x58, 0x1C, 0x8E, 0x86, 
 	  0xD8, 0x22, 0x4E, 0xDD, 0xD0, 0x9F, 0x11, 0x57 },
-	/* 2^255 - 19 - 1, i.e. p-1 (order 2) */
+	/* 2^255 - 19 - 1, i.e. p-1 (order 4) */
 	{ 0xEC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
 	  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
 	  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
 	  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F },
-	/* 2^255 - 19, i.e. p (order 4) */
+	/* 2^255 - 19, i.e. p (order 2) */
 	{ 0xED, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
 	  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
 	  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
 	  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F },
-	/* 2^255 - 19 + 1, i.e. p + 1 (order 1) */
+	/* 2^255 - 19 + 1, i.e. p + 1 (order 4) */
 	{ 0xEE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
 	  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
 	  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
@@ -168,10 +176,24 @@ static const POINT_DATA invalidPointData[] = {
 	};
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN is25519SmallOrder( IN_BUFFER( CURVE25519_SIZE ) \
-								const BYTE *pubValue )
+static BOOLEAN is25519SmallOrder( IN_BUFFER( CURVE25519_SIZE ) \
+									const BYTE *pubValue )
 	{
+	BYTE pubValueBuffer[ CURVE25519_SIZE + 8 ];
 	LOOP_INDEX i;
+	
+	assert( isReadPtr( pubValue, CURVE25519_SIZE ) );
+
+	/* RFC 7748 requires that we mask the MSB of the last byte, see the 
+	   comment for context/kg_25519.c:checkMagnitude25519() for the weird 
+	   placement of this bit.
+	   
+	   Note that this leaves some of the table entries, specifically the
+	   ones with the masked bit set, dead, but we leave them in place because
+	   that's the canonical list from https://cr.yp.to/ecdh.html and all it
+	   costs is a few extra memcmp()s */
+	memcpy( pubValueBuffer, pubValue, CURVE25519_SIZE );
+	pubValueBuffer[ CURVE25519_SIZE - 1 ] &= 0x7F;
 
 	LOOP_MED( i = 0, 
 			  i < FAILSAFE_ARRAYSIZE( invalidPointData, POINT_DATA ) && \
@@ -184,10 +206,17 @@ BOOLEAN is25519SmallOrder( IN_BUFFER( CURVE25519_SIZE ) \
 															 POINT_DATA ) - 1 ),
 					 TRUE );
 
-		if( !memcmp( pubValue, invalidPointData[ i ], CURVE25519_SIZE ) )
+		/* These are public values so we don't need a constant-time 
+		   compare */
+		if( !memcmp( pubValueBuffer, invalidPointData[ i ], 
+					 CURVE25519_SIZE ) )
+			{
+			zeroise( pubValueBuffer, CURVE25519_SIZE );
 			return( TRUE );
+			}
 		}
 	ENSURES_EXT( LOOP_BOUND_OK, TRUE );
+	zeroise( pubValueBuffer, CURVE25519_SIZE );
 	
 	return( FALSE );
 	}
@@ -253,6 +282,7 @@ static BOOLEAN pairwiseConsistencyTest( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
 	CONTEXT_INFO checkContextInfo;
 	PKC_INFO contextData, *pkcInfo = &contextData;
+	BERNSTEIN_KEY_INFO *bernsteinKey;
 	KEYAGREE_PARAMS keyAgreeParams1, keyAgreeParams2;
 	const CAPABILITY_INFO *capabilityInfoPtr;
 	int status;
@@ -261,25 +291,13 @@ static BOOLEAN pairwiseConsistencyTest( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 
 	REQUIRES_B( sanityCheckContext( contextInfoPtr ) );
 
-	/* Load a second DH key to use for key agreement with the first one */
+	/* Load a second 25519 key to use for key agreement with the first one */
 	status = staticInitContext( &checkContextInfo, CONTEXT_PKC, 
 								getX25519Capability(), &contextData, 
 								sizeof( PKC_INFO ), NULL );
 	if( cryptStatusError( status ) )
 		return( FALSE );
-	status = import25519ByteString( &pkcInfo->curve25519Param_pub, 
-									x25519TestKey2.pub, CURVE25519_SIZE );
-	if( cryptStatusOK( status ) )
-		{
-		status = import25519ByteString( &pkcInfo->curve25519Param_priv, 
-										x25519TestKey2.priv, 
-										CURVE25519_SIZE );
-		}
-	if( cryptStatusError( status ) )
-		{
-		staticDestroyContext( &checkContextInfo );
-		return( FALSE );
-		}
+	bernsteinKey = pkcInfo->bernsteinKey;
 
 	/* Perform the pairwise test using the check key */
 	capabilityInfoPtr = DATAPTR_GET( checkContextInfo.capabilityInfo );
@@ -334,13 +352,23 @@ static int selfTest( void )
 	const CAPABILITY_INFO *capabilityInfoPtr;
 	CONTEXT_INFO contextInfo;
 	PKC_INFO contextData, *pkcInfo = &contextData;
+	BERNSTEIN_KEY_INFO *bernsteinKey;
 	KEYAGREE_PARAMS keyAgreeParams;
 	int status;
 
 	/* Make sure that the detection of small-order values is working 
-	   correctly */
-	if( clib_x25519_pubkey_verify( invalidPointData[ 6 ] ) || \
-		!clib_x25519_pubkey_verify( x25519TestKey1.pub ) )
+	   correctly.  The first check serves to exercise the clib_x25519_XXX()
+	   functions which perform arithmetic checks on public keys, the second
+	   the local is25519SmallOrder() which checks against a blocklist 
+	   (although there's something seriously wrong if a memcmp() against a 
+	   fixed value fails).  
+	   
+	   We use the second invalid point, not the first, which is an all-zero
+	   value that's trivially rejected by any x_is_zero() check */
+	if( clib_x25519_pubkey_verify( invalidPointData[ 1 ] ) || \
+		!clib_x25519_pubkey_verify( x25519TestKey1.pub ) || \
+		is25519SmallOrder( x25519TestKey1.pub ) || \
+		!is25519SmallOrder( invalidPointData[ 1 ] ) )
 		{
 		DEBUG_DIAG(( "Failed to detect small-order 25519 value" ));
 		return( CRYPT_ERROR_FAILED );
@@ -353,13 +381,8 @@ static int selfTest( void )
 								sizeof( PKC_INFO ), NULL );
 	if( cryptStatusError( status ) )
 		return( CRYPT_ERROR_FAILED );
-	status = import25519ByteString( &pkcInfo->curve25519Param_priv, 
-									x25519TestKey1.priv, CURVE25519_SIZE );
-	if( cryptStatusError( status ) )
-		{
-		staticDestroyContext( &contextInfo );
-		retIntError();
-		}
+	bernsteinKey = pkcInfo->bernsteinKey;
+	memcpy( bernsteinKey->privKey, x25519TestKey1.priv, CURVE25519_SIZE );
 	memset( &keyAgreeParams, 0, sizeof( KEYAGREE_PARAMS ) );
 	capabilityInfoPtr = DATAPTR_GET( contextInfo.capabilityInfo );
 	REQUIRES( capabilityInfoPtr != NULL );
@@ -384,19 +407,9 @@ static int selfTest( void )
 								sizeof( PKC_INFO ), NULL );
 	if( cryptStatusError( status ) )
 		return( CRYPT_ERROR_FAILED );
-	status = import25519ByteString( &pkcInfo->curve25519Param_pub, 
-									x25519TestKey1.pub, CURVE25519_SIZE );
-	if( cryptStatusOK( status ) )
-		{
-		status = import25519ByteString( &pkcInfo->curve25519Param_priv, 
-										x25519TestKey1.priv, 
-										CURVE25519_SIZE );
-		}
-	if( cryptStatusError( status ) )
-		{
-		staticDestroyContext( &contextInfo );
-		retIntError();
-		}
+	bernsteinKey = pkcInfo->bernsteinKey;
+	memcpy( bernsteinKey->pubKey, x25519TestKey1.pub, CURVE25519_SIZE );
+	memcpy( bernsteinKey->privKey, x25519TestKey1.priv, CURVE25519_SIZE );
 
 	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
@@ -432,26 +445,29 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					  INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					  IN_LENGTH_FIXED( sizeof( KEYAGREE_PARAMS ) ) int noBytes )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	BERNSTEIN_KEY_INFO *bernsteinKey;
 	KEYAGREE_PARAMS *keyAgreeParams = ( KEYAGREE_PARAMS * ) buffer;
-	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( keyAgreeParams, sizeof( KEYAGREE_PARAMS ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( noBytes == sizeof( KEYAGREE_PARAMS ) );
-	REQUIRES( !BN_is_zero( &pkcInfo->curve25519Param_pub ) );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	bernsteinKey = pkcInfo->bernsteinKey;
+	REQUIRES( !isEmptyData( bernsteinKey->pubKey, CURVE25519_SIZE ) );
 
 	/* The public value is generated either at keygen time for static DH or 
 	   as a side-effect of the implicit generation of the private value for 
 	   ephemeral DH, so all we have to do is copy it to the output */
-	status = export25519ByteString( keyAgreeParams->publicValue, 
-									CRYPT_MAX_PKCSIZE,
-									&keyAgreeParams->publicValueLen, 
-									&pkcInfo->curve25519Param_pub );
-	if( cryptStatusError( status ) )
-		return( status );
+	REQUIRES( rangeCheck( CURVE25519_SIZE, 1, CRYPT_MAX_PKCSIZE ) );
+	memcpy( keyAgreeParams->publicValue, bernsteinKey->pubKey, 
+			CURVE25519_SIZE );
+	keyAgreeParams->publicValueLen = CURVE25519_SIZE;
 
 	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
@@ -466,9 +482,9 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					  IN_LENGTH_FIXED( sizeof( KEYAGREE_PARAMS ) ) int noBytes )
 	{
 	KEYAGREE_PARAMS *keyAgreeParams = ( KEYAGREE_PARAMS * ) buffer;
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
-	BYTE privKeyBuffer[ CURVE25519_SIZE + 8 ];
-	int privKeyLength, osslStatus, status;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	BERNSTEIN_KEY_INFO *bernsteinKey;
+	int osslStatus;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( keyAgreeParams, sizeof( KEYAGREE_PARAMS ) ) );
@@ -478,19 +494,18 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( noBytes == sizeof( KEYAGREE_PARAMS ) );
 	REQUIRES( keyAgreeParams->publicValueLen == CURVE25519_SIZE );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	bernsteinKey = pkcInfo->bernsteinKey;
 
 	/* Make sure that the public value is kosher */
-	if( is25519SmallOrder( keyAgreeParams->publicValue ) )
+	if( is25519SmallOrder( keyAgreeParams->publicValue ) || \
+		!checkX25519PublicValue( keyAgreeParams->publicValue, \
+								 CURVE25519_SIZE ) )
 		return( CRYPT_ERROR_NOSECURE );
-
-	/* The private key is handled in Bernstein special-snowflake form so we 
-	   have to export it from the bignum to work with it */
-	status = export25519ByteString( privKeyBuffer, CURVE25519_SIZE, 
-									&privKeyLength, 
-									&pkcInfo->curve25519Param_priv );
-	if( cryptStatusError( status ) )
-		return( status );
-
+		
 	/* Perform the X25519 computation to obtain the shared secret and make 
 	   sure that the result looks random.  There's a long, as in tl;dr, 
 	   argument that this isn't necessary for 25519 except where it is, but
@@ -499,16 +514,19 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   Since this function reads the input and produces the output directly 
 	   rather than going via a bignum, there's no need to explicitly call 
 	   import/export25519ByteString() */
-	osslStatus = ossl_x25519( keyAgreeParams->wrappedKey, privKeyBuffer, 
+	osslStatus = ossl_x25519( keyAgreeParams->wrappedKey, 
+							  bernsteinKey->privKey, 
 							  keyAgreeParams->publicValue );
-	zeroise( privKeyBuffer, CURVE25519_SIZE );
-	if( !osslStatus || \
+	if( osslStatus != TRUE || \
 		!checkEntropy( keyAgreeParams->wrappedKey, CURVE25519_SIZE ) )
 		{
 		/* ossl_x25519() can only return a true/false status, but the only
 		   reason to return a false status is if the result is an insecure
 		   value, so both conditions checked for here convert to a 
-		   CRYPT_ERROR_NOSECURE */
+		   CRYPT_ERROR_NOSECURE.  Note that this is branching on a secret
+		   value but since the call is coming from the SSH/TLS code the
+		   variation will both be lost in the noise and irrelevant since
+		   it's an ephemeral value */
 		zeroise( keyAgreeParams->wrappedKey, CURVE25519_SIZE );
 		return( CRYPT_ERROR_NOSECURE );
 		}
@@ -532,8 +550,6 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					IN_BUFFER_OPT( keyLength ) const void *key,
 					IN_LENGTH_SHORT_OPT const int keyLength )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
-
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( ( key == NULL && keyLength == 0 ) || \
 			( isReadPtrDynamic( key, keyLength ) && \
@@ -549,22 +565,25 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	if( key != NULL )
 		{
 		const CRYPT_PKCINFO_DJB *x25519Key = ( CRYPT_PKCINFO_DJB * ) key;
-		int status;
+		PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+		BERNSTEIN_KEY_INFO *bernsteinKey;
+
+		REQUIRES( pkcInfo != NULL );
+
+		/* Now that we've checked everything, set up the various values that
+		   we'll need */
+		bernsteinKey = pkcInfo->bernsteinKey;
 
 		if( x25519Key->isPublicKey )
 			SET_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_ISPUBLICKEY );
 		else
 			SET_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_PBO );
-		status = import25519ByteString( &pkcInfo->curve25519Param_pub, 
-										x25519Key->pub, CURVE25519_SIZE );
-		if( cryptStatusOK( status ) && !x25519Key->isPublicKey )
+		memcpy( bernsteinKey->pubKey, x25519Key->pub, CURVE25519_SIZE );
+		if( !x25519Key->isPublicKey )
 			{
-			status = import25519ByteString( &pkcInfo->curve25519Param_priv, 
-											x25519Key->priv, 
-											CURVE25519_SIZE );
+			memcpy( bernsteinKey->privKey, x25519Key->priv, 
+					CURVE25519_SIZE );
 			}
-		if( cryptStatusError( status ) )
-			return( status );
 
 		ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 		}
@@ -578,7 +597,7 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
-						IN_LENGTH_SHORT_MIN( MIN_PKCSIZE * 8 ) \
+						IN_LENGTH_FIXED( bytesToBits( CURVE25519_SIZE ) ) \
 							const int keySizeBits )
 	{
 	int status;

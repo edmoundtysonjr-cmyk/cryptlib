@@ -817,6 +817,7 @@ static int readAlgoIDInfo( INOUT_PTR STREAM *stream,
 		{
 		/* Turn pkcWithHash into hash */
 		queryInfo->cryptAlgo = algoIDparams.hashAlgo;
+		queryInfo->hashParam = algoIDparams.hashParam;
 		}
 
 	/* Hash algorithms will either have NULL parameters or none at all
@@ -848,8 +849,8 @@ int readAlgoID( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( cryptAlgo, sizeof( CRYPT_ALGO_TYPE ) ) );
 
-	REQUIRES_S( type == ALGOID_CLASS_HASH || type == ALGOID_CLASS_PKC || \
-				type == ALGOID_CLASS_PKCSIG );
+	REQUIRES_S( type == ALGOID_CLASS_HASH || type == ALGOID_CLASS_MAC || \
+				type == ALGOID_CLASS_PKC || type == ALGOID_CLASS_PKCSIG );
 
 	return( readAlgoIDparams( stream, cryptAlgo, NULL, type, DEFAULT_TAG ) );
 	}
@@ -866,8 +867,8 @@ int readAlgoIDexTag( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( algoIDparams, sizeof( ALGOID_PARAMS ) ) );
 
 	REQUIRES_S( tag == DEFAULT_TAG || ( tag >= 0 && tag < MAX_TAG_VALUE ) );
-	REQUIRES_S( type == ALGOID_CLASS_HASH || type == ALGOID_CLASS_PKC || \
-				type == ALGOID_CLASS_PKCSIG );
+	REQUIRES_S( type == ALGOID_CLASS_HASH || type == ALGOID_CLASS_MAC || \
+				type == ALGOID_CLASS_PKC || type == ALGOID_CLASS_PKCSIG );
 
 	return( readAlgoIDparams( stream, cryptAlgo, algoIDparams, type, tag ) );
 	}
@@ -893,7 +894,7 @@ int readContextAlgoID( INOUT_PTR STREAM *stream,
 
 	REQUIRES_S( tag == DEFAULT_TAG || ( tag >= 0 && tag < MAX_TAG_VALUE ) );
 	REQUIRES_S( type == ALGOID_CLASS_CRYPT || type == ALGOID_CLASS_HASH || \
-				type == ALGOID_CLASS_AUTHENC );
+				type == ALGOID_CLASS_MAC || type == ALGOID_CLASS_AUTHENC );
 
 	/* Clear return value */
 	if( iCryptContext != NULL )
@@ -952,6 +953,7 @@ int readContextAlgoID( INOUT_PTR STREAM *stream,
 	status = krnlSendMessage( createInfo.cryptHandle, IMESSAGE_SETATTRIBUTE,
 							  &mode, CRYPT_CTXINFO_MODE );
 	if( cryptStatusOK( status ) && \
+		needsIV( queryInfoPtr->cryptMode ) && \
 		!isStreamCipher( queryInfoPtr->cryptAlgo ) )
 		{
 		MESSAGE_DATA msgData;
@@ -1241,7 +1243,8 @@ int sizeofECCOID( IN_ENUM( CRYPT_ECCCURVE ) \
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 int readECCOID( INOUT_PTR STREAM *stream, 
-				OUT_OPT CRYPT_ECCCURVE_TYPE *curveType,
+				OUT_ENUM_OPT( CRYPT_ECCCURVE ) \
+					CRYPT_ECCCURVE_TYPE *curveType,
 				OUT_INT_Z int *fieldSize )
 	{
 	const OID_INFO *oidInfo;

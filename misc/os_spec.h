@@ -1030,32 +1030,6 @@ typedef int					BOOLEAN_INT;
 								strnicmp( str1, str2, len )
 #endif /* EBCDIC_CHARS */
 
-/* SunOS and older Slowaris have broken sprintf() handling.  In SunOS 4.x
-   this was documented as returning a pointer to the output data as per the
-   Berkeley original.  Under Slowaris the manpage was changed so that it
-   looks like any other sprintf(), but it still returns the pointer to the
-   output buffer in some versions so we use a wrapper that checks at
-   runtime to see what we've got and adjusts its behaviour accordingly */
-
-#if defined( sun ) && ( OSVERSION <= 5 )
-  int fixedSprintf( char *buffer, const int bufSize,
-					const char *format, ... );
-
-  #undef sPrintf_s
-  #define sPrintf_s				fixedSprintf
-#endif /* Old SunOS */
-
-/* Borland C++ before 5.50 doesn't have snprintf() or vsnprintf() */
-
-#if defined( __BORLANDC__ ) && ( __BORLANDC__ < 0x550 )
-  #include <stdarg.h>
-
-  int bcSnprintf( char *buffer, const int bufSize,
-				  const char *format, ... );
-  int bcVsnprintf( char *buffer, const int bufSize,
-				   const char *format, va_list argPtr );
-#endif /* BC++ before 5.50 */
-
 /****************************************************************************
 *																			*
 *						Pointer / Data Alignment Handling					*

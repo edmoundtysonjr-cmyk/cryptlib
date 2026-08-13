@@ -38,7 +38,10 @@
    length.  If it's longer we try to strip leading zero bytes.  If it's 
    shorter we pad it with zero bytes to match the key size.  The result is
    either the data adjusted to match the key size or CRYPT_ERROR_BADDATA if
-   this isn't possible */
+   this isn't possible.
+   
+   Note that this is public data, an integer value read from the wire, so we 
+   don't have to be especially careful about side-channels */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int adjustPKCS1Data( OUT_BUFFER_FIXED( outDataMaxLen ) BYTE *outData, 
@@ -48,7 +51,7 @@ int adjustPKCS1Data( OUT_BUFFER_FIXED( outDataMaxLen ) BYTE *outData,
 					 IN_LENGTH_SHORT const int inLen, 
 					 IN_LENGTH_SHORT const int keySize )
 	{
-	int length, LOOP_ITERATOR;
+	LOOP_INDEX length;
 
 	assert( isWritePtrDynamic( outData, outDataMaxLen ) );
 	assert( isReadPtrDynamic( inData, inLen ) );
@@ -107,6 +110,8 @@ int getPkcAlgoParams( IN_HANDLE const CRYPT_CONTEXT pkcContext,
 					  OUT_OPT_ALGO_Z CRYPT_ALGO_TYPE *pkcAlgo, 
 					  OUT_LENGTH_PKC_Z int *pkcKeySize )
 	{
+	int value, status;
+	
 	assert( ( pkcAlgo == NULL ) || \
 			isWritePtr( pkcAlgo, sizeof( CRYPT_ALGO_TYPE ) ) );
 	assert( isWritePtr( pkcKeySize, sizeof( int ) ) );
@@ -119,18 +124,22 @@ int getPkcAlgoParams( IN_HANDLE const CRYPT_CONTEXT pkcContext,
 	*pkcKeySize = 0;
 
 	/* Get various PKC algorithm parameters */
-	if( pkcAlgo != NULL )
+	status = krnlSendMessage( pkcContext, IMESSAGE_GETATTRIBUTE, 
+							  &value, CRYPT_CTXINFO_KEYSIZE );
+	if( cryptStatusOK( status ) && pkcAlgo != NULL )
 		{
-		int algorithm, status;
+		int algorithm;
 
 		status = krnlSendMessage( pkcContext, IMESSAGE_GETATTRIBUTE, 
 								  &algorithm, CRYPT_CTXINFO_ALGO );
-		if( cryptStatusError( status ) )
-			return( status );
-		*pkcAlgo = algorithm;	/* int vs.enum */
+		if( cryptStatusOK( status ) )
+			*pkcAlgo = algorithm;	/* int vs.enum */
 		}
-	return( krnlSendMessage( pkcContext, IMESSAGE_GETATTRIBUTE, 
-							 pkcKeySize, CRYPT_CTXINFO_KEYSIZE ) );
+	if( cryptStatusError( status ) )
+		return( status );
+	*pkcKeySize = value;
+	
+	return( CRYPT_OK );
 	}
 
 /****************************************************************************
@@ -154,13 +163,13 @@ int mgf1( OUT_BUFFER_FIXED( maskLen ) void *mask,
 	HASH_FUNCTION hashFunction;
 	HASHINFO hashInfo;
 	BYTE countBuffer[ 4 + 8 ], maskBuffer[ CRYPT_MAX_HASHSIZE + 8 ];
-	BYTE *maskOutPtr = mask;
 	LOOP_INDEX maskIndex;
 	int hashSize, blockCount = 0;
 
 	assert( isWritePtrDynamic( mask, maskLen ) );
 	assert( isReadPtrDynamic( seed, seedLen ) );
 
+	REQUIRES( mask != seed );
 	REQUIRES( maskLen >= MIN_HASHSIZE && maskLen <= CRYPT_MAX_PKCSIZE );
 	REQUIRES( seedLen >= MIN_HASHSIZE && seedLen <= CRYPT_MAX_PKCSIZE );
 	REQUIRES( isHashAlgo( hashAlgo ) );
@@ -179,10 +188,10 @@ int mgf1( OUT_BUFFER_FIXED( maskLen ) void *mask,
 	memset( countBuffer, 0, 4 );
 
 	/* Produce enough blocks of output to fill the mask */
-	LOOP_MED( maskIndex = 0, maskIndex < maskLen, 
-			  ( maskIndex += hashSize, maskOutPtr += hashSize ) )
+	LOOP_MED( maskIndex = 0, maskIndex < maskLen, maskIndex += hashSize )
 		{
 		const int noMaskBytes = min( hashSize, maskLen - maskIndex );
+		BYTE *maskOutPtr = ( BYTE * ) mask + maskIndex;
 
 		ENSURES( LOOP_INVARIANT_MED_XXX( maskIndex, 0, maskLen - 1 ) );
 				 /* maskIndex is incremented by the number of output bytes */
@@ -190,8 +199,9 @@ int mgf1( OUT_BUFFER_FIXED( maskLen ) void *mask,
 		REQUIRES( !checkOverflowSub( maskLen, maskIndex ) );
 
 		/* Calculate hash( seed || counter ) */
-		REQUIRES( !checkOverflowInc( blockCount ) );
-		countBuffer[ 3 ] = ( BYTE ) blockCount++;
+		REQUIRES( rangeCheck( blockCount, 0, 255 ) );
+		countBuffer[ 3 ] = intToByte( blockCount );
+		blockCount++;
 		hashFunction( hashInfo, NULL, 0, seed, seedLen, HASH_STATE_START );
 		hashFunction( hashInfo, maskBuffer, hashSize, countBuffer, 4, 
 					  HASH_STATE_END );
@@ -229,13 +239,14 @@ int getHashAlgoParams( IN_HANDLE const CRYPT_CONTEXT hashContext,
 	/* Get various hash algorithm parameters */
 	status = krnlSendMessage( hashContext, IMESSAGE_GETATTRIBUTE, 
 							  &value, CRYPT_CTXINFO_ALGO );
-	if( cryptStatusError( status ) )
-		return( status );
-	*hashAlgo = value;	/* int vs.enum */
-	if( hashParam != NULL )
+	if( cryptStatusOK( status ) && hashParam != NULL )
 		{
 		status = krnlSendMessage( hashContext, IMESSAGE_GETATTRIBUTE, 
 								  hashParam, CRYPT_CTXINFO_BLOCKSIZE );
 		}
-	return( status );
+	if( cryptStatusError( status ) )
+		return( status );
+	*hashAlgo = value;	/* int vs.enum */
+
+	return( CRYPT_OK );
 	}

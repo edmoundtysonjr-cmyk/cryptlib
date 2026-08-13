@@ -41,21 +41,6 @@
   #define X917_POOLSIZE			16
 #endif /* USE_3DES_X917 */
 
-/* cryptlib 2.00 to 3.42 use SHA-1 in the PRNG, cryptlib 3.43+ used SHA-2,
-   which simplifies things somewhat since the 32-byte output is a multiple
-   of the random pool size */
-
-#ifdef USE_SHA1_PRNG
-  /* The allocated size of the randomness pool, which allows for the 
-     overflow created by the fact that the hash function blocksize, 20 bytes 
-	 for SHA-1, isn't any useful multiple of a power of 2 */
-  #define PRNG_ALGO				CRYPT_ALGO_SHA1
-  #define RANDOMPOOL_ALLOCSIZE	( ( ( RANDOMPOOL_SIZE + 20 - 1 ) / 20 ) * 20 )
-#else
-  #define PRNG_ALGO				CRYPT_ALGO_SHA2
-  #define RANDOMPOOL_ALLOCSIZE	RANDOMPOOL_SIZE
-#endif /* SHA-1 vs. SHA-2 PRNG */
-
 /* The number of short samples of previous output that we keep for the FIPS
    140 continuous tests, and the number of retries that we perform if we
    detect a repeat of a previous output */
@@ -63,8 +48,8 @@
 #define RANDOMPOOL_SAMPLES		16
 #define RANDOMPOOL_RETRIES		5
 
-/* The size of the X9.17 generator key, 112/128 bits for 3DES/AES, and the 
-   size of the generator output */
+/* The size of the X9.17 generator key, 128 bits for AES, and the size of 
+   the generator output */
 
 #define X917_KEYSIZE			16
 #define X917_BLOCKSIZE			X917_POOLSIZE
@@ -122,8 +107,8 @@ typedef struct {
 
 typedef struct RI {
 	/* Pool state information */
-	BUFFER( RANDOMPOOL_ALLOCSIZE, randomPoolPos ) \
-	BYTE randomPool[ RANDOMPOOL_ALLOCSIZE + 8 ];/* Random byte pool */
+	BUFFER( RANDOMPOOL_SIZE, randomPoolPos ) \
+	BYTE randomPool[ RANDOMPOOL_SIZE + 8 ];/* Random byte pool */
 	int randomPoolPos;		/* Current write position in the pool */
 
 	/* Pool status information */
@@ -190,16 +175,16 @@ int setKeyX917( INOUT_PTR RANDOM_INFO *randomInfo,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int generateX917( INOUT_PTR RANDOM_INFO *randomInfo, 
 				  INOUT_BUFFER_FIXED( length ) BYTE *data,
-				  IN_RANGE( 1, RANDOMPOOL_ALLOCSIZE ) const int length );
+				  IN_RANGE( 1, RANDOMPOOL_SIZE ) const int length );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int initX917( INOUT_PTR RANDOM_INFO *randomInfo );
 #ifndef CONFIG_NO_SELFTEST_
 CHECK_RETVAL \
 int randomAlgorithmSelfTest( void );
-CHECK_RETVAL \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int selfTestX917( INOUT_PTR RANDOM_INFO *randomInfo, 
-				  IN_BUFFER_C( X917_KEYSIZE ) const BYTE *key );
-CHECK_RETVAL \
+				  IN_BUFFER_C( X917_KEYSIZE * 2 ) const BYTE *key );
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int fipsTestX917( INOUT_PTR RANDOM_INFO *randomInfo );
 #else
   #define randomAlgorithmSelfTest()			CRYPT_OK

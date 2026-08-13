@@ -5,9 +5,11 @@
 *																			*
 ****************************************************************************/
 
-#ifdef __STDC__
-  #include <stddef.h>		/* For offsetof() */
-#endif /* __STDC__ */
+#if defined( __STDC__ ) || defined( _MSC_VER )
+  /* Needed for offsetof(), VC++ wasn't __STDC__ for a long time so we need 
+     an explicit exception for that case */
+  #include <stddef.h>
+#endif /* __STDC__ || Visual Studio */
 #include "crypt.h"
 
 /* General storage includes */
@@ -325,8 +327,10 @@ typedef struct {
 	   MIPS64 which 64-bit aligns the first element but only 32-bit aligns the
 	   successor ones */
 	ALIGN_STRUCT_FIELD SYSTEM_DEVICE_STORAGE systemDeviceStorage;
+	const STORAGE_CANARY_DATA systemDeviceCanary;
 	BOOLEAN systemDeviceStorageUsed;
 	ALIGN_STRUCT_FIELD USER_OBJECT_STORAGE userObjectStorage;
+	const STORAGE_CANARY_DATA userObjectCanary;
 	BOOLEAN userObjectStorageUsed;
 #if defined( CONFIG_CRYPTO_HW1 ) || defined( CONFIG_CRYPTO_HW2 )
 	ALIGN_STRUCT_FIELD \
@@ -335,25 +339,35 @@ typedef struct {
 #endif /* CONFIG_CRYPTO_HW1 || CONFIG_CRYPTO_HW2 */
 #ifdef USE_KEYSETS
 	ALIGN_STRUCT_FIELD KEYSET_STORAGE keysetStorage0;
+	const STORAGE_CANARY_DATA keyset0Canary;
   #if NO_KEYSET_OBJECTS > 1
 	ALIGN_STRUCT_FIELD KEYSET_STORAGE keysetStorage1;
+	const STORAGE_CANARY_DATA keyset1Canary;
   #endif /* NO_KEYSET_OBJECTS > 1 */
 	BOOLEAN keysetStorageUsed[ NO_KEYSET_OBJECTS ];
 #endif /* USE_KEYSETS */
 	ALIGN_STRUCT_FIELD AES_STORAGE aesStorage0;
+	const STORAGE_CANARY_DATA aes0Canary;
 	ALIGN_STRUCT_FIELD AES_STORAGE aesStorage1;
+	const STORAGE_CANARY_DATA aes1Canary;
 	BOOLEAN aesStorageUsed[ NO_AES_CONTEXTS ];
 	ALIGN_STRUCT_FIELD SHA1_STORAGE sha1Storage;
+	const STORAGE_CANARY_DATA sha1Canary;
 	BOOLEAN sha1StorageUsed[ NO_SHA1_CONTEXTS ];
 	ALIGN_STRUCT_FIELD SHA2_STORAGE sha2Storage0;
+	const STORAGE_CANARY_DATA sha20Canary;
 	ALIGN_STRUCT_FIELD SHA2_STORAGE sha2Storage1;
+	const STORAGE_CANARY_DATA sha21Canary;
 	BOOLEAN sha2StorageUsed[ NO_SHA2_CONTEXTS ];
 	ALIGN_STRUCT_FIELD HMAC_SHA2_STORAGE hmacSha2Storage0;
+	const STORAGE_CANARY_DATA hmacSha20Canary;
 	ALIGN_STRUCT_FIELD HMAC_SHA2_STORAGE hmacSha2Storage1;
+	const STORAGE_CANARY_DATA hmacSha21Canary;
 	BOOLEAN hmacSha2StorageUsed[ NO_HMAC_SHA2_CONTEXTS ];
 	} STORAGE_STRUCT;
 
 static STORAGE_STRUCT systemStorage = {
+	/* System storage */
 	{ 0 }, { SAFEBUFFER_COOKIE_DATA },		/* Kernel data */
 	{ 0 },									/* Object table */
 	{ 0 }, { SAFEBUFFER_COOKIE_DATA },		/* Random info */
@@ -366,7 +380,25 @@ static STORAGE_STRUCT systemStorage = {
 #ifdef USE_TLS
 	{ 0 }, { SAFEBUFFER_COOKIE_DATA },		/* Scoreboard */
 #endif /* USE_TLS */
-	{ 0 }									/* Option info */
+	{ 0 },									/* Option info */
+	/* Object storage */
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA }, FALSE,/* System object */
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA }, FALSE,/* User object */
+#ifdef USE_KEYSETS
+  #if NO_KEYSET_OBJECTS > 1
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA },		/* Keyset 0 object */
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA }, { 0 },/* Keyset 1 object */
+  #else
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA }, { 0 },/* Keyset 0 object */
+  #endif /* NO_KEYSET_OBJECTS > 1 */
+#endif /* USE_KEYSETS */
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA },		/* AES 0 object */
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA }, { 0 },/* AES 1 object */
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA }, { 0 },/* SHA1 object */
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA },		/* SHA2 0 object */
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA }, { 0 },/* SHA2 1 object */
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA },		/* HMAC-SHA2 0 object */
+	{ 0 }, { SAFEBUFFER_COOKIE_DATA }, { 0 }/* HMAC-SHA2 1 object */
 	};
 
 #ifdef _MSC_VER
@@ -389,11 +421,13 @@ void initBuiltinStorage( void )
 	   The OBJECT_INFO is relatively large but for the smaller SOCKET_INFO 
 	   and OPTION_INFO items the canary covers both of the two over-
 	   allocated array entries */
-	static_assert( sizeof( OBJECT_INFO ) >= 32,
+	static_assert( sizeof( OBJECT_INFO ) >= CANARY_SIZE,
 				   "OBJECT_INFO is too small to fit the canary" );
-	static_assert( ( 2 * sizeof( SOCKET_INFO ) ) >= 32,
+#ifdef USE_TCP
+	static_assert( ( 2 * sizeof( SOCKET_INFO ) ) >= CANARY_SIZE,
 				   "SOCKET_INFO is too small to fit the canary" );
-	static_assert( ( 2 * sizeof( OPTION_INFO ) ) >= 32,
+#endif /* USE_TCP */
+	static_assert( ( 2 * sizeof( OPTION_INFO ) ) >= CANARY_SIZE,
 				   "OPTION_INFO is too small to fit the canary" );
 
 	/* Set up the canaries for the array data.  Note that we set the object
@@ -454,6 +488,51 @@ void initBuiltinStorage( void )
 #endif /* USE_TLS */
 	assert( !memcmp( &systemStorage.optionInfo[ OPTION_INFO_COUNT ],
 					 canaryData, CANARY_SIZE ) );
+	assert( !memcmp( &systemStorage.systemDeviceCanary, canaryData, 
+					 CANARY_SIZE_SHORT ) );
+	assert( !memcmp( &systemStorage.userObjectCanary, canaryData, 
+					 CANARY_SIZE_SHORT ) );
+#ifdef USE_KEYSETS
+	assert( !memcmp( &systemStorage.keyset0Canary, canaryData, 
+					 CANARY_SIZE_SHORT ) );
+  #if NO_KEYSET_OBJECTS > 1
+	assert( !memcmp( &systemStorage.keyset1Canary, canaryData, 
+					 CANARY_SIZE_SHORT ) );
+  #endif /* NO_KEYSET_OBJECTS > 1 */
+#endif /* USE_KEYSETS */
+	assert( !memcmp( &systemStorage.aes0Canary, canaryData, 
+					 CANARY_SIZE_SHORT ) );
+	assert( !memcmp( &systemStorage.aes1Canary, canaryData, 
+					 CANARY_SIZE_SHORT ) );
+	assert( !memcmp( &systemStorage.sha1Canary, canaryData, 
+					 CANARY_SIZE_SHORT ) );
+	assert( !memcmp( &systemStorage.sha20Canary, canaryData, 
+					 CANARY_SIZE_SHORT ) );
+	assert( !memcmp( &systemStorage.sha21Canary, canaryData, 
+					 CANARY_SIZE_SHORT ) );
+	assert( !memcmp( &systemStorage.hmacSha20Canary, canaryData, 
+					 CANARY_SIZE_SHORT ) );
+	assert( !memcmp( &systemStorage.hmacSha21Canary, canaryData, 
+					 CANARY_SIZE_SHORT ) );
+
+	/* Finally, make sure that the externally-visible mechanism for checking
+	   things is working as it should.  We make this a hard-fail condition 
+	   since it'll trigger a hard fail anyway when it's used in actual 
+	   code, although since it's called in pre-init code, for example in the
+	   shared-library load, we can't return an error code from it */
+	ENSURES_V( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
+	ENSURES_V( checkBuiltinStorage( SYSTEM_STORAGE_OBJECT_TABLE ) );
+	ENSURES_V( checkBuiltinStorage( BUILTIN_STORAGE_RANDOM_INFO ) );
+#ifdef USE_CERTIFICATES
+	ENSURES_V( checkBuiltinStorage( BUILTIN_STORAGE_TRUSTMGR ) );
+#endif /* USE_CERTIFICATES */
+#ifdef USE_TCP
+	ENSURES_V( checkBuiltinStorage( BUILTIN_STORAGE_SOCKET_POOL ) );
+#endif /* USE_TCP */
+#ifdef USE_TLS
+	ENSURES_V( checkBuiltinStorage( BUILTIN_STORAGE_SCOREBOARD ) );
+#endif /* USE_TLS */
+	ENSURES_V( checkBuiltinStorage( BUILTIN_STORAGE_OPTION_INFO ) );
 	}
 
 void destroyBuiltinStorage( void )
@@ -473,21 +552,15 @@ void destroyBuiltinStorage( void )
    on shutdown the shutdown level value must stay set so that any threads
    still running will be forced to exit at the earliest possible instance,
    and remain set after the shutdown has completed.  To handle this, we use
-   the following macro to clear only the appropriate area of the kernel data
+   the following to clear only the appropriate area of the kernel data 
    block */
 
 void clearKernelData( void )
 	{
 	KERNEL_DATA *krnlDataPtr = &systemStorage.krnlData;
 
-#if defined( __STDC__ )
 	zeroise( ( BYTE * ) krnlDataPtr + offsetof( KERNEL_DATA, initLevel ), 
 			 sizeof( KERNEL_DATA ) - offsetof( KERNEL_DATA, initLevel ) );
-#else
-	assert( &krnlDataPtr->endMarker - &krnlDataPtr->initLevel < sizeof( KERNEL_DATA ) ); 
-	zeroise( ( void * ) &krnlDataPtr->initLevel, 
-			 &krnlDataPtr->endMarker - &krnlDataPtr->initLevel );
-#endif /* C89 compilers */
 	}
 
 /* Access functions for the built-in storage, the first for kernel-internal 
@@ -635,8 +708,10 @@ BOOLEAN checkBuiltinStorage( IN_ENUM( BUILTIN_STORAGE ) \
 	}
 
 /* Obtain and release context-specific storage from the built-in fixed 
-   storage block.  Note that this function must be called with the 
-   allocation mutex held */
+   storage block.  Note that these functions must be called with the 
+   allocation mutex held.  In addition the storage isn't cleared on allocate
+   or free since the object-creation code does this for all memory it
+   receives or releases */
 
 CHECK_RETVAL_PTR \
 void *getBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
@@ -660,14 +735,20 @@ void *getBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 				{
 				if( !systemStorage.systemDeviceStorageUsed )
 					{
+					if( memcmp( systemStorage.systemDeviceCanary, 
+								canaryData, CANARY_SIZE_SHORT ) )
+						{
+						DEBUG_DIAG(( "System object storage corruption "
+									 "detected" ));
+						retIntError_Null();
+						}
 					TRACE_DIAG(( "Allocated static system device object" ));
 					systemStorage.systemDeviceStorageUsed = TRUE;
 					return( &systemStorage.systemDeviceStorage );
 					}
 
-				/* Since there should only be one system device, a failure 
-				   to create it, meaning that it already exists, is an 
-				   error */
+				/* There should only be one system device, a failure to 
+				   create it, meaning that it already exists, is an error */
 				retIntError_Null();
 				}
 #if defined( CONFIG_CRYPTO_HW1 ) || defined( CONFIG_CRYPTO_HW2 )
@@ -693,10 +774,21 @@ void *getBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 				{
 				if( !systemStorage.userObjectStorageUsed )
 					{
+					if( memcmp( systemStorage.userObjectCanary, 
+								canaryData, CANARY_SIZE_SHORT ) )
+						{
+						DEBUG_DIAG(( "User object storage corruption "
+									 "detected" ));
+						retIntError_Null();
+						}
 					TRACE_DIAG(( "Allocated static user object" ));
 					systemStorage.userObjectStorageUsed = TRUE;
 					return( &systemStorage.userObjectStorage );
 					}
+
+				/* There should only be one SO user, a failure to create it, 
+				   meaning that it already exists, is an error */
+				retIntError_Null();
 				}
 			break;
 
@@ -720,6 +812,13 @@ void *getBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
   #else
 				if( systemStorage.keysetStorageUsed[ 0 ] )
 					break;
+				if( memcmp( systemStorage.keyset0Canary, 
+							canaryData, CANARY_SIZE_SHORT ) )
+					{
+					DEBUG_DIAG(( "Keyset object storage corruption "
+								 "detected" ));
+					retIntError_Null();
+					}
 				systemStorage.keysetStorageUsed[ 0 ] = TRUE;
 				TRACE_DIAG(( "Allocated static file keyset object" ));
 				return( &systemStorage.keysetStorage0 );
@@ -729,6 +828,8 @@ void *getBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 #endif /* USE_KEYSETS */
 
 		case OBJECT_TYPE_CONTEXT:
+			/* These objects have various subtypes so we have to check the
+			   size as well as the overall type */
 			if( subType == SUBTYPE_CTX_CONV )
 				{
 				if( size == CONV_STORAGE( AES_KEYDATA_SIZE ) )
@@ -740,6 +841,15 @@ void *getBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 					
 					if( index == CRYPT_ERROR )
 						break;
+					if( memcmp( ( index == 0 ) ? \
+									systemStorage.aes0Canary : \
+									systemStorage.aes1Canary,
+								canaryData, CANARY_SIZE_SHORT ) )
+						{
+						DEBUG_DIAG(( "AES object storage %d corruption "
+									 "detected", index ));
+						retIntError_Null();
+						}
 					TRACE_DIAG(( "Allocated static AES object #%d", index ));
 					systemStorage.aesStorageUsed[ index ] = TRUE;
 					return( ( index == 0 ) ? &systemStorage.aesStorage0 : \
@@ -753,6 +863,13 @@ void *getBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 					{
 					if( !systemStorage.sha1StorageUsed[ 0 ] )
 						{
+						if( memcmp( systemStorage.sha1Canary,
+									canaryData, CANARY_SIZE_SHORT ) )
+							{
+							DEBUG_DIAG(( "SHA-1 object storage corruption "
+										 "detected" ));
+							retIntError_Null();
+							}
 						TRACE_DIAG(( "Allocated static SHA1 object" ));
 						systemStorage.sha1StorageUsed[ 0 ] = TRUE;
 						return( &systemStorage.sha1Storage );
@@ -767,6 +884,15 @@ void *getBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 					
 					if( index == CRYPT_ERROR )
 						break;
+					if( memcmp( ( index == 0 ) ? \
+									systemStorage.sha20Canary : \
+									systemStorage.sha21Canary,
+								canaryData, CANARY_SIZE_SHORT ) )
+						{
+						DEBUG_DIAG(( "SHA2 object storage %d corruption "
+									 "detected", index ));
+						retIntError_Null();
+						}
 					TRACE_DIAG(( "Allocated static SHA2 object #%d", index ));
 					systemStorage.sha2StorageUsed[ index ] = TRUE;
 					return( ( index == 0 ) ? &systemStorage.sha2Storage0 : \
@@ -785,6 +911,15 @@ void *getBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 					
 					if( index == CRYPT_ERROR )
 						break;
+					if( memcmp( ( index == 0 ) ? \
+									systemStorage.hmacSha20Canary : \
+									systemStorage.hmacSha21Canary,
+								canaryData, CANARY_SIZE_SHORT ) )
+						{
+						DEBUG_DIAG(( "HMAC-SHA2 object storage %d "
+									 "corruption detected", index ));
+						retIntError_Null();
+						}
 					TRACE_DIAG(( "Allocated static HMAC-SHA2 object #%d", index ));
 					systemStorage.hmacSha2StorageUsed[ index ] = TRUE;
 					return( ( index == 0 ) ? &systemStorage.hmacSha2Storage0 : \
@@ -811,7 +946,7 @@ int releaseBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 								 IN_ENUM( SUBTYPE ) const OBJECT_SUBTYPE subType,
 								 const void *address )
 	{
-	assert( isReadPtr( address, 16 ) );
+	assert( isReadPtr( address, 32 ) );
 
 	REQUIRES( isValidType( type ) );
 	REQUIRES( subType > SUBTYPE_NONE && subType <= SUBTYPE_LAST );
@@ -823,7 +958,16 @@ int releaseBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 				{
 				if( address == &systemStorage.systemDeviceStorage )
 					{
-					ENSURES( systemStorage.systemDeviceStorageUsed == TRUE );
+					if( memcmp( systemStorage.systemDeviceCanary, 
+								canaryData, CANARY_SIZE_SHORT ) )
+						{
+						/* This object is only released on shutdown so it's 
+						   a non-fatal error */
+						DEBUG_DIAG(( "System object storage corruption "
+									 "detected" ));
+						assert( DEBUG_WARN );
+						}
+					REQUIRES( systemStorage.systemDeviceStorageUsed == TRUE );
 					TRACE_DIAG(( "Freed static system device object" ));
 					systemStorage.systemDeviceStorageUsed = FALSE;
 					return( CRYPT_OK );
@@ -834,7 +978,7 @@ int releaseBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 				{
 				if( address == &systemStorage.cryptoDeviceStorage )
 					{
-					ENSURES( systemStorage.cryptoDeviceStorageUsed == TRUE );
+					REQUIRES( systemStorage.cryptoDeviceStorageUsed == TRUE );
 					TRACE_DIAG(( "Freed static crypto device object" ));
 					systemStorage.cryptoDeviceStorageUsed = FALSE;
 					return( CRYPT_OK );
@@ -848,7 +992,16 @@ int releaseBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 				{
 				if( address == &systemStorage.userObjectStorage )
 					{
-					ENSURES( systemStorage.userObjectStorageUsed == TRUE );
+					if( memcmp( systemStorage.userObjectCanary, 
+								canaryData, CANARY_SIZE_SHORT ) )
+						{
+						/* This object is only released on shutdown so it's 
+						   a non-fatal error */
+						DEBUG_DIAG(( "User object storage corruption "
+									 "detected" ));
+						assert( DEBUG_WARN );
+						}
+					REQUIRES( systemStorage.userObjectStorageUsed == TRUE );
 					TRACE_DIAG(( "Freed static user object" ));
 					systemStorage.userObjectStorageUsed = FALSE;
 					return( CRYPT_OK );
@@ -868,14 +1021,21 @@ int releaseBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 					
 				if( index == CRYPT_ERROR )
 					break;
-				ENSURES( systemStorage.keysetStorageUsed[ index ] == TRUE );
+				REQUIRES( systemStorage.keysetStorageUsed[ index ] == TRUE );
 				TRACE_DIAG(( "Freed static file keyset object #%d", index ));
 				systemStorage.keysetStorageUsed[ index ] = FALSE;
 				return( CRYPT_OK );
   #else
 				if( address == &systemStorage.keysetStorage0 )
 					{
-					ENSURES( systemStorage.keysetStorageUsed[ 0 ] == TRUE );
+					if( memcmp( systemStorage.keyset0Canary, 
+								canaryData, CANARY_SIZE_SHORT ) )
+						{
+						DEBUG_DIAG(( "Keyset object storage corruption "
+									 "detected" ));
+						retIntError();
+						}
+					REQUIRES( systemStorage.keysetStorageUsed[ 0 ] == TRUE );
 					TRACE_DIAG(( "Freed static file keyset object" ));
 					systemStorage.keysetStorageUsed[ 0 ] = FALSE;
 					return( CRYPT_OK );
@@ -895,7 +1055,16 @@ int releaseBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 					
 				if( index == CRYPT_ERROR )
 					break;
-				ENSURES( systemStorage.aesStorageUsed[ index ] == TRUE );
+				if( memcmp( ( index == 0 ) ? \
+								systemStorage.aes0Canary : \
+								systemStorage.aes1Canary,
+							canaryData, CANARY_SIZE_SHORT ) )
+					{
+					DEBUG_DIAG(( "AES object storage %d corruption "
+								 "detected", index ));
+					retIntError();
+					}
+				REQUIRES( systemStorage.aesStorageUsed[ index ] == TRUE );
 				TRACE_DIAG(( "Freed static AES object #%d", index ));
 				systemStorage.aesStorageUsed[ index ] = FALSE;
 				return( CRYPT_OK );
@@ -912,14 +1081,30 @@ int releaseBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 				   based on the memory address */
 				if( address == &systemStorage.sha1Storage )
 					{
-					ENSURES( systemStorage.sha1StorageUsed[ 0 ] == TRUE );
+					if( memcmp( systemStorage.sha1Canary,
+								canaryData, CANARY_SIZE_SHORT ) )
+						{
+						DEBUG_DIAG(( "SHA-1 object storage corruption "
+									 "detected" ));
+						retIntError();
+						}
+					REQUIRES( systemStorage.sha1StorageUsed[ 0 ] == TRUE );
 					TRACE_DIAG(( "Freed static SHA1 object" ));
 					systemStorage.sha1StorageUsed[ 0 ] = FALSE;
 					return( CRYPT_OK );
 					}
 				if( index == CRYPT_ERROR )
 					break;
-				ENSURES( systemStorage.sha2StorageUsed[ index ] == TRUE );
+				if( memcmp( ( index == 0 ) ? \
+								systemStorage.sha20Canary : \
+								systemStorage.sha21Canary,
+							canaryData, CANARY_SIZE_SHORT ) )
+					{
+					DEBUG_DIAG(( "SHA2 object storage %d corruption "
+								 "detected", index ));
+					retIntError();
+					}
+				REQUIRES( systemStorage.sha2StorageUsed[ index ] == TRUE );
 				TRACE_DIAG(( "Freed static SHA2 object #%d", index ));
 				systemStorage.sha2StorageUsed[ index ] = FALSE;
 				return( CRYPT_OK );
@@ -933,7 +1118,16 @@ int releaseBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 					
 				if( index == CRYPT_ERROR )
 					break;
-				ENSURES( systemStorage.hmacSha2StorageUsed[ index ] == TRUE );
+				if( memcmp( ( index == 0 ) ? \
+								systemStorage.hmacSha20Canary : \
+								systemStorage.hmacSha21Canary,
+							canaryData, CANARY_SIZE_SHORT ) )
+					{
+					DEBUG_DIAG(( "HMAC-SHA2 object storage %d "
+								 "corruption detected", index ));
+					retIntError();
+					}
+				REQUIRES( systemStorage.hmacSha2StorageUsed[ index ] == TRUE );
 				TRACE_DIAG(( "Freed static HMAC-SHA2 object #%d", index ));
 				systemStorage.hmacSha2StorageUsed[ index ] = FALSE;
 				return( CRYPT_OK );
@@ -948,7 +1142,11 @@ int releaseBuiltinObjectStorage( IN_ENUM( OBJECT_TYPE ) const OBJECT_TYPE type,
 	}
 
 /* Helper functions used when debugging.  These return the sizes of the 
-   various data structures for use with fault-injection testing */
+   various data structures for use with fault-injection testing.
+   getBuiltinObjectStorageSize() takes a size parameter for compatibility
+   with getBuiltinObjectStorage() but this is always set to a dummy value
+   since the diagnostic code that calls it doesn't know the size of the
+   object-subtype-specific memory blocks used to differentiate them */
 
 #ifndef NDEBUG
 
@@ -1029,11 +1227,14 @@ int getBuiltinObjectStorageSize( IN_ENUM( OBJECT_TYPE ) \
 			break;
 
 		case OBJECT_TYPE_USER:
-			return( sizeof( USER_OBJECT_STORAGE ) );
+			if( subType == SUBTYPE_USER_SO )
+				return( sizeof( USER_OBJECT_STORAGE ) );
+			break;
 
 #ifdef USE_KEYSETS
 		case OBJECT_TYPE_KEYSET:
-			return( sizeof( KEYSET_STORAGE ) );
+			if( subType == SUBTYPE_KEYSET_FILE )
+				return( sizeof( KEYSET_STORAGE ) );
 #endif /* USE_KEYSETS */
 
 		case OBJECT_TYPE_CONTEXT:

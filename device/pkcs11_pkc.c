@@ -1171,15 +1171,20 @@ static int rsaSign( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	static const CK_MECHANISM mechanism = { CKM_RSA_PKCS, NULL_PTR, 0 };
 	CRYPT_DEVICE iCryptDevice;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	PKCS11_INFO *pkcs11Info;
 	BYTE *bufPtr = buffer;
-	const int keySize = bitsToBytes( contextInfoPtr->ctxPKC->keySizeBits );
+	int keySize, cryptStatus;
 	LOOP_INDEX i;
-	int cryptStatus;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtrDynamic( buffer, length ) );
 	
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	keySize = bitsToBytes( pkcInfo->keySizeBits );
 	REQUIRES( length == keySize );
 
 	/* Undo the PKCS #1 padding to make CKM_RSA_PKCS look like 
@@ -1219,7 +1224,10 @@ static int rsaVerify( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	BYTE data[ CRYPT_MAX_PKCSIZE + 8 ];
 	int cryptStatus;
 #endif /* 0 */
-	const int keySize = bitsToBytes( contextInfoPtr->ctxPKC->keySizeBits );
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	int keySize;
+
+	REQUIRES( pkcInfo != NULL );
 
 	/* This function is present but isn't used as part of any normal 
 	   operation because cryptlib does the same thing much faster in 
@@ -1231,6 +1239,9 @@ static int rsaVerify( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtrDynamic( buffer, length ) );
 	
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	keySize = bitsToBytes( pkcInfo->keySizeBits );
 	REQUIRES( length == keySize );
 
 	/* Get the information for the device associated with this context */
@@ -1255,11 +1266,11 @@ static int rsaEncrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	static const CK_MECHANISM mechanism = { CKM_RSA_PKCS, NULL_PTR, 0 };
 	CRYPT_DEVICE iCryptDevice;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	PKCS11_INFO *pkcs11Info;
 	BYTE *bufPtr = buffer;
-	const int keySize = bitsToBytes( contextInfoPtr->ctxPKC->keySizeBits );
+	int keySize, cryptStatus;
 	LOOP_INDEX i;
-	int cryptStatus;
 
 	/* This function is present but isn't used as part of any normal 
 	   operation because cryptlib does the same thing much faster in 
@@ -1269,7 +1280,12 @@ static int rsaEncrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtrDynamic( buffer, length ) );
-	
+
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	keySize = bitsToBytes( pkcInfo->keySizeBits );
 	REQUIRES( length == keySize );
 
 	/* Undo the PKCS #1 padding to make CKM_RSA_PKCS look like 
@@ -1306,16 +1322,21 @@ static int rsaDecrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	static const CK_MECHANISM mechanism = { CKM_RSA_PKCS, NULL_PTR, 0 };
 	CRYPT_DEVICE iCryptDevice;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	PKCS11_INFO *pkcs11Info;
 	MESSAGE_DATA msgData;
 	BYTE *bufPtr = buffer;
-	const int keySize = bitsToBytes( contextInfoPtr->ctxPKC->keySizeBits );
+	int keySize, cryptStatus, resultLen, padSize;
 	LOOP_INDEX i;
-	int cryptStatus, resultLen, padSize;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtrDynamic( buffer, length ) );
+
+	REQUIRES( pkcInfo != NULL );
 	
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	keySize = bitsToBytes( pkcInfo->keySizeBits );
 	REQUIRES( length == keySize );
 
 	/* Get the information for the device associated with this context */
@@ -2520,13 +2541,13 @@ static int ecdsaSign( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	static const CK_MECHANISM mechanism = { CKM_ECDSA, NULL_PTR, 0 };
 	CRYPT_DEVICE iCryptDevice;
 	PKCS11_INFO *pkcs11Info;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 				DATAPTR_GET( contextInfoPtr->capabilityInfo );
 	DLP_PARAMS *eccParams = ( DLP_PARAMS * ) buffer;
 	BIGNUM r, s;
 	BYTE signature[ ( CRYPT_MAX_PKCSIZE_ECC * 2 ) + 8 ];
-	const int keySize = bitsToBytes( contextInfoPtr->ctxPKC->keySizeBits );
-	int cryptStatus;
+	int keySize, cryptStatus;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( eccParams, sizeof( DLP_PARAMS ) ) );
@@ -2537,7 +2558,12 @@ static int ecdsaSign( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( eccParams->inParam2 == NULL && eccParams->inLen2 == 0 );
 	REQUIRES( isShortIntegerRangeMin( eccParams->outLen, 
 									  MIN_CRYPT_OBJECTSIZE ) );
+	REQUIRES( pkcInfo != NULL );
 	REQUIRES( capabilityInfoPtr != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	keySize = bitsToBytes( pkcInfo->keySizeBits );
 
 	/* Get the information for the device associated with this context */
 	cryptStatus = getContextDeviceInfo( contextInfoPtr->objectHandle, 

@@ -270,7 +270,7 @@
    of Visual Studio being used on current development systems, see the note
    in misc/os_detect.h on how to get this */
 
-#define VS_LATEST_VERSION		1950
+#define VS_LATEST_VERSION		1951
 
 /* Explicit includes needed by Palm OS, see the comment in crypt.h for more
    details */

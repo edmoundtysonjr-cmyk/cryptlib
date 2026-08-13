@@ -695,7 +695,7 @@ int unwrapPremasterSecret( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   
 	   Yet another oracle exists if we get a valid PKCS #1 message and
 	   continue past this point but the key is invalid causing the handshake 
-	   to fail later one, which is why this code is disabled and triggers 
+	   to fail later on, which is why this code is disabled and triggers 
 	   compile warnings if it's ever re-enabled */
 	handshakeInfo->premasterSecretSize = TLS_SECRET_SIZE;
 	setMechanismWrapInfo( &mechanismInfo, ( MESSAGE_CAST ) data, dataLength,

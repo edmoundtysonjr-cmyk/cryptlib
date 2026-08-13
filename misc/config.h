@@ -276,6 +276,13 @@
   #undef USE_TCP
 #endif /* CONFIG_NO_SESSIONS && USE_TCP */
 
+/* Some dual-stack systems insist on making IPv6 connections on IPv4-only
+   networks.  To deal with this we provide the following define which forces
+   the use of IPv4 only by only allowing AF_INET, which implicitly disallows
+   AF_INET6 */
+
+/* #define USE_IPV4_ONLY */
+
 /* Whether to use the RPC API or not.  This provides total isolation of
    input and output data, at the expense of some additional overhead due
    to marshalling and unmarshalling */
@@ -766,7 +773,6 @@
 
 #define USE_CERTSTORE
 #define USE_CMP
-#define USE_RTCS
 #define USE_OCSP
 #define USE_SCEP
 #define USE_SCVP
@@ -844,6 +850,15 @@
   #define USE_BASE64ID 
 #endif /* USE_TLS && !USE_BASE64ID */
 
+/* Because the SCEP RFC took so long to get published, many servers are 
+   still running with 15-20-year-old implementations (see the long comments
+   in session/scep_cli.c).  The following define can be used to force legacy
+   (pre-standard) SCEP behaviour */
+
+#ifdef CONFIG_SCEP_LEGACY
+  #define USE_SCEP_LEGACY
+#endif /* CONFIG_SCEP_LEGACY */
+
 /* If we're using any PKI protocol then we also need HTTP, the universal 
    transport for PKI protocols */
 
@@ -868,8 +883,9 @@
 
 #if 0
   #define USE_EAP
-  #define USE_WEBSOCKETS
+  #define USE_RTCS
   #define USE_SSH_EXTENDED
+  #define USE_WEBSOCKETS
 #endif /* 0 */
 
 #endif /* CONFIG_NO_SESSIONS */
@@ -1363,8 +1379,12 @@
 //	  #define USE_DNSSRV
 //	#endif /* VS 2005 and newer */
 /////////////////////////////////////
-	#define USE_EAP
-	#define USE_DES		/* Needed for MSCHAPv2 in PEAP */
+	#ifndef USE_EAP		/* May be defined in the makefile */
+	  #define USE_EAP
+	#endif /* USE_EAP */
+/////////////////////////////////////
+//	#define USE_DES
+/////////////////////////////////////
 	#define USE_RSA_SUITES	/* RSA suites in TLS, unsafe */ 
 	#define USE_SSH_EXTENDED/* SSH extensions */
 	#define USE_SSH_CTR

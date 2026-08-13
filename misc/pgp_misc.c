@@ -42,9 +42,9 @@ static const PGP_ALGOMAP_INFO pgpAlgoMap[] = {
 #ifdef USE_IDEA
 	{ PGP_ALGO_IDEA, PGP_ALGOCLASS_CRYPT, CRYPT_ALGO_IDEA },
 #endif /* USE_IDEA */
-	{ PGP_ALGO_AES_128, PGP_ALGOCLASS_CRYPT, CRYPT_ALGO_AES },
-	{ PGP_ALGO_AES_192, PGP_ALGOCLASS_CRYPT, CRYPT_ALGO_AES },
-	{ PGP_ALGO_AES_256, PGP_ALGOCLASS_CRYPT, CRYPT_ALGO_AES },
+	{ PGP_ALGO_AES_128, PGP_ALGOCLASS_CRYPT, CRYPT_ALGO_AES, 16 },
+	{ PGP_ALGO_AES_192, PGP_ALGOCLASS_CRYPT, CRYPT_ALGO_AES, 24 },
+	{ PGP_ALGO_AES_256, PGP_ALGOCLASS_CRYPT, CRYPT_ALGO_AES, 32 },
 
 	/* Password-based encryption algos */
 #ifdef USE_3DES
@@ -81,9 +81,6 @@ static const PGP_ALGOMAP_INFO pgpAlgoMap[] = {
 #endif /* USE_ED25519 */
 
 	/* Hash algos */
-#ifdef USE_MD5
-	{ PGP_ALGO_MD5, PGP_ALGOCLASS_HASH, CRYPT_ALGO_MD5, 16 },
-#endif /* USE_MD5 */
 	{ PGP_ALGO_SHA, PGP_ALGOCLASS_HASH, CRYPT_ALGO_SHA1, 20 },
 	{ PGP_ALGO_SHA2_256, PGP_ALGOCLASS_HASH, CRYPT_ALGO_SHA2, 32 },
 #ifdef USE_SHA2_EXT
@@ -138,8 +135,9 @@ int pgpToCryptlibAlgo( IN_RANGE( PGP_ALGO_NONE, 0xFF ) const int pgpAlgo,
 	return( CRYPT_OK );
 	}
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
 int cryptlibToPgpAlgo( IN_ALGO const CRYPT_ALGO_TYPE cryptlibAlgo,
+					   IN_INT_SHORT_Z const int cryptlibParam,
 					   OUT_RANGE( PGP_ALGO_NONE, PGP_ALGO_LAST ) \
 							int *pgpAlgo )
 	{
@@ -148,6 +146,7 @@ int cryptlibToPgpAlgo( IN_ALGO const CRYPT_ALGO_TYPE cryptlibAlgo,
 	assert( isWritePtr( pgpAlgo, sizeof( int ) ) );
 
 	REQUIRES( isEnumRange( cryptlibAlgo, CRYPT_ALGO ) );
+	REQUIRES( isShortIntegerRange( cryptlibParam ) );
 
 	/* Clear return value */
 	*pgpAlgo = PGP_ALGO_NONE;
@@ -166,6 +165,24 @@ int cryptlibToPgpAlgo( IN_ALGO const CRYPT_ALGO_TYPE cryptlibAlgo,
 	ENSURES( i < FAILSAFE_ARRAYSIZE( pgpAlgoMap, PGP_ALGOMAP_INFO ) );
 	if( pgpAlgoMap[ i ].cryptlibAlgo == CRYPT_ALGO_NONE )
 		return( CRYPT_ERROR_NOTAVAIL );
+	if( cryptlibParam != 0 )
+		{
+		/* There's a parameter, find the entry for that as well */
+		LOOP_MED_CHECKINC( i < FAILSAFE_ARRAYSIZE( pgpAlgoMap, PGP_ALGOMAP_INFO ) && \
+								pgpAlgoMap[ i ].cryptlibAlgo == cryptlibAlgo && \
+								pgpAlgoMap[ i ].cryptlibAlgoParam != cryptlibParam && \
+								pgpAlgoMap[ i ].cryptlibAlgo != CRYPT_ALGO_NONE,
+						   i++ )
+			{
+			ENSURES( LOOP_INVARIANT_MED_XXX( i, 0, 
+											 FAILSAFE_ARRAYSIZE( pgpAlgoMap, \
+																 PGP_ALGOMAP_INFO ) - 1 ) );
+			}
+		ENSURES( LOOP_BOUND_OK );
+		ENSURES( i < FAILSAFE_ARRAYSIZE( pgpAlgoMap, PGP_ALGOMAP_INFO ) );
+		ENSURES( pgpAlgoMap[ i ].cryptlibAlgo == cryptlibAlgo  && \
+				 pgpAlgoMap[ i ].cryptlibAlgoParam == cryptlibParam );
+		}
 	*pgpAlgo = pgpAlgoMap[ i ].pgpAlgo;
 
 	return( CRYPT_OK );
@@ -213,6 +230,7 @@ int pgpPasswordToKey( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 					  IN_BUFFER( passwordLength ) const char *password, 
 					  IN_DATALENGTH const int passwordLength, 
 					  IN_ALGO const CRYPT_ALGO_TYPE hashAlgo, 
+					  IN_LENGTH_HASH const int hashParam,
 					  IN_BUFFER_OPT( saltSize ) const BYTE *salt, 
 					  IN_RANGE( 0, CRYPT_MAX_HASHSIZE ) const int saltSize,
 					  IN_INT const int iterations )
@@ -228,9 +246,9 @@ int pgpPasswordToKey( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 	REQUIRES( isHandleRangeValid( iCryptContext ) );
 	REQUIRES( isBufsizeRangeNZ( passwordLength ) );
 	REQUIRES( ( optKeyLength == CRYPT_UNUSED ) || \
-			  ( optKeyLength >= MIN_KEYSIZE && \
-				optKeyLength <= CRYPT_MAX_KEYSIZE ) );
+			  rangeCheck( optKeyLength, MIN_KEYSIZE, CRYPT_MAX_KEYSIZE ) );
 	REQUIRES( isHashAlgo( hashAlgo ) );
+	REQUIRES( rangeCheck( hashParam, MIN_HASHSIZE, CRYPT_MAX_HASHSIZE ) );
 	REQUIRES( ( salt == NULL && saltSize == 0 ) || \
 			  ( saltSize > 0 && saltSize <= CRYPT_MAX_HASHSIZE ) );
 	REQUIRES( isIntegerRange( iterations ) );
@@ -245,6 +263,7 @@ int pgpPasswordToKey( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 		}
 	if( cryptStatusError( status ) )
 		return( status );
+	ENSURES( optKeyLength == CRYPT_UNUSED || algorithm == CRYPT_ALGO_AES );
 	if( algorithm == CRYPT_ALGO_AES && optKeyLength != CRYPT_UNUSED )
 		{
 		/* PGP allows various AES key sizes and then encodes the size in the
@@ -259,10 +278,12 @@ int pgpPasswordToKey( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 		{
 		MECHANISM_DERIVE_INFO mechanismInfo;
 
-		/* Turn the user key into an encryption context key */
+		/* Turn the user key into an encryption context key using either the 
+		   salted or iterated and salted S2K (RFC 2440 section 3.6.1.2/3) */
 		setMechanismDeriveInfo( &mechanismInfo, hashedKey, keySize,
 								password, passwordLength, hashAlgo,
 								salt, saltSize, iterations );
+		mechanismInfo.hashParam = hashParam;
 		status = krnlSendMessage( MECHANISM_OBJECT_HANDLE, IMESSAGE_DEV_DERIVE,
 								  &mechanismInfo, MECHANISM_DERIVE_PGP );
 		if( cryptStatusError( status ) )
@@ -304,9 +325,19 @@ int pgpPasswordToKey( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 	else
 		{
 		HASH_FUNCTION_ATOMIC hashFunctionAtomic;
+		int hashSize;
 
-		getHashAtomicParameters( hashAlgo, 0, &hashFunctionAtomic, NULL );
-		hashFunctionAtomic( hashedKey, CRYPT_MAX_HASHSIZE, password, 
+		/* Turn the user key into an encryption context key using the simple 
+		   S2K (RFC 2440 section 3.6.1.1).  In practice this never gets used
+		   because it's the same as using the raw password, in theory we'd 
+		   have to stretch out the hash for the one case where we're using 
+		   SHA-1 and need to produce an AES-256 key but given that it's never
+		   used anyway it's easier to just check for it and return an error */
+		getHashAtomicParameters( hashAlgo, hashParam, &hashFunctionAtomic, 
+								 &hashSize );
+		if( hashSize < keySize )
+			return( CRYPT_ERROR_NOSECURE );
+		hashFunctionAtomic( hashedKey, CRYPT_MAX_KEYSIZE, password, 
 							passwordLength );
 		}
 
@@ -417,7 +448,10 @@ int pgpProcessIV( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 			return( status );
 		if( ivInfoBuffer[ ivDataSize - 2 ] != ivInfoBuffer[ ivDataSize + 0 ] || \
 			ivInfoBuffer[ ivDataSize - 1 ] != ivInfoBuffer[ ivDataSize + 1 ] )
+			{
+			zeroise( ivInfoBuffer, CRYPT_MAX_IVSIZE + 2 );
 			return( CRYPT_ERROR_WRONGKEY );
+			}
 
 		/* If the caller is using an MDC then the plaintext IV data has to 
 		   be hashed into the MDC value, effectively turning the straight 
@@ -427,6 +461,7 @@ int pgpProcessIV( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 			status = krnlSendMessage( iMdcContext, IMESSAGE_CTX_HASH,
 									  ivInfoBuffer, ivInfoSize );
 			}
+		zeroise( ivInfoBuffer, CRYPT_MAX_IVSIZE + 2 );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
@@ -452,7 +487,7 @@ int pgpProcessIV( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 			0x01: byte[8]	salt		-- S2K = 1, 3
 			0x03: byte		iterations	-- S2K = 3 */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4, 6 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4, 6, 7 ) ) \
 int readPgpS2K( INOUT_PTR STREAM *stream, 
 				OUT_ALGO_Z CRYPT_ALGO_TYPE *hashAlgo,
 				OUT_LENGTH_HASH_Z int *hashParam,
@@ -465,6 +500,7 @@ int readPgpS2K( INOUT_PTR STREAM *stream,
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( hashAlgo, sizeof( CRYPT_ALGO_TYPE ) ) );
+	assert( isWritePtr( hashParam, sizeof( int ) ) );
 	assert( isWritePtrDynamic( salt, saltMaxLen ) );
 	assert( isWritePtr( saltLen, sizeof( int ) ) );
 	assert( isWritePtr( iterations, sizeof( int ) ) );
@@ -525,6 +561,8 @@ int readPgpS2K( INOUT_PTR STREAM *stream,
 	value = sgetc( stream );
 	if( cryptStatusError( value ) )
 		return( value );
+	if( checkOverflowShift( 16 + ( value & 0x0F ), value >> 4 ) )
+		return( CRYPT_ERROR_BADDATA );
 	hashSpecifier = ( 16 + ( value & 0x0F ) ) << ( value >> 4 );
 	if( hashSpecifier <= 0 || \
 		hashSpecifier >= ( MAX_INTLENGTH >> 4 ) / 64 )

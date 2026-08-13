@@ -470,6 +470,8 @@ static ASN1_STATE checkPrimitive( INOUT_PTR STREAM *stream, const ASN1_ITEM *ite
 			return( ASN1_STATE_NONE );
 
 		case BER_BITSTRING:
+			/* Reject malformed bit strings, including zero-length ones.  We
+			   shouldn't be seeing bit flags with no flags set */
 			if( length < 2 )
 				return( ASN1_STATE_ERROR );
 

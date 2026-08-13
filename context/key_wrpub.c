@@ -5,7 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>
 #define PKC_CONTEXT		/* Indicate that we're working with PKC contexts */
 #include "crypt.h"
 #if defined( INC_ALL )
@@ -111,15 +110,20 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int writeRsaSubjectPublicKey( INOUT_PTR STREAM *stream, 
 									 const CONTEXT_INFO *contextInfoPtr )
 	{
-	const PKC_INFO *rsaKey = contextInfoPtr->ctxPKC;
-	const int length = sizeofBignum( &rsaKey->rsaParam_n ) + \
-					   sizeofBignum( &rsaKey->rsaParam_e );
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	int length;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( sanityCheckPKCInfo( rsaKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	length = sizeofBignum( &pkcInfo->rsaParam_n ) + \
+			 sizeofBignum( &pkcInfo->rsaParam_e );
 
 	/* Write the SubjectPublicKeyInfo header field (the +1 is for the 
 	   bitstring) */
@@ -132,8 +136,8 @@ static int writeRsaSubjectPublicKey( INOUT_PTR STREAM *stream,
 	writeBitStringHole( stream, sizeofShortObject( length ), 
 						DEFAULT_TAG );
 	writeSequence( stream, length );
-	writeBignum( stream, &rsaKey->rsaParam_n );
-	return( writeBignum( stream, &rsaKey->rsaParam_e ) );
+	writeBignum( stream, &pkcInfo->rsaParam_n );
+	return( writeBignum( stream, &pkcInfo->rsaParam_e ) );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
@@ -141,14 +145,11 @@ static int writeDlpSubjectPublicKey( INOUT_PTR STREAM *stream,
 									 const CONTEXT_INFO *contextInfoPtr,
 									 IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const PKC_INFO *dlpKey = contextInfoPtr->ctxPKC;
-	const int parameterSize = sizeofShortObject( \
-								sizeofBignum( &dlpKey->dlpParam_p ) + \
-								sizeofBignum( &dlpKey->dlpParam_q ) + \
-								sizeofBignum( &dlpKey->dlpParam_g ) );
-	const int componentSize = sizeofBignum( &dlpKey->dlpParam_y );
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const DH_DOMAINPARAMS *domainParams;
+	const BIGNUM *p, *q, *g;
 	ALGOID_PARAMS algoIDparams;
-	int totalSize, status;
+	int parameterSize, componentSize, totalSize, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -157,11 +158,35 @@ static int writeDlpSubjectPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( cryptAlgo == CRYPT_ALGO_DH || \
 			  cryptAlgo == CRYPT_ALGO_DSA || \
 			  cryptAlgo == CRYPT_ALGO_ELGAMAL );
-	REQUIRES( sanityCheckPKCInfo( dlpKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	domainParams = pkcInfo->domainParams;
+	if( domainParams != NULL )
+		{
+		/* We should never be writing a value with domain parameters since
+		   that implies shared-parameter DSA */
+		assert( DEBUG_WARN );
+		p = &domainParams->p;
+		q = &domainParams->q;
+		g = &domainParams->g;
+		}
+	else
+		{
+		p = &pkcInfo->dlpParam_p;
+		q = &pkcInfo->dlpParam_q;
+		g = &pkcInfo->dlpParam_g;
+		}
+	parameterSize = sizeofShortObject( \
+								sizeofBignum( p ) + sizeofBignum( q ) + \
+								sizeofBignum( g ) );
+	componentSize = sizeofBignum( &pkcInfo->dlpParam_y );
 
 	/* If it's an Elgamal key created by PGP or a DH key from TLS/SSH then 
 	   the q parameter isn't present so we can't write the key in this format */
-	if( BN_is_zero( &dlpKey->dlpParam_q ) )
+	if( BN_is_zero( q ) )
 		{
 		DEBUG_DIAG(( "Can't write Elgamal key due to missing q parameter" ));
 		assert( DEBUG_WARN );
@@ -182,24 +207,23 @@ static int writeDlpSubjectPublicKey( INOUT_PTR STREAM *stream,
 	writeAlgoIDex( stream, cryptAlgo, &algoIDparams, DEFAULT_TAG );
 
 	/* Write the parameter data */
-	writeSequence( stream, sizeofBignum( &dlpKey->dlpParam_p ) + \
-						   sizeofBignum( &dlpKey->dlpParam_q ) + \
-						   sizeofBignum( &dlpKey->dlpParam_g ) );
-	writeBignum( stream, &dlpKey->dlpParam_p );
+	writeSequence( stream, sizeofBignum( p ) + sizeofBignum( q ) + \
+						   sizeofBignum( g ) );
+	writeBignum( stream, p );
 	if( hasReversedParams( cryptAlgo ) )
 		{
-		writeBignum( stream, &dlpKey->dlpParam_g );
-		writeBignum( stream, &dlpKey->dlpParam_q );
+		writeBignum( stream, g );
+		writeBignum( stream, q );
 		}
 	else
 		{
-		writeBignum( stream, &dlpKey->dlpParam_q );
-		writeBignum( stream, &dlpKey->dlpParam_g );
+		writeBignum( stream, q );
+		writeBignum( stream, g );
 		}
 
 	/* Write the BIT STRING wrapper and the PKC information */
 	writeBitStringHole( stream, componentSize, DEFAULT_TAG );
-	return( writeBignum( stream, &dlpKey->dlpParam_y ) );
+	return( writeBignum( stream, &pkcInfo->dlpParam_y ) );
 	}
 
 #if defined( USE_ECDH ) || defined( USE_ECDSA )
@@ -209,7 +233,7 @@ static int writeEccSubjectPublicKey( INOUT_PTR STREAM *stream,
 									 const CONTEXT_INFO *contextInfoPtr,
 									 IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	ALGOID_PARAMS algoIDparams;
 	BYTE buffer[ MAX_PKCSIZE_ECCPOINT + 8 ];
 	int fieldSize DUMMY_INIT, oidSize DUMMY_INIT, encodedPointSize, totalSize;
@@ -220,21 +244,22 @@ static int writeEccSubjectPublicKey( INOUT_PTR STREAM *stream,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_ECDSA || cryptAlgo == CRYPT_ALGO_ECDH );
-	REQUIRES( sanityCheckPKCInfo( eccKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
 	/* Get the information that we'll need to encode the key.  Note that 
 	   this assumes that we'll be using a known (named) curve rather than
 	   arbitrary curve parameters, which has been enforced by the higher-
 	   level code */
-	status = getECCFieldSize( eccKey->curveType, &fieldSize, FALSE );
+	status = getECCFieldSize( pkcInfo->curveType, &fieldSize, FALSE );
 	if( cryptStatusOK( status ) )
-		status = oidSize = sizeofECCOID( eccKey->curveType );
+		status = oidSize = sizeofECCOID( pkcInfo->curveType );
 	if( cryptStatusError( status ) )
 		return( status );
 
 	/* Get the encoded point data */
 	status = exportECCPoint( buffer, MAX_PKCSIZE_ECCPOINT, &encodedPointSize, 
-							 &eccKey->eccParam_qx, &eccKey->eccParam_qy, 
+							 &pkcInfo->eccParam_qx, &pkcInfo->eccParam_qy, 
 							 fieldSize );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -255,7 +280,7 @@ static int writeEccSubjectPublicKey( INOUT_PTR STREAM *stream,
 	/* Write the SubjectPublicKeyInfo header field */
 	writeSequence( stream, totalSize );
 	writeAlgoIDex( stream, CRYPT_ALGO_ECDSA, &algoIDparams, DEFAULT_TAG );
-	writeECCOID( stream, eccKey->curveType );
+	writeECCOID( stream, pkcInfo->curveType );
 
 	/* Write the BIT STRING wrapper and the PKC information */
 	writeBitStringHole( stream, encodedPointSize, DEFAULT_TAG );
@@ -272,9 +297,9 @@ static int write25519SubjectPublicKey( INOUT_PTR STREAM *stream,
 									   const CONTEXT_INFO *contextInfoPtr,
 									   IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
-	BYTE buffer[ CRYPT_MAX_PKCSIZE + 8 ];
-	int encodedPointSize, totalSize, status;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const BERNSTEIN_KEY_INFO *bernsteinKey;
+	int totalSize, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -282,32 +307,30 @@ static int write25519SubjectPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_25519 || \
 			  cryptAlgo == CRYPT_ALGO_ED25519 );
-	REQUIRES( sanityCheckPKCInfo( eccKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
-	/* Get the public value in Bernstein special-snowflake form */
-	status = export25519ByteString( buffer, CRYPT_MAX_PKCSIZE, 
-									&encodedPointSize, 
-									&eccKey->curve25519Param_pub );
-	if( cryptStatusError( status ) )
-		return( status );
-	ENSURES( encodedPointSize == 32 );
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	bernsteinKey = pkcInfo->bernsteinKey;
 
 	/* Determine the size of the AlgorithmIdentifier and the BIT STRING-
-	   encapsulated public-key data (the final +1 is for the bitstring) */
+	   encapsulated public-key data (the final +1 is for the bitstring).
+	   Note that MIN_PKCSIZE_BERNSTEIN and MAX_PKCSIZE_BERNSTEIN have the 
+	   same value, they're just given as MIN ... MAX for consistency with 
+	   other PKC constants */
 	status = totalSize = sizeofAlgoID( cryptAlgo );
 	if( cryptStatusError( status ) )
 		return( status );
-	totalSize += sizeofShortObject( encodedPointSize + 1 );
+	totalSize += sizeofShortObject( MIN_PKCSIZE_BERNSTEIN + 1 );
 
 	/* Write the SubjectPublicKeyInfo header field */
 	writeSequence( stream, totalSize );
 	writeAlgoID( stream, cryptAlgo, DEFAULT_TAG );
 
 	/* Write the BIT STRING wrapper and the PKC information */
-	writeBitStringHole( stream, encodedPointSize, DEFAULT_TAG );
-	status = swrite( stream, buffer, encodedPointSize );
-	zeroise( buffer, CRYPT_MAX_PKCSIZE );
-	return( status );
+	writeBitStringHole( stream, MIN_PKCSIZE_BERNSTEIN, DEFAULT_TAG );
+	return( swrite( stream, bernsteinKey->pubKey, MIN_PKCSIZE_BERNSTEIN ) );
 	}
 #endif /* USE_X25519 || USE_ED25519 */
 
@@ -318,8 +341,8 @@ static int writePQCSubjectPublicKey( INOUT_PTR STREAM *stream,
 									 const CONTEXT_INFO *contextInfoPtr,
 									 IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const PKC_INFO *pqcKey = contextInfoPtr->ctxPKC;
-	const MLKEM_KEY_INFO *mlkemKey = pqcKey->mlkemKey;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const MLKEM_KEY_INFO *mlkemKey;
 	int totalSize, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -327,13 +350,19 @@ static int writePQCSubjectPublicKey( INOUT_PTR STREAM *stream,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_MLKEM );
-	REQUIRES( sanityCheckPKCInfo( pqcKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	mlkemKey = pkcInfo->mlkemKey;
 
 	/* Determine the size of the AlgorithmIdentifier and the BIT STRING-
 	   encapsulated public-key data (the final +1 is for the bitstring) */
 	status = totalSize = sizeofAlgoID( cryptAlgo );
 	if( cryptStatusError( status ) )
 		return( status );
+	REQUIRES( mlkemKey->pubKeySize == MLKEM768_PUBLICKEYBYTES );
 	totalSize += sizeofShortObject( mlkemKey->pubKeySize + 1 );
 
 	/* Write the SubjectPublicKeyInfo header field */
@@ -383,7 +412,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int writeSshRsaPublicKey( INOUT_PTR STREAM *stream, 
 								 const CONTEXT_INFO *contextInfoPtr )
 	{
-	const PKC_INFO *rsaKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
 
@@ -394,14 +423,15 @@ static int writeSshRsaPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( capabilityInfoPtr != NULL );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
 			  capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_RSA );
-	REQUIRES( sanityCheckPKCInfo( rsaKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
 	writeUint32( stream, sizeofString32( 7 ) + \
-						 sizeofBignumInteger32( &rsaKey->rsaParam_e ) + \
-						 sizeofBignumInteger32( &rsaKey->rsaParam_n ) );
+						 sizeofBignumInteger32( &pkcInfo->rsaParam_e ) + \
+						 sizeofBignumInteger32( &pkcInfo->rsaParam_n ) );
 	writeString32( stream, "ssh-rsa", 7 );
-	writeBignumInteger32( stream, &rsaKey->rsaParam_e );
-	return( writeBignumInteger32( stream, &rsaKey->rsaParam_n ) );
+	writeBignumInteger32( stream, &pkcInfo->rsaParam_e );
+	return( writeBignumInteger32( stream, &pkcInfo->rsaParam_n ) );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
@@ -409,24 +439,25 @@ static int writeSshDlpPublicKey( INOUT_PTR STREAM *stream,
 								 const CONTEXT_INFO *contextInfoPtr,
 								 IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const PKC_INFO *dlpKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_DH || cryptAlgo == CRYPT_ALGO_DSA );
-	REQUIRES( sanityCheckPKCInfo( dlpKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
 	/* SSHv2 uses PKCS #3 rather than X9.42-style DH keys so we have to 
 	   treat this algorithm type specially */
 	if( cryptAlgo == CRYPT_ALGO_DH )
 		{
-		const DH_DOMAINPARAMS *domainParams = dlpKey->domainParams;
+		const DH_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
 		const BIGNUM *p = ( domainParams != NULL ) ? \
-						  &domainParams->p : &dlpKey->dlpParam_p;
+						  &domainParams->p : &pkcInfo->dlpParam_p;
 		const BIGNUM *g = ( domainParams != NULL ) ? \
-						  &domainParams->g : &dlpKey->dlpParam_g;
+						  &domainParams->g : &pkcInfo->dlpParam_g;
 
 		writeUint32( stream, sizeofString32( 6 ) + \
 							 sizeofBignumInteger32( p ) + \
@@ -437,15 +468,15 @@ static int writeSshDlpPublicKey( INOUT_PTR STREAM *stream,
 		}
 
 	writeUint32( stream, sizeofString32( 7 ) + \
-						 sizeofBignumInteger32( &dlpKey->dlpParam_p ) + \
-						 sizeofBignumInteger32( &dlpKey->dlpParam_q ) + \
-						 sizeofBignumInteger32( &dlpKey->dlpParam_g ) + \
-						 sizeofBignumInteger32( &dlpKey->dlpParam_y ) );
+						 sizeofBignumInteger32( &pkcInfo->dlpParam_p ) + \
+						 sizeofBignumInteger32( &pkcInfo->dlpParam_q ) + \
+						 sizeofBignumInteger32( &pkcInfo->dlpParam_g ) + \
+						 sizeofBignumInteger32( &pkcInfo->dlpParam_y ) );
 	writeString32( stream, "ssh-dss", 7 );
-	writeBignumInteger32( stream, &dlpKey->dlpParam_p );
-	writeBignumInteger32( stream, &dlpKey->dlpParam_q );
-	writeBignumInteger32( stream, &dlpKey->dlpParam_g );
-	return( writeBignumInteger32( stream, &dlpKey->dlpParam_y ) );
+	writeBignumInteger32( stream, &pkcInfo->dlpParam_p );
+	writeBignumInteger32( stream, &pkcInfo->dlpParam_q );
+	writeBignumInteger32( stream, &pkcInfo->dlpParam_g );
+	return( writeBignumInteger32( stream, &pkcInfo->dlpParam_y ) );
 	}
 
 #if defined( USE_ECDH ) || defined( USE_ECDSA )
@@ -455,7 +486,7 @@ static int writeSshEccPublicKey( INOUT_PTR STREAM *stream,
 								 const CONTEXT_INFO *contextInfoPtr,
 								 IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const char *algoName, *paramName;
 	BYTE buffer[ MAX_PKCSIZE_ECCPOINT + 8 ];
 	int fieldSize, encodedPointSize DUMMY_INIT;
@@ -467,10 +498,11 @@ static int writeSshEccPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_ECDSA );
 			  /* We should never be writing ECDH keys */
-	REQUIRES( sanityCheckPKCInfo( eccKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
 	/* Get the string form of the curve parameters */
-	switch( eccKey->curveType )
+	switch( pkcInfo->curveType )
 		{
 		case CRYPT_ECCCURVE_P256:
 			algoName = "ecdsa-sha2-nistp256";
@@ -501,12 +533,12 @@ static int writeSshEccPublicKey( INOUT_PTR STREAM *stream,
 	   point data.  Note that this assumes that we'll be using a known 
 	   (named) curve rather than arbitrary curve parameters, which has been 
 	   enforced by the higher-level code */
-	status = getECCFieldSize( eccKey->curveType, &fieldSize, FALSE );
+	status = getECCFieldSize( pkcInfo->curveType, &fieldSize, FALSE );
 	if( cryptStatusOK( status ) )
 		{
 		status = exportECCPoint( buffer, MAX_PKCSIZE_ECCPOINT, 
-								 &encodedPointSize, &eccKey->eccParam_qx, 
-								 &eccKey->eccParam_qy, fieldSize );
+								 &encodedPointSize, &pkcInfo->eccParam_qx, 
+								 &pkcInfo->eccParam_qy, fieldSize );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
@@ -530,10 +562,10 @@ static int writeSsh25519PublicKey( INOUT_PTR STREAM *stream,
 								   const CONTEXT_INFO *contextInfoPtr,
 								   IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const BERNSTEIN_KEY_INFO *bernsteinKey;
 	const char *algoName;
-	BYTE buffer[ CRYPT_MAX_PKCSIZE + 8 ];
-	int algoNameLen, encodedPointSize, status;
+	int algoNameLen;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -541,15 +573,12 @@ static int writeSsh25519PublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_ED25519 );
 			  /* We should never be writing X25519 keys */
-	REQUIRES( sanityCheckPKCInfo( eccKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
-	/* Get the public value in Bernstein special-snowflake form */
-	status = export25519ByteString( buffer, CRYPT_MAX_PKCSIZE, 
-									&encodedPointSize, 
-									&eccKey->curve25519Param_pub );
-	if( cryptStatusError( status ) )
-		return( status );
-	ENSURES( encodedPointSize == 32 );
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	bernsteinKey = pkcInfo->bernsteinKey;
 
 	/* Get the string form of the algorithm */
 	switch( cryptAlgo )
@@ -565,11 +594,10 @@ static int writeSsh25519PublicKey( INOUT_PTR STREAM *stream,
 
 	/* Write the PKC information */
 	writeUint32( stream, sizeofString32( algoNameLen ) + \
-						 sizeofString32( encodedPointSize ) );
+						 sizeofString32( MIN_PKCSIZE_BERNSTEIN ) );
 	writeString32( stream, algoName, algoNameLen );
-	status = writeString32( stream, buffer, encodedPointSize );
-	zeroise( buffer, CRYPT_MAX_PKCSIZE );
-	return( status );
+	return( writeString32( stream, bernsteinKey->pubKey, 
+						   MIN_PKCSIZE_BERNSTEIN ) );
 	}
 #endif /* USE_X25519 || USE_ED25519 */
 #endif /* USE_SSH */
@@ -613,29 +641,30 @@ static int writeTlsDlpPublicKey( INOUT_PTR STREAM *stream,
 								 IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 								 IN_BOOL const BOOLEAN writeExtKey )
 	{
-	const PKC_INFO *dhKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_DH );
-	REQUIRES( sanityCheckPKCInfo( dhKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 	REQUIRES( isBooleanValue( writeExtKey ) );
 
-	if( dhKey->domainParams != NULL )
+	if( pkcInfo->domainParams != NULL )
 		{
-		const DH_DOMAINPARAMS *domainParams = dhKey->domainParams;
+		const DH_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
 
 		writeBignumInteger16U( stream, &domainParams->p );
 		if( writeExtKey )
 			writeBignumInteger16U( stream, &domainParams->q ); 
 		return( writeBignumInteger16U( stream, &domainParams->g ) );
 		}
-	writeBignumInteger16U( stream, &dhKey->dlpParam_p );
+	writeBignumInteger16U( stream, &pkcInfo->dlpParam_p );
 	if( writeExtKey )
-		writeBignumInteger16U( stream, &dhKey->dlpParam_q );
-	return( writeBignumInteger16U( stream, &dhKey->dlpParam_g ) );
+		writeBignumInteger16U( stream, &pkcInfo->dlpParam_q );
+	return( writeBignumInteger16U( stream, &pkcInfo->dlpParam_g ) );
 	}
 
 #if defined( USE_ECDH ) || defined( USE_ECDSA )
@@ -669,7 +698,7 @@ static int writeTlsEccPublicKey( INOUT_PTR STREAM *stream,
 								 const CONTEXT_INFO *contextInfoPtr,
 								 IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const MAP_TABLE *tlsCurveInfoPtr;
 	int curveID, tlsCurveInfoNoEntries, status;
 
@@ -678,13 +707,14 @@ static int writeTlsEccPublicKey( INOUT_PTR STREAM *stream,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_ECDH );
-	REQUIRES( sanityCheckPKCInfo( eccKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
 	/* Look up the TLS NamedCurve ID based on the curve ID */
 	status = getEccTlsInfoTbl( &tlsCurveInfoPtr, &tlsCurveInfoNoEntries );
 	if( cryptStatusError( status ) )
 		return( status );
-	status = mapValue( eccKey->curveType, &curveID, tlsCurveInfoPtr, 
+	status = mapValue( pkcInfo->curveType, &curveID, tlsCurveInfoPtr, 
 					   tlsCurveInfoNoEntries );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -701,18 +731,24 @@ static int writeTlsPQCPublicKey( INOUT_PTR STREAM *stream,
 								 const CONTEXT_INFO *contextInfoPtr,
 								 IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const PKC_INFO *pqcKey = contextInfoPtr->ctxPKC;
-	const MLKEM_KEY_INFO *mlkemKey = pqcKey->mlkemKey;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const MLKEM_KEY_INFO *mlkemKey;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_MLKEM );
-	REQUIRES( sanityCheckPKCInfo( pqcKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	mlkemKey = pkcInfo->mlkemKey;
 
 	/* The TLS ML-KEM public key is concatenated together with a 25519 keyex
 	   value without any encapsulation so we just write the raw key data */
+	REQUIRES( mlkemKey->pubKeySize == MLKEM768_PUBLICKEYBYTES );
 	return( swrite( stream, mlkemKey->pubKey, mlkemKey->pubKeySize ) );
 	}
 #endif /* USE_MLKEM */
@@ -738,8 +774,8 @@ static int writeTlsPQCPublicKey( INOUT_PTR STREAM *stream,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int writePgpKeyHeader( INOUT_PTR STREAM *stream, 
-							  const PKC_INFO *pkcInfo,
-							  const CRYPT_ALGO_TYPE cryptAlgo )
+							  IN_PTR const PKC_INFO *pkcInfo,
+							  IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
 	int pgpAlgo, status;
 
@@ -759,7 +795,7 @@ static int writePgpKeyHeader( INOUT_PTR STREAM *stream,
 		}
 	else
 		writeUint32Time( stream, pkcInfo->pgpCreationTime );
-	status = cryptlibToPgpAlgo( cryptAlgo, &pgpAlgo );
+	status = cryptlibToPgpAlgo( cryptAlgo, 0, &pgpAlgo );
 	if( cryptStatusError( status ) )
 		return( status );
 	return( sputc( stream, pgpAlgo ) );
@@ -769,20 +805,21 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int writePgpRsaPublicKey( INOUT_PTR STREAM *stream, 
 								 const CONTEXT_INFO *contextInfoPtr )
 	{
-	const PKC_INFO *rsaKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( sanityCheckPKCInfo( rsaKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
-	status = writePgpKeyHeader( stream, rsaKey, CRYPT_ALGO_RSA );
+	status = writePgpKeyHeader( stream, pkcInfo, CRYPT_ALGO_RSA );
 	if( cryptStatusError( status ) )
 		return( status );
-	writeBignumInteger16Ubits( stream, &rsaKey->rsaParam_n );
-	return( writeBignumInteger16Ubits( stream, &rsaKey->rsaParam_e ) );
+	writeBignumInteger16Ubits( stream, &pkcInfo->rsaParam_n );
+	return( writeBignumInteger16Ubits( stream, &pkcInfo->rsaParam_e ) );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
@@ -790,7 +827,7 @@ static int writePgpDlpPublicKey( INOUT_PTR STREAM *stream,
 								 const CONTEXT_INFO *contextInfoPtr,
 								 IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const PKC_INFO *dlpKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -799,16 +836,17 @@ static int writePgpDlpPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_DSA || \
 			  cryptAlgo == CRYPT_ALGO_ELGAMAL );
-	REQUIRES( sanityCheckPKCInfo( dlpKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
-	status = writePgpKeyHeader( stream, dlpKey, cryptAlgo );
+	status = writePgpKeyHeader( stream, pkcInfo, cryptAlgo );
 	if( cryptStatusError( status ) )
 		return( status );
-	writeBignumInteger16Ubits( stream, &dlpKey->dlpParam_p );
+	writeBignumInteger16Ubits( stream, &pkcInfo->dlpParam_p );
 	if( cryptAlgo == CRYPT_ALGO_DSA )
-		writeBignumInteger16Ubits( stream, &dlpKey->dlpParam_q );
-	writeBignumInteger16Ubits( stream, &dlpKey->dlpParam_g );
-	return( writeBignumInteger16Ubits( stream, &dlpKey->dlpParam_y ) );
+		writeBignumInteger16Ubits( stream, &pkcInfo->dlpParam_q );
+	writeBignumInteger16Ubits( stream, &pkcInfo->dlpParam_g );
+	return( writeBignumInteger16Ubits( stream, &pkcInfo->dlpParam_y ) );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
@@ -816,7 +854,7 @@ static int writePgpEccPublicKey( INOUT_PTR STREAM *stream,
 								 const CONTEXT_INFO *contextInfoPtr,
 								 IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	BYTE buffer[ MAX_PKCSIZE_ECCPOINT + 8 ], oidBuffer[ MAX_OID_SIZE + 8 ];
 	int fieldSize, encodedPointSize DUMMY_INIT, oidLength DUMMY_INIT;
 	int status;
@@ -827,18 +865,19 @@ static int writePgpEccPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_ECDH || \
 			  cryptAlgo == CRYPT_ALGO_ECDSA );
-	REQUIRES( sanityCheckPKCInfo( eccKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
 	/* Get the information that we'll need to encode the point data and the 
 	   key.  Note that this assumes that we'll be using a known (named) 
 	   curve rather than arbitrary curve parameters, which has been enforced 
 	   by the higher-level code */
-	status = getECCFieldSize( eccKey->curveType, &fieldSize, FALSE );
+	status = getECCFieldSize( pkcInfo->curveType, &fieldSize, FALSE );
 	if( cryptStatusOK( status ) )
 		{
 		status = exportECCPoint( buffer, MAX_PKCSIZE_ECCPOINT, 
-								 &encodedPointSize, &eccKey->eccParam_qx, 
-								 &eccKey->eccParam_qy, fieldSize );
+								 &encodedPointSize, &pkcInfo->eccParam_qx, 
+								 &pkcInfo->eccParam_qy, fieldSize );
 		}
 	if( cryptStatusOK( status ) )
 		{
@@ -848,16 +887,16 @@ static int writePgpEccPublicKey( INOUT_PTR STREAM *stream,
 		   it to an intermediate buffer in order to then write it without the
 		   tag */
 		sMemOpen( &oidStream, oidBuffer, MAX_OID_SIZE );
-		status = writeECCOID( &oidStream, eccKey->curveType );
+		status = writeECCOID( &oidStream, pkcInfo->curveType );
 		if( cryptStatusOK( status ) )
-			oidLength = stell( &oidStream );
+			status = oidLength = stell( &oidStream );
 		sMemDisconnect( &oidStream );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
 
 	/* Write the ECC key */
-	status = writePgpKeyHeader( stream, eccKey, cryptAlgo );
+	status = writePgpKeyHeader( stream, pkcInfo, cryptAlgo );
 	if( cryptStatusOK( status ) )
 		status = swrite( stream, oidBuffer + 1, oidLength - 1 );
 	if( cryptStatusOK( status ) )
@@ -910,11 +949,6 @@ int writePublicKeyRsaFunction( INOUT_PTR STREAM *stream,
 		case KEYFORMAT_SSH:
 			return( writeSshRsaPublicKey( stream, contextInfoPtr ) );
 #endif /* USE_SSH */
-
-#ifdef USE_SSH1
-		case KEYFORMAT_SSH1:
-			return( writeSsh1RsaPublicKey( stream, contextInfoPtr ) );
-#endif /* USE_SSH1 */
 
 #ifdef USE_PGPKEYS 
 		case KEYFORMAT_PGP:
@@ -1161,7 +1195,10 @@ int writePublicKeyPQCFunction( INOUT_PTR STREAM *stream,
 	DLP		  p		  q		  g		  y 
 	ECDLP	  point	  -		  -		  - 
 	ECDLP	  x		  y		  -		  - 
-	25519	  point	  -		  -		  - */
+	25519	  point	  -		  -		  -
+
+   Note that the last one, for Ed25519, is for future use only since 
+   currently no crypto device known to cryptlib supports these keys */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3, 6 ) ) \
 int writeFlatPublicKey( OUT_BUFFER_OPT( bufMaxSize, *bufSize ) void *buffer, 
@@ -1183,13 +1220,9 @@ int writeFlatPublicKey( OUT_BUFFER_OPT( bufMaxSize, *bufSize ) void *buffer,
 #if defined( USE_ECDSA ) || defined( USE_ECDH ) || \
 	defined( USE_X25519 ) || defined( USE_ED25519 )
 	BYTE encodedPointBuffer[ MAX_PKCSIZE_ECCPOINT + 8 ];
-#endif /* USE_ECDSA || USE_ECDH || USE_ECDSA || USE_ECDH */
-	const int comp1Size = sizeofInteger( component1, component1Length );
-	const int comp2Size = ( component2 == NULL ) ? 0 : \
-						  sizeofInteger( component2, component2Length );
-	const int comp3Size = ( component3 == NULL ) ? 0 : \
-						  sizeofInteger( component3, component3Length );
-	int parameterSize, componentSize, totalSize, status;
+#endif /* USE_ECDSA || USE_ECDH || USE_X25519 || USE_ED25519 */
+	int comp1Size, comp2Size = 0, comp3Size = 0, parameterSize;
+	int componentSize, totalSize, status;
 
 	assert( ( buffer == NULL && bufMaxSize == 0 ) || \
 			isWritePtrDynamic( buffer, bufMaxSize ) );
@@ -1241,6 +1274,14 @@ int writeFlatPublicKey( OUT_BUFFER_OPT( bufMaxSize, *bufSize ) void *buffer,
 		memset( buffer, 0, min( 16, bufMaxSize ) );
 		}
 	*bufSize = 0;
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	comp1Size = sizeofInteger( component1, component1Length );
+	if( component2 != NULL ) 
+		comp2Size = sizeofInteger( component2, component2Length );
+	if( component3 != NULL ) 
+		comp3Size = sizeofInteger( component3, component3Length );
 
 	/* Calculate the size of the algorithm parameters and the public key 
 	   components */
@@ -1328,7 +1369,7 @@ int writeFlatPublicKey( OUT_BUFFER_OPT( bufMaxSize, *bufSize ) void *buffer,
 				parameterSize = 0;
 			ENSURES( !cryptStatusError( parameterSize ) );
 			break;
-#endif /* USE_ECDSA || USE_ECDH || USE_ECDSA || USE_ECDH */
+#endif /* USE_ECDSA || USE_ECDH || USE_X25519 || USE_ED25519 */
 
 		default:
 			retIntError();
@@ -1417,14 +1458,18 @@ int writeFlatPublicKey( OUT_BUFFER_OPT( bufMaxSize, *bufSize ) void *buffer,
 			}
 		}
 	if( cryptStatusOK( status ) )
-		*bufSize = stell( &stream );
+		status = totalSize = stell( &stream );
 #if defined( USE_ECDSA ) || defined( USE_ECDH )
 	zeroise( encodedPointBuffer, MAX_PKCSIZE_ECCPOINT );
 #endif /* USE_ECDSA || USE_ECDH */
 
 	/* Clean up */
 	sMemDisconnect( &stream );
-	return( status );
+	if( cryptStatusError( status ) )
+		return( status );
+	
+	*bufSize = totalSize;
+	return( CRYPT_OK );
 	}
 #endif /* USE_INT_ASN1 */
 
@@ -1508,7 +1553,7 @@ int encodeDLValuesFunction( OUT_BUFFER( bufMaxSize, *bufSize ) BYTE *buffer,
 			retIntError();
 		}
 	if( cryptStatusOK( status ) )
-		length = stell( &stream );
+		status = length = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1560,7 +1605,7 @@ int encodeECDLValuesFunction( OUT_BUFFER( bufMaxSize, *bufSize ) BYTE *buffer,
 	writeBignumInteger32( &stream, value1 );
 	status = writeBignumInteger32( &stream, value2 );
 	if( cryptStatusOK( status ) )
-		length = stell( &stream );
+		status = length = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );

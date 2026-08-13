@@ -88,7 +88,8 @@ int readMessageDigest( INOUT_PTR STREAM *stream,
 	REQUIRES_S( rangeCheck( hashMaxLen, MIN_HASHSIZE, 
 							CRYPT_MAX_HASHSIZE ) );
 
-	/* Clear the return values */
+	/* Clear return values */
+	*hashAlgo = CRYPT_ALGO_NONE;
 	REQUIRES_S( isShortIntegerRangeNZ( hashMaxLen ) ); 
 	memset( hash, 0, min( 16, hashMaxLen ) );
 	*hashSize = 0;

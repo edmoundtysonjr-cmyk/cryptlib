@@ -19,6 +19,11 @@
 
 #ifdef USE_SSH
 
+/* The maximum padding length size.  The length is encoded as a byte so we
+   can never have more than 255 bytes of padding */
+
+#define MAX_PADDING_LENGTH		255
+
 /****************************************************************************
 *																			*
 *							Sub-packet Management Routines					*
@@ -331,7 +336,7 @@ int wrapPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	SSH_INFO *sshInfo = sessionInfoPtr->sessionSSH;
 	STREAM metadataStream;
 	MESSAGE_DATA msgData;
-	BYTE padding[ 128 + 8 ];
+	BYTE padding[ MAX_PADDING_LENGTH + 8 ];
 	BYTE *paddedPayloadStartPtr;
 #ifdef USE_SSH_OPENSSH
 	const BOOLEAN useETM = \
@@ -404,7 +409,8 @@ int wrapPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		REQUIRES( !checkOverflowSub( paddedLength, length ) );
 		padLength = paddedLength - length;
 		}
-	ENSURES( padLength >= SSH2_MIN_PADLENGTH_SIZE && padLength < 256 );
+	ENSURES( padLength >= SSH2_MIN_PADLENGTH_SIZE && \
+			 padLength <= MAX_PADDING_LENGTH );
 #ifdef USE_SSH_OPENSSH
 	if( useETM )
 		{

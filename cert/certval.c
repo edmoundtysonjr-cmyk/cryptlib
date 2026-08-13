@@ -929,8 +929,8 @@ static int writeRtcsResponseEntry( INOUT_PTR STREAM *stream,
 	ENSURES( cryptStatusOK( status ) );
 	writeSequence( stream, sizeofShortObject( KEYID_SIZE ) + \
 						   sizeofEnumerated( 1 ) + \
-						   ( rtcsEntry->attributeSize > 0 ) ? \
-							 sizeofShortObject( rtcsEntry->attributeSize ) : 0 );
+						   ( rtcsEntry->attributeSize > 0 ? \
+							 sizeofShortObject( rtcsEntry->attributeSize ) : 0 ) );
 	writeOctetString( stream, rtcsEntry->data, KEYID_SIZE, DEFAULT_TAG );
 	status = writeEnumerated( stream, value, DEFAULT_TAG );
 	if( cryptStatusError( status ) || rtcsEntry->attributeSize <= 0 )

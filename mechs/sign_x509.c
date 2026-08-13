@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							X.509/PKI Signature Routines					*
-*						Copyright Peter Gutmann 1993-2024					*
+*						Copyright Peter Gutmann 1993-2025					*
 *																			*
 ****************************************************************************/
 
@@ -64,7 +64,7 @@ int createX509signature( OUT_BUFFER( signedObjectMaxLength, \
 
 	assert( isWritePtrDynamic( signedObject, signedObjectMaxLength ) );
 	assert( isWritePtr( signedObjectLength, sizeof( int ) ) );
-	assert( isReadPtr( object, objectLength ) && \
+	assert( isReadPtrDynamic( object, objectLength ) && \
 			cryptStatusOK( checkCertObjectEncoding( object, objectLength ) ) );
 	assert( formatInfo == NULL || \
 			isReadPtr( formatInfo, sizeof( X509SIG_FORMATINFO ) ) );
@@ -195,9 +195,9 @@ int createX509signature( OUT_BUFFER( signedObjectMaxLength, \
 		if( formatInfo->isExplicit )
 			{
 			writeConstructed( &stream, 
-							  sizeofObject( signatureLength + \
-											formatInfo->extraLength ),
-											/* Checked earlier */
+							  sizeofShortObject( signatureLength + \
+												 formatInfo->extraLength ),
+												 /* Checked earlier */
 							  formatInfo->tag );
 			writeSequence( &stream, 
 						   signatureLength + formatInfo->extraLength );
@@ -310,13 +310,30 @@ int checkX509signature( IN_BUFFER( signedObjectLength ) const void *signedObject
 
 	/* Remember the location and size of the signature data */
 	status = sMemGetDataBlockRemaining( &stream, &sigPtr, &sigLength );
-	if( cryptStatusOK( status ) && !isShortIntegerRangeNZ( sigLength ) )
+	if( cryptStatusOK( status ) )
 		{
-		/* Just the signature portion of the message both should never be 
-		   this big and if it is will fail the input-length check in 
-		   checkSignature(), so we check for it here and return a more
-		   meaningful error code */
-		status = CRYPT_ERROR_OVERFLOW;
+		if( !isShortIntegerRange( sigLength ) )
+			{
+			/* Just the signature portion of the message both should never 
+			   be this big and if it is will fail the input-length check in 
+			   checkSignature(), so we check for it here and return a more
+			   meaningful error code */
+			status = CRYPT_ERROR_OVERFLOW;
+			}
+		else
+			{
+			/* The other side of the check in checkSignature(), which we have
+			   to do separately in order to provide a meaningful error code.  
+			   This shouldn't be triggered since we've been passed a 
+			   certificate object that the certificate code that calls us 
+			   has checked for validity first 
+			   (see cert/imp_exp.c:importCert() after the readCertFunction()
+			   call), but we add it here to document that it's been done and 
+			   to avoid having to trace back up through calling code to 
+			   verify this */
+			if( sigLength < 40 )
+				status = CRYPT_ERROR_BADDATA;
+			}
 		}
 	if( cryptStatusError( status ) )
 		{

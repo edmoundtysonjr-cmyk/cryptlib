@@ -196,8 +196,7 @@ CC_SLDFLAGS		= CROSSCOMPILE=1
 
 BNOBJS		= $(OBJPATH)bn_asm.o $(OBJPATH)bn_exp.o $(OBJPATH)bn_exp2.o \
 			  $(OBJPATH)bn_gcd.o $(OBJPATH)bn_mul.o $(OBJPATH)bn_recp.o \
-			  $(OBJPATH)ec_lib.o $(OBJPATH)ecp_mont.o $(OBJPATH)ecp_smpl.o \
-			  $(OBJPATH)ec_mult.o
+			  $(OBJPATH)ec_lib.o $(OBJPATH)ecp_smpl.o $(OBJPATH)ec_mult.o
 
 CERTOBJS	= $(OBJPATH)certrev.o $(OBJPATH)certschk.o $(OBJPATH)certsign.o \
 			  $(OBJPATH)certval.o $(OBJPATH)chain.o $(OBJPATH)chk_cert.o \
@@ -457,7 +456,7 @@ generic:
 	@$(MAKE) common-tasks
 	@./tools/buildall.sh generic $(MAKE) $(CC) $(OSNAME) $(CFLAGS) $(BUILDOPTS)
 
-# Special-case targets.  The "analyse" target isn't used directly but is
+# Code-analysis targets.  The "analyse" target isn't used directly but is
 # invoked as part of the clang static analyser build process.  analyse-gcc
 # uses the gcc static analyser instead of the default clang one, however see
 # the comments on tools/ccopts.sh about the huge numbers of FPs that this
@@ -476,6 +475,7 @@ analyse-gcc:
 	# errors because codespell returns some nonzero error code on exit,
 	# although make then helpfully pipes up to tell us that it's ignored
 	# the error status that we've told it to ignore.
+
 spellcheck:
 	@- codespell --quiet-level 3 -S "*.dll,*.lib,*.pdf,./bn/*,./crypt/*,./device/tss2*,./random/mvsent.s,./test/smime/*,./tools/dumpasn1.cfg,./zlib/*"  > ~/clib_spelling.txt
 
@@ -484,6 +484,8 @@ testlib-special:
 	$(LD) $(LDFLAGS) -o testlib `cat $(LINKFILE)` $(LDEXTRA) -L. -l$(PROJ) \
 		`./tools/getlibs.sh special $(LD) $(OSNAME)`
 	@rm -f $(LINKFILE)
+
+# Fuzzing targets.
 
 fuzz:
 	@$(MAKE) check-clang
@@ -514,15 +516,6 @@ fuzz-old:
 		OSNAME=$(OSNAME)
 	@mv ./testlib ./fuzz-clib
 
-# Non-x86 fuzzing with gcc as the compiler.
-
-fuzz-gcc:
-	@$(MAKE) common-tasks
-	@./tools/buildall.sh special $(MAKE) ~/AFL/afl-gcc-fast $(OSNAME) $(CFLAGS_FUZZ_GCC)
-	@rm -f $(LINKFILE)
-	make testlib-special LD=~/AFL/afl-gcc-fast OSNAME=$(OSNAME)
-	@mv ./testlib ./fuzz-clib
-
 honggfuzz:
 	@$(MAKE) check-clang
 	@$(MAKE) common-tasks
@@ -540,10 +533,17 @@ libfuzzer:
 		`./tools/getlibs.sh special clang Linux`
 	@mv ./a.out ./fuzz-clib
 
-# On systems with threading when cryptlib is terminated before the driver-
-# binding thread has had a chance to complete this will produce a warning
-# for a leak via _dl_allocate_tls() since pthread_join() is never called
-# and so the thread's resources aren't reclaimed.
+fuzz-gcc:
+	@$(MAKE) common-tasks
+	@./tools/buildall.sh special $(MAKE) ~/AFL/afl-gcc-fast $(OSNAME) $(CFLAGS_FUZZ_GCC)
+	@rm -f $(LINKFILE)
+	make testlib-special LD=~/AFL/afl-gcc-fast OSNAME=$(OSNAME)
+	@mv ./testlib ./fuzz-clib
+
+# Dynamic analysers.  On systems with threading when cryptlib is terminated
+# before the driver-binding thread has had a chance to complete this will
+# produce a warning for a leak via _dl_allocate_tls() since pthread_join()
+# is never called and so the thread's resources aren't reclaimed.
 
 valgrind:
 	@$(MAKE) common-tasks
@@ -555,6 +555,21 @@ valgrind:
 	@echo "_dl_allocate_tls() if cryptlib is shut down before the driver-"
 	@echo "binding thread has been waited on to recover its TLS."
 	@echo ""
+
+# Sanitisers.  The need to run sanitisers with -O0 is covered in "Don’t Look
+# UB: Exposing Sanitizer-Eliding Compiler Optimizations", Raphael Isemann et
+# al, POPL'23, and arises from the fact that compilers will use UB to break
+# code so that the code with the problems that the sanitiser is supposed to
+# detect get removed from the binary.  The paper gives an example of a short
+# program with three bugs that would be caught by sanitisers that are removed
+# even with basic -O1, so the program appears to function as expected but in
+# fact silently produces incorrect output without ever triggering any
+# sanitiser.
+#
+# Because of this we provide two sanitiser builds, the default and one with
+# optimisation, so compiler breakage, disabled.  This means running the
+# UBSAN build twice, once as 'ubsan', once as 'ubsan0'.  ASAN shouldn't be
+# affected.
 
 asan:
 	@$(MAKE) check-clang
@@ -578,6 +593,13 @@ ubsan:
 	@$(MAKE) check-clang
 	@$(MAKE) common-tasks
 	@./tools/buildall.sh special $(MAKE) clang $(OSNAME) $(CFLAGS_UBSAN)
+	@rm -f $(LINKFILE)
+	make testlib-special LD=clang LDFLAGS="$(UBSAN_FLAGS)" OSNAME=$(OSNAME)
+
+ubsan0:
+	@$(MAKE) check-clang
+	@$(MAKE) common-tasks
+	@./tools/buildall.sh special $(MAKE) clang $(OSNAME) "-O0 $(CFLAGS_UBSAN)"
 	@rm -f $(LINKFILE)
 	make testlib-special LD=clang LDFLAGS="$(UBSAN_FLAGS)" OSNAME=$(OSNAME)
 
@@ -737,9 +759,6 @@ $(OBJPATH)bn_recp.o:	crypt/osconfig.h bn/bn.h bn/bn_lcl.h bn/bn_recp.c
 
 $(OBJPATH)ec_lib.o:		crypt/osconfig.h bn/bn.h bn/bn_lcl.h bn/ec.h bn/ec_lib.c
 						$(CC) $(CFLAGS) -o $(OBJPATH)ec_lib.o bn/ec_lib.c
-
-$(OBJPATH)ecp_mont.o:	crypt/osconfig.h bn/bn.h bn/bn_lcl.h bn/ec.h bn/ecp_mont.c
-						$(CC) $(CFLAGS) -o $(OBJPATH)ecp_mont.o bn/ecp_mont.c
 
 $(OBJPATH)ecp_smpl.o:	crypt/osconfig.h bn/bn.h bn/bn_lcl.h bn/ec.h bn/ecp_smpl.c
 						$(CC) $(CFLAGS) -o $(OBJPATH)ecp_smpl.o bn/ecp_smpl.c
@@ -2248,11 +2267,16 @@ IRIX:
 IRIX64:
 	$(MAKE) $(DEFINES) CFLAGS="$(CFLAGS) -O3"
 
-# Linux: cc is usually gcc, although with some luck it'll eventually be killed by
-#		 LLVM.
+# Linux: cc is usually gcc, although with some luck it'll eventually be killed
+#		 by LLVM.
+#
+#		 The second target is for special builds like ASAN and UBSAN that
+#		 have all of the flags provided by the caller.
 
 Linux:
 	$(MAKE) $(DEFINES) CFLAGS="$(CFLAGS) -O3 -fomit-frame-pointer -D_REENTRANT"
+Linux-special:
+	$(MAKE) $(DEFINES) CFLAGS="$(CFLAGS) -D_REENTRANT"
 
 # Mac OS X: BSD variant.  Optimisation level is set via the ccopts.sh script.
 #			If you want to build a universal binary you can use a command a
@@ -2974,6 +2998,20 @@ target-linux-arm:
 			-DCONFIG_DATA_LITTLEENDIAN -O -D_REENTRANT" \
 		LDFLAGS="$(CC_LDFLAGS)"
 
+target-linux-armhf-eap:
+	@$(MAKE) target-init-unix
+	@$(MAKE) linux-target-comments
+	$(MAKE) $(CC_DEFINES) OSNAME=Linux CC=arm-linux-gnueabihf-gcc \
+		AR=arm-linux-gnueabihf-ar LD=arm-linux-gnueabihf-ld \
+		STRIP=arm-linux-gnueabihf-strip RANLIB=arm-linux-gnueabihf-ranlib \
+		CFLAGS="$(CC_CFLAGS) -D__UNIX__ -DUSE_EAP -DUSE_DES -DHAS_RECURSIVE_MUTEX \
+			-DHAS_ROBUST_MUTEX -Wno-pointer-sign -Wno-strict-aliasing -fwrapv \
+			-fno-delete-null-pointer-checks -fstack-protector-strong \
+			-D_FORTIFY_SOURCE=2 -DOSVERSION=5 -O3 -fomit-frame-pointer \
+			`./tools/ccopts-crosscompile.sh arm-linux-gnueabihf-gcc` \
+			-DCONFIG_DATA_LITTLEENDIAN -D_REENTRANT -fPIC" \
+		LDFLAGS="$(XLDFLAGS)"
+
 target-linux-arm64:
 	@$(MAKE) target-init-unix
 	@$(MAKE) linux-target-comments
@@ -2984,6 +3022,20 @@ target-linux-arm64:
 			`./tools/ccopts-crosscompile.sh aarch64-linux-gnu-gcc` \
 			-DCONFIG_DATA_LITTLEENDIAN -O -D_REENTRANT -fPIC" \
 		LDFLAGS="$(CC_LDFLAGS)"
+
+target-linux-arm64-eap:
+	@$(MAKE) target-init-unix
+	@$(MAKE) linux-target-comments
+	$(MAKE) $(CC_DEFINES) OSNAME=Linux CC=aarch64-linux-gnu-gcc \
+		AR=aarch64-linux-gnu-ar LD=aarch64-linux-gnu-ld \
+		STRIP=aarch64-linux-gnu-strip RANLIB=aarch64-linux-gnu-ranlib \
+		CFLAGS="$(CC_CFLAGS) -D__UNIX__ -DUSE_EAP -DUSE_DES -DHAS_RECURSIVE_MUTEX \
+			-DHAS_ROBUST_MUTEX -Wno-pointer-sign -Wno-strict-aliasing -fwrapv \
+			-fno-delete-null-pointer-checks -fstack-protector-strong \
+			-D_FORTIFY_SOURCE=2 -DOSVERSION=5 -O3 -fomit-frame-pointer \
+			`./tools/ccopts-crosscompile.sh aarch64-linux-gnu-gcc` \
+			-DCONFIG_DATA_LITTLEENDIAN -D_REENTRANT -fPIC" \
+ 		LDFLAGS="$(CC_LDFLAGS)"
 
 target-linux-sh4:
 	@$(MAKE) target-init-unix
@@ -3015,6 +3067,17 @@ target-linux-x86:
 		CFLAGS="$(CC_CFLAGS) -D__UNIX__ \
 			`./tools/ccopts-crosscompile.sh $(CC)` \
 			-DCONFIG_DATA_LITTLEENDIAN -O -D_REENTRANT"
+
+target-linux-x86-eap:
+	@$(MAKE) target-init-unix
+	@$(MAKE) linux-target-comments
+	$(MAKE) $(CC_DEFINES) OSNAME=Linux CC=gcc AR=ar LD=ld STRIP=strip \
+		CFLAGS="$(CC_CFLAGS) -D__UNIX__ -DUSE_EAP -DUSE_DES -DHAS_RECURSIVE_MUTEX \
+			-DHAS_ROBUST_MUTEX -Wno-pointer-sign -Wno-strict-aliasing -fwrapv \
+		 	-fno-delete-null-pointer-checks -fstack-protector-strong \
+			-D_FORTIFY_SOURCE=2 -DOSVERSION=5 -O3 -fomit-frame-pointer \
+			`./tools/ccopts-crosscompile.sh $(CC)` \
+			-DCONFIG_DATA_LITTLEENDIAN -D_REENTRANT -m32 -fPIC"
 
 target-linux-x86-shared:
 	@$(MAKE) target-init-unix

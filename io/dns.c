@@ -5,7 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <ctype.h>
 #if defined( INC_ALL )
   #include "crypt.h"
   #include "stream_int.h"
@@ -41,11 +40,13 @@ static int getAddrInfoError( INOUT_PTR NET_STREAM_INFO *netStream,
 	const char *errorString = gai_strerror( errorCode );
 	const int errorStringLen = strnlen_s( errorString, MAX_ERRMSG_SIZE );
   #endif /* System-specific error string handling */
+#endif /* USE_ERRMSGS */
 
 	assert( isWritePtr( netStream, sizeof( NET_STREAM_INFO ) ) );
 
 	REQUIRES( cryptStatusError( status ) );
 
+#ifdef USE_ERRMSGS
 	/* Get the text string describing the error that occurred.  For the 
 	   Windows case the returned length is the string length without the
 	   null terminator so we don't need to perform any special handling for 
@@ -66,7 +67,7 @@ static int getAddrInfoError( INOUT_PTR NET_STREAM_INFO *netStream,
   #elif defined( USE_IPv6 )
 	setErrorString( NETSTREAM_ERRINFO, errorString, errorStringLen );
   #else
-	mapNetworkError( netStream, errorCode, TRUE, status );
+	( void ) mapNetworkError( netStream, errorCode, TRUE, status );
   #endif /* __WINDOWS__ */
 #endif /* USE_ERRMSGS */
 
@@ -161,16 +162,52 @@ static int addAddrInfo( INOUT_PTR_OPT struct addrinfo *prevAddrInfoPtr,
 	return( 0 );
 	}
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 2, 3, 4 ) ) \
+static void SOCKET_API my_freeaddrinfo( INOUT_PTR struct addrinfo *ai )
+	{
+	LOOP_INDEX i;
+
+	assert( isWritePtr( ai, sizeof( struct addrinfo ) ) );
+
+	/* Perform basic error checking.  Since this is supposed to be an 
+	   emulation of a (normally) built-in function we don't perform any 
+	   REQUIRES()-style checking but only apply the basic checks that the 
+	   normal built-in form does */
+	if( ai == NULL )
+		{
+		/* Provide a more useful diagnostic than the default Unix one of
+		   lighting up a giant '?' in the middle of the dashboard */
+		DEBUG_DIAG(( "Invalid argument passed to emulated freeaddrinfo()" ));
+		return;
+		}
+
+	LOOP_MED( i = 0, ai != NULL && i < IP_ADDR_COUNT, i++ )
+		{
+		struct addrinfo *addrInfoCursor = ai;
+
+		ENSURES_V( LOOP_INVARIANT_MED( i, 0, IP_ADDR_COUNT - 1 ) );
+
+		ai = ai->ai_next;
+		if( addrInfoCursor->ai_addr != NULL )
+			{
+			clFree( "my_freeaddrinfo", addrInfoCursor->ai_addr );
+			addrInfoCursor->ai_addr = NULL;
+			}
+		clFree( "my_freeaddrinfo", addrInfoCursor );
+		}
+	ENSURES_V( LOOP_BOUND_OK );
+	}
+
+CHECK_RETVAL \
 static int SOCKET_API my_getaddrinfo( IN_STRING_OPT const char *nodename,
 									  IN_STRING const char *servname,
 									  const struct addrinfo *hints,
 									  OUT_PTR_PTR_COND struct addrinfo **res )
 	{
-	struct addrinfo *prevAddrInfo;
+	struct addrinfo *addrInfoListStart = NULL, *prevAddrInfo;
 	struct hostent *pHostent;
 	const int nodenameLen = ( nodename != NULL ) ? \
-							strnlen_s( nodename, MAX_DNS_SIZE ) : 0;
+							strnlen_s( nodename, MAX_DNS_SIZE + 1 ) : 0;
+							/* +1 to detect over-long strings */
 #ifdef EBCDIC_CHARS
 	char servBuffer[ 16 + 8 ];
 #endif /* EBCDIC_CHARS */
@@ -190,9 +227,13 @@ static int SOCKET_API my_getaddrinfo( IN_STRING_OPT const char *nodename,
 	/* Perform basic error checking.  Since this is supposed to be an 
 	   emulation of a (normally) built-in function we don't perform any 
 	   REQUIRES()-style checking but only apply the basic checks that the 
-	   normal built-in form does */
+	   normal built-in form does.  The strnlen_s() call deliberately uses
+	   an oversized length so that we can detect over-long strings with
+	   it */
 	if( servname == NULL || hints == NULL || res == NULL || \
-		( nodename == NULL && !( hints->ai_flags & AI_PASSIVE ) ) )
+		( nodename == NULL && !( hints->ai_flags & AI_PASSIVE ) ) || \
+		( nodename != NULL && \
+		  ( nodenameLen < MIN_DNS_SIZE || nodenameLen >= MAX_DNS_SIZE ) ) )
 		{
 		/* Provide a more useful diagnostic than the default Unix one of
 		   lighting up a giant '?' in the middle of the dashboard */
@@ -210,14 +251,15 @@ static int SOCKET_API my_getaddrinfo( IN_STRING_OPT const char *nodename,
 	   convert them to the internal one if we process them using an internal
 	   function rather than a system one */
 #ifdef EBCDIC_CHARS
-	strcpy_s( servBuffer, 16, servname );
+	status = strcpy_s( servBuffer, 16, servname );
+	ENSURES_EXT( cryptStatusOK( status ), -1 );
 	bufferToAscii( servBuffer, servBuffer );
 	servname = servBuffer;
 #endif /* EBCDIC_CHARS */
 
 	/* Convert the text-string port number into a numeric value */
 	status = strGetNumeric( servname, strnlen_s( servname, MAX_DNS_SIZE ), 
-							&port, 1, 65535 );
+							&port, MIN_PORT_NUMBER, MAX_DEST_PORT_NUMBER );
 	if( cryptStatusError( status ) )
 		{
 		/* Provide a more useful diagnostic than the default Unix one of
@@ -254,7 +296,7 @@ static int SOCKET_API my_getaddrinfo( IN_STRING_OPT const char *nodename,
 		{
 		ENSURES_EXT( LOOP_INVARIANT_LARGE( i, 0, nodenameLen - 1 ), -1 );
 
-		if( !isdigit( nodename[ i ] ) && nodename[ i ] != DOTTED_DELIMITER )
+		if( !isDigit( nodename[ i ] ) && nodename[ i ] != DOTTED_DELIMITER )
 			break;
 		}
 	ENSURES_EXT( LOOP_BOUND_OK, -1 );
@@ -268,7 +310,16 @@ static int SOCKET_API my_getaddrinfo( IN_STRING_OPT const char *nodename,
 							 port, hints->ai_socktype ) );
 		}
 
-	/* It's a host name, convert it to the in_addr form */
+	/* It's a host name, convert it to the in_addr form.  This is mapped to 
+	   one of the many variants of gethostbyname_r() depending on what the 
+	   OS supports, in one form this is:
+	   
+		gethostbyname_threadsafe( hostName, hostEntPtr, hostErrno ) ->
+
+		char hostBuf[ 4096 ];
+		struct hostent hostEnt;
+		gethostbyname_r( hostName, &hostEnt, hostBuf, 4096, &hostEntPtr, 
+						 &hostErrno ) */
 	gethostbyname_threadsafe( nodename, pHostent, hostErrno );
 	if( pHostent == NULL ) 
 		{
@@ -282,66 +333,47 @@ static int SOCKET_API my_getaddrinfo( IN_STRING_OPT const char *nodename,
 			return( hostErrno );
 		return( HOST_NOT_FOUND_ERROR );
 		}
-	ENSURES_EXT( pHostent->h_length == IP_ADDR_SIZE, -1 );
-	LOOP_MED( i = 0, prevAddrInfo = NULL, 
+	ENSURES_EXT( pHostent->h_addrtype == AF_INET && \
+				 pHostent->h_length == IP_ADDR_SIZE, -1 );
+				 /* This must be an IPv4 address because we're in a function 
+				    that emulates the IPv6 API on systems that don't support
+				    it */
+	LOOP_MED( ( i = 0, prevAddrInfo = NULL ), 
 			  i < IP_ADDR_COUNT && \
 					pHostent->h_addr_list[ i ] != NULL, 
 			  i++ )
 		{
+		struct addrinfo *addrInfoPtr;
 		int netAPIstatus;
 
 		ENSURES_EXT( LOOP_INVARIANT_MED( i, 0, IP_ADDR_COUNT - 1 ), -1 );
 
-		netAPIstatus = addAddrInfo( prevAddrInfo, res, 
+		netAPIstatus = addAddrInfo( prevAddrInfo, &addrInfoPtr, 
 									pHostent->h_addr_list[ i ], 
 									pHostent->h_length, port, 
 									hints->ai_socktype );
 		if( netAPIstatus != 0 )		/* Posix API status code */
+			{
+			if( addrInfoListStart != NULL )
+				my_freeaddrinfo( addrInfoListStart );
 			return( netAPIstatus );
-		prevAddrInfo = *res;
+			}
+		if( i == 0 )
+			{
+			/* Remember the start of the list */
+			addrInfoListStart = addrInfoPtr;
+			}
+		prevAddrInfo = addrInfoPtr;
 		}
 	ENSURES_EXT( LOOP_BOUND_OK, -1 );
+	if( addrInfoListStart == NULL )
+		return( HOST_NOT_FOUND_ERROR );
 
+	*res = addrInfoListStart;
 	return( 0 );
 	}
-
-STDC_NONNULL_ARG( ( 1 ) ) \
-static void SOCKET_API my_freeaddrinfo( INOUT_PTR struct addrinfo *ai )
-	{
-	LOOP_INDEX i;
-
-	assert( isWritePtr( ai, sizeof( struct addrinfo ) ) );
-
-	/* Perform basic error checking.  Since this is supposed to be an 
-	   emulation of a (normally) built-in function we don't perform any 
-	   REQUIRES()-style checking but only apply the basic checks that the 
-	   normal built-in form does */
-	if( ai == NULL )
-		{
-		/* Provide a more useful diagnostic than the default Unix one of
-		   lighting up a giant '?' in the middle of the dashboard */
-		DEBUG_DIAG(( "Invalid argument passed to emulated freeaddrinfo()" ));
-		return;
-		}
-
-	LOOP_MED( i = 0, ai != NULL && i < IP_ADDR_COUNT, i++ )
-		{
-		struct addrinfo *addrInfoCursor = ai;
-
-		ENSURES_V( LOOP_INVARIANT_MED( i, 0, IP_ADDR_COUNT - 1 ) );
-
-		ai = ai->ai_next;
-		if( addrInfoCursor->ai_addr != NULL )
-			{
-			clFree( "my_freeaddrinfo", addrInfoCursor->ai_addr );
-			addrInfoCursor->ai_addr = NULL;
-			}
-		clFree( "my_freeaddrinfo", addrInfoCursor );
-		}
-	ENSURES_V( LOOP_BOUND_OK );
-	}
 									  
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 5 ) ) \
+CHECK_RETVAL \
 static int SOCKET_API my_getnameinfo( IN_BUFFER( salen ) \
 											const struct sockaddr *sa, 
 									  SIZE_TYPE salen,
@@ -353,13 +385,19 @@ static int SOCKET_API my_getnameinfo( IN_BUFFER( salen ) \
 											servicelen,
 									  int flags )
 	{
-	const struct sockaddr_in *sockAddr = ( struct sockaddr_in * ) sa;
+#if defined( _MSC_VER ) && ( VC_LT_2010( _MSC_VER ) )
+	/* ws2tcpip.h gets the inet_ntop() declaration wrong and declares pAddr
+	   non-const even though the Windows docs claim that it's const */
+	struct sockaddr_in *sockAddr = ( struct sockaddr_in * ) sa;
+#else
+	const struct sockaddr_in *sockAddr = ( const struct sockaddr_in * ) sa;
+#endif /* VS 2010 or earlier */
 #if 0
 	const char *ipAddress;
 #else
 	char ipAddress[ CRYPT_MAX_TEXTSIZE + 8 ];
 #endif /* 0 */
-	int ipAddressLen;
+	int ipAddressLen, status;
 
 	static_assert( INET_ADDRSTRLEN <= CRYPT_MAX_TEXTSIZE,
 				   "ipAddress buffer too small" );
@@ -385,8 +423,10 @@ static int SOCKET_API my_getnameinfo( IN_BUFFER( salen ) \
 		}
 
 	/* Clear return values */
-	strlcpy_s( node, nodelen, "<Unknown>" );
-	strlcpy_s( service, servicelen, "0" );
+	status = strlcpy_s( node, nodelen, "<Unknown>" );
+	ENSURES_EXT( cryptStatusOK( status ), -1 );
+	status = strlcpy_s( service, servicelen, "0" );
+	ENSURES_EXT( cryptStatusOK( status ), -1 );
 
 	/* Get the remote system's address and port number */
 #if 0
@@ -468,8 +508,9 @@ int getAddressInfo( INOUT_PTR NET_STREAM_INFO *netStream,
 	/* If we're a client and using auto-detection of a PKI service, try and
 	   locate it via DNS SRV */
 #ifdef USE_DNSSRV
-	if( !isServer && name != NULL && nameLen == 12 && \
-		( !memcmp( name, "[Autodetect]", 12 ) || *name == '_' ) )
+	if( !isServer && name != NULL && \
+		( ( nameLen == 12 && !memcmp( name, "[Autodetect]", 12 ) ) || \
+		  ( *name == '_' ) ) )
 		{
 		char tempNameBuffer[ MAX_DNS_SIZE + 8 ];
 		int localPort, status;
@@ -567,9 +608,8 @@ int getAddressInfo( INOUT_PTR NET_STREAM_INFO *netStream,
 	BOOLEAN forceIPv4 = FALSE;
 	BOOLEAN_INT preferIPV4;
 
-	status = krnlSendMessage( certInfoPtr->ownerHandle, 
-							  IMESSAGE_GETATTRIBUTE, &preferIPV4,
-							  CRYPT_OPTION_PREFERIPV4 );
+	status = krnlSendMessage( DEFAULTUSER_OBJECT, IMESSAGE_GETATTRIBUTE, 
+							  &preferIPV4, CRYPT_OPTION_PREFERIPV4 );
 	if( cryptStatusOK( status ) && preferIPV4 )
 		{
 		/* Override any potential defaulting to IPv6 by the local system 
@@ -616,10 +656,13 @@ void freeAddressInfo( struct addrinfo *addrInfoPtr )
 	}
 
 /* Get the IP address for a socket, either in dotted-decimal form or 
-   network-byte-order binary form */
+   network-byte-order binary form.  This is used by the server in 
+   io/tcp_conn.c:openServerSocket() to report where a client connection 
+   is coming from */
 
 STDC_NONNULL_ARG( ( 1, 3, 5, 6 ) ) \
-void getSocketAddress( IN_BUFFER( sockAddrLen ) const void *sockAddr,
+void getSocketAddress( IN_BUFFER( sockAddrLen ) \
+							const struct sockaddr *sockAddr,
 					   IN_LENGTH_SHORT_MIN( 8 ) const int sockAddrLen,
 					   OUT_BUFFER( addressMaxLen, *addressLen ) \
 							char *address, 
@@ -687,8 +730,10 @@ void getSocketAddress( IN_BUFFER( sockAddrLen ) const void *sockAddr,
 	*port = localPort;
 	}
 
-STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
-void getSocketAddressBinary( const struct sockaddr *sockAddr,
+STDC_NONNULL_ARG( ( 1, 3, 5 ) ) \
+void getSocketAddressBinary( IN_BUFFER( sockAddrLen ) \
+								const struct sockaddr *sockAddr,
+							 IN_LENGTH_SHORT_MIN( 8 ) const int sockAddrLen,
 							 OUT_BUFFER( addressMaxLen, *addressLen ) \
 								char *address, 
 							 IN_LENGTH_SHORT_MIN( IP6_ADDR_SIZE ) \
@@ -699,23 +744,31 @@ void getSocketAddressBinary( const struct sockaddr *sockAddr,
 	const int addrType = \
 				( ( const struct sockaddr_in * ) sockAddr )->sin_family;
 
-	assert( isReadPtrDynamic( sockAddr, sizeof( struct sockaddr ) ) );
+	assert( isReadPtrDynamic( sockAddr, sockAddrLen ) );
 	assert( isWritePtrDynamic( address, addressMaxLen ) );
 
+	REQUIRES_V( isShortIntegerRangeMin( sockAddrLen, 8 ) );
 	REQUIRES_V( isShortIntegerRangeMin( addressMaxLen, IP6_ADDR_SIZE ) );
+	REQUIRES_V( ( addrType == AF_INET ) || ( addrType == AF_INET6 ) );
+				/* This isn't just a sanity check but also a safety check
+				   to avoid trying to treat who-knows-what as a pointer */
 
 	/* Clear return values */
 	memset( address, 0, min( addressMaxLen, IP6_ADDR_SIZE ) );
 	*addressLen = 0;
 
-	/* Copy out the appropriate address type, in network byte order */
+	/* Copy out the appropriate address type, in network byte order.  The 
+	   length that we've been passed has come from accept() so we can use
+	   an exact match rather than >= to check that we've got enough data
+	   available to work with */
 	switch( addrType ) 
 		{
 	    case AF_INET: 
 			{
 			const struct sockaddr_in *sockAddrIn = \
-							( struct sockaddr_in * ) sockAddr;
+							( const struct sockaddr_in * ) sockAddr;
 
+			REQUIRES_V( sockAddrLen == sizeof( struct sockaddr_in ) );
 			memcpy( address, &sockAddrIn->sin_addr.s_addr, IP_ADDR_SIZE );
 			*addressLen = IP_ADDR_SIZE;
 			break;
@@ -723,9 +776,10 @@ void getSocketAddressBinary( const struct sockaddr *sockAddr,
 
 		case AF_INET6: 
 			{
-			struct sockaddr_in6 *sockAddrIn6 = \
-							( struct sockaddr_in6 * ) sockAddr;
+			const struct sockaddr_in6 *sockAddrIn6 = \
+							( const struct sockaddr_in6 * ) sockAddr;
 
+			REQUIRES_V( sockAddrLen == sizeof( struct sockaddr_in6 ) );
 			memcpy( address, sockAddrIn6->sin6_addr.s6_addr, IP6_ADDR_SIZE );
 			*addressLen = IP6_ADDR_SIZE;
 			break;

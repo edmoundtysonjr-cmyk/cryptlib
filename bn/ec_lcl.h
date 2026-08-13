@@ -467,6 +467,21 @@ int ec_GF2m_simple_mul(const EC_GROUP *group, EC_POINT *r,
 int ec_GF2m_precompute_mult(EC_GROUP *group, BN_CTX *ctx);
 int ec_GF2m_have_precompute_mult(const EC_GROUP *group);
 
+/* Changes for cryptlib - pcg */
+
+STDC_NONNULL_ARG( ( 1, 2 ) ) \
+void EC_POINT_init( INOUT_PTR EC_POINT *ecPoint, 
+					IN_PTR const EC_GROUP *ecGroup );
+STDC_NONNULL_ARG( ( 1 ) ) \
+void EC_POINT_clear( INOUT_PTR EC_POINT *ecPoint );
+STDC_NONNULL_ARG( ( 1, 2 ) ) \
+void EC_GROUP_init( INOUT_PTR EC_GROUP *ecGroup, 
+					IN_PTR const EC_METHOD *ecMethod );
+STDC_NONNULL_ARG( ( 1 ) ) \
+void EC_GROUP_clear( INOUT_PTR EC_GROUP *ecGroup );
+
+/* End changes for cryptlib - pcg */
+
 #ifndef OPENSSL_NO_EC_NISTP_64_GCC_128
 /* method functions in ecp_nistp224.c */
 int ec_GFp_nistp224_group_init(EC_GROUP *group);

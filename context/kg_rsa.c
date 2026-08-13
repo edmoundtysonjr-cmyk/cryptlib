@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *				cryptlib RSA Key Generation/Checking Routines				*
-*						Copyright Peter Gutmann 1997-2024					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -43,13 +43,14 @@
    checked if this exponent is used and in general the necessary checking 
    presents a more or less intractable problem.  
    
-   To avoid this minefield we require a minimum exponent of at 17, the next 
-   generally-used value above 3.  However even this is only used by PGP 2.x, 
-   the next minimum is 33 (a weird value used by OpenSSH until mid-2010, see 
-   the comment further down), 41 (another weird value used by GPG until 
+   To avoid this minefield we require a minimum exponent of at least 17, the 
+   next generally-used value above 3.  However even this is only used by PGP 
+   2.x, the next minimum is 33 (a weird value used by OpenSSH until mid-2010, 
+   see the comment further down), 41 (another weird value used by GPG until 
    mid-2006), and then 257 or (in practice) F4 / 65537 by everything else.
    A survey of the web PKI in 2026 indicated 900M certificates using F4 and
-   20 using an oddball set of values all > F4 */
+   20 using an oddball set of values all > F4, but then that's the web PKI
+   which is its own private universe */
 
 #ifdef USE_PGPKEYS 
   #define MIN_PUBLIC_EXPONENT		17
@@ -76,8 +77,7 @@
 #endif /* eVC++ 4.0 ARMv4 optimiser bug */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-static int enableSidechannelProtection( INOUT_PTR PKC_INFO *pkcInfo, 
-										IN_BOOL const BOOLEAN isPrivateKey )
+static int enableSidechannelProtection( INOUT_PTR PKC_INFO *pkcInfo )
 	{
 	const BIGNUM *n = &pkcInfo->rsaParam_n, *e = &pkcInfo->rsaParam_e;
 	BIGNUM *k = &pkcInfo->rsaParam_blind_k;
@@ -90,7 +90,6 @@ static int enableSidechannelProtection( INOUT_PTR PKC_INFO *pkcInfo,
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
 
 	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
-	REQUIRES( isBooleanValue( isPrivateKey ) );
 
 	/* Generate a random bignum for blinding.  Since this merely has to be 
 	   unpredictable to an outsider but not cryptographically strong, and to 
@@ -124,12 +123,9 @@ static int enableSidechannelProtection( INOUT_PTR PKC_INFO *pkcInfo,
 		return( getBnStatus( bnStatus ) );
 
 	/* Use constant-time modexp() to protect the private key from timing 
-	   channels if required */
-	if( isPrivateKey )
-		{
-		BN_set_flags( &pkcInfo->rsaParam_exponent1, BN_FLG_CONSTTIME );
-		BN_set_flags( &pkcInfo->rsaParam_exponent2, BN_FLG_CONSTTIME );
-		}
+	   channels */
+	BN_set_flags( &pkcInfo->rsaParam_exponent1, BN_FLG_CONSTTIME );
+	BN_set_flags( &pkcInfo->rsaParam_exponent2, BN_FLG_CONSTTIME );
 
 	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
@@ -157,6 +153,13 @@ static int fixCRTvalues( INOUT_PTR PKC_INFO *pkcInfo,
 
 	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 	REQUIRES( isBooleanValue( fixPKCSvalues ) );
+
+	/* Catch should-never-occur conditions which would turn the code below 
+	   into a no-op.  We catch this anyway in checkRSAPrivateKeyComponents() 
+	   but that doesn't get called until we've fixed up the CRT values, so
+	   we have to perform an additional check here */
+	if( !BN_cmp( p, q ) )
+		return( CRYPT_ARGERROR_STR1 );
 
 	/* Make sure that p > q, which is required for the CRT decrypt */
 	if( BN_cmp( p, q ) > 0 )
@@ -236,7 +239,7 @@ static int getRSAMontgomery( INOUT_PTR PKC_INFO *pkcInfo,
 	BYTE table[ 32 ];
 	int i;
 	
-	memset( table, 0, 64 );
+	memset( table, 0, 32 );
 	for( i = 0; i < 0x100; i++ )
 		{
 		int value, index, bit;
@@ -271,7 +274,7 @@ static int checkPrimeFactors( INOUT_PTR PKC_INFO *pkcInfo )
 	int bnStatus = BN_STATUS;
 	LOOP_INDEX i;
 
-	assert( isReadPtr( pkcInfo, sizeof( PKC_INFO ) ) );
+	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
 
 	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
@@ -289,16 +292,26 @@ static int checkPrimeFactors( INOUT_PTR PKC_INFO *pkcInfo )
 		 = sqrt( n ) + 1;
 	   b2 = a^2 - n */
 	CK( BN_isqrt( a, n, bnCTX ) );
+	CK( BN_sqr( tmp, a, bnCTX ) );
+	if( bnStatusError( bnStatus ) || !BN_cmp( tmp, n ) )
+		{
+		BN_CTX_end( bnCTX );
+
+		DEBUG_DIAG(( "Public key is a perfect square" ));
+		return( CRYPT_ERROR_NOSECURE );
+		}
 	CK( BN_add_word( a, 1 ) );
 	CK( BN_sqr( b2, a, bnCTX ) );
 	CK( BN_sub( b2, b2, n ) );
 	if( bnStatusError( bnStatus ) )
 		{
 		BN_CTX_end( bnCTX );
-		return( bnStatus );
+		return( getBnStatus( bnStatus ) );
 		}
 
-	/* Perform n iterations of the Fermat factorisation:
+	/* Perform n iterations of the Fermat factorisation, where n = 20 is a
+	   tradeoff to ensure we don't spend a lot of effort on a condition 
+	   that's incredibly unlikely to occur:
 
 		repeat until b2 is a square:
 			a = a + 1;
@@ -313,16 +326,20 @@ static int checkPrimeFactors( INOUT_PTR PKC_INFO *pkcInfo )
 
 		/* Check whether it's a perfect square by performing an initial 
 		   quadratic residue test via the residue table bitmap before going 
-		   on to the full test */
+		   on to the full test.  Since we're dealing with a BN_ULONG here 
+		   checkOverflowShift() isn't useful */
+		REQUIRES( b2->top >= 1 );
 		lsWord = b2->d[ 0 ] % 0x100;
 		if( residueTable[ lsWord / 8 ] & ( 1 << ( lsWord % 8 ) ) )
 			{
 			CK( BN_isqrt( tmp, b2, bnCTX ) );
 			CK( BN_sqr( tmp, tmp, bnCTX ) );
-			if( !BN_cmp( b2, tmp ) )
+			if( bnStatusError( bnStatus ) || !BN_cmp( b2, tmp ) )
 				{
-				/* It's a square, the factors are sqrt( b2 ) + a, 
-				   sqrt( b2 ) - a */
+				BN_CTX_end( bnCTX );
+
+				/* It's a square, the factors are a + sqrt( b2 ), 
+				   a - sqrt( b2 ) */
 				DEBUG_DIAG(( "Prime factors for public key found" ));
 				return( CRYPT_ERROR_NOSECURE );
 				}
@@ -334,10 +351,11 @@ static int checkPrimeFactors( INOUT_PTR PKC_INFO *pkcInfo )
 		if( bnStatusError( bnStatus ) )
 			{
 			BN_CTX_end( bnCTX );
-			return( bnStatus );
+			return( getBnStatus( bnStatus ) );
 			}
 		}
 	ENSURES( LOOP_BOUND_OK );
+	BN_CTX_end( bnCTX );
 		
 	return( CRYPT_OK );
 	}
@@ -351,7 +369,8 @@ int rsaTestFactors( INOUT_PTR PKC_INFO *pkcInfo )
 		   of the values take a large number of rounds is because Fermat's 
 		   method works best if the two factors share half their leading 
 		   bits, in other words that the gap between them is less than 
-		   isqrt( n ) */
+		   isqrt( n ).  Note that the number of rounds in checkPrimeFactors()
+		   will need to be increased for some of these tests */
 		/* 101 * 59 = 5959 = 0x1747, 3 rounds */
 		/* 0x00, 0x00, 0x17, 0x47 */
 		/* 10501 * 14753 = 154921253 = 0x93BE925, 180 rounds */
@@ -504,10 +523,12 @@ static int checkRSAPublicKeyComponents( INOUT_PTR PKC_INFO *pkcInfo,
 	if( length < RSAPARAM_MIN_N || length > RSAPARAM_MAX_N )
 		return( CRYPT_ARGERROR_STR1 );
 
-	/* Verify that n is not (obviously) composite */
+	/* Verify that n is not (obviously) composite.  primeCheckQuick() works
+	   by performing a quick check whether a value has small factors, which
+	   is what the diagnostic is reporting */
 	if( !primeCheckQuick( n ) )
 		{
-		DEBUG_DIAG(( "RSA n value is not prime" ));
+		DEBUG_DIAG(( "RSA n value has small prime factors" ));
 		return( CRYPT_ARGERROR_STR1 );
 		}
 
@@ -542,7 +563,7 @@ static int checkRSAPublicKeyComponents( INOUT_PTR PKC_INFO *pkcInfo,
 	   not just perfect squares.  Since this is a somewhat expensive op
 	   we don't perform it if we have the private key present, for which we 
 	   can just do a comparison */
-	if( isPrivateKey )
+	if( !isPrivateKey )
 		{
 		int status;
 		
@@ -558,9 +579,7 @@ static int checkRSAPublicKeyComponents( INOUT_PTR PKC_INFO *pkcInfo,
  
 	/* Verify that e >= MIN_PUBLIC_EXPONENT, eLen <= RSAPARAM_MAX_E 
 	   (= 32 bits).  The latter check is to preclude DoS attacks due to 
-	   ridiculously large e values.  BN_get_word() works even on 16-bit 
-	   systems because it returns BN_MASK2 (== UINT_MAX) if the value 
-	   can't be represented in a machine word */
+	   ridiculously large e values */
 	if( eWord < MIN_PUBLIC_EXPONENT || bitsToBytes( eLen ) > RSAPARAM_MAX_E )
 		{
 		DEBUG_DIAG(( "RSA e value %ul is invalid/insecure, should be "
@@ -577,7 +596,7 @@ static int checkRSAPublicKeyComponents( INOUT_PTR PKC_INFO *pkcInfo,
 	   but it's unlikely that anyone would consciously use a full 32-bit e
 	   value (well, except for the German RegTP, who do all sorts of other
 	   bizarre things as well) so we weed out any attempts to use one here */
-	if( eLen >= bytesToBits( sizeof( int ) ) )
+	if( eWord >= INT_MAX )
 		{
 		DEBUG_DIAG(( "RSA e value size %d bits can't be expressed as an int", 
 					 eLen ));
@@ -607,7 +626,11 @@ static int checkRSAPublicKeyComponents( INOUT_PTR PKC_INFO *pkcInfo,
 		   case exception for SSH use */
 #ifdef USE_SSH
 		if( eWord == 33 || eWord == 35 )
+			{
+			ENSURES( sanityCheckPKCInfo( pkcInfo ) );
+
 			return( CRYPT_OK );
+			}
 #endif /* USE_SSH */
 
 		DEBUG_DIAG(( "RSA e value %d is suspicious/invalid", eWord ));
@@ -666,8 +689,8 @@ static int checkRSAPrivateKeyComponents( INOUT_PTR PKC_INFO *pkcInfo )
 	   because this is a precondition for the CRT decrypt to work.  FIPS 
 	   186-3 sets this somewhat arbitrary value which is merely meant to 
 	   delimit "not too close", for example the shortest possible key, with 
-	   1024 bits, would require 612 bits difference, well out of reach of 
-	   Fermat's factorisation method.
+	   1024 bits, would require 1024/2 - 100 = 412 bits difference, well out 
+	   of reach of Fermat's factorisation method.
 	   
 	   There's a second more obscure check that we could in theory perform 
 	   to make sure that p and q don't have the least significant nLen / 4 
@@ -678,8 +701,8 @@ static int checkRSAPrivateKeyComponents( INOUT_PTR PKC_INFO *pkcInfo )
 	   requires special properties for d (see the comment in 
 	   generateRSAkey()) we don't bother with this check */
 	threshold = ( BN_num_bits( n ) / 2 ) - 100;
-	ENSURES( threshold >= ( MIN_PKCSIZE / 2 ) - 100 && \
-			 threshold <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
+	ENSURES( threshold >= ( bytesToBits( MIN_PKCSIZE - 1 ) / 2 ) - 100 && \
+			 threshold <= ( bytesToBits( CRYPT_MAX_PKCSIZE ) / 2 ) - 100 );
 	ENSURES( BN_cmp( p, q ) >= 0 );
 	CKPTR( BN_copy( tmp, p ) );
 	CK( BN_sub( tmp, tmp, q ) );
@@ -707,7 +730,7 @@ static int checkRSAPrivateKeyComponents( INOUT_PTR PKC_INFO *pkcInfo )
 		( d * e ) mod q-1 == 1
 	
 	   Some implementations don't store d since it's not needed when the CRT
-	   shortcut is used so we can only perform this check if d is present */
+	   shortcut is used so to perform this check we need d present */
 	if( !BN_is_zero( d ) )
 		{
 		if( BN_cmp( p, d ) >= 0 || BN_cmp( q, d ) >= 0 )
@@ -719,6 +742,22 @@ static int checkRSAPrivateKeyComponents( INOUT_PTR PKC_INFO *pkcInfo )
 		if( bnStatusError( bnStatus ) || !BN_is_one( tmp ) )
 			return( CRYPT_ARGERROR_STR1 );
 		}
+
+	/* Verify that:
+		
+		( e1 * e ) mod ( p - 1 ) == 1
+		( e2 * e ) mod ( q - 1 ) == 1
+		
+	   We know that e1 and e2 are present because initCheckRSAkey() has set 
+	   this up for us and they're always present for a generated key */
+	CK( BN_mod_mul( tmp, &pkcInfo->rsaParam_exponent1, e, p1, 
+					&pkcInfo->bnCTX ) );
+	if( bnStatusError( bnStatus ) || !BN_is_one( tmp ) )
+		return( CRYPT_ARGERROR_STR1 );
+	CK( BN_mod_mul( tmp, &pkcInfo->rsaParam_exponent2, e, q1, 
+					&pkcInfo->bnCTX ) );
+	if( bnStatusError( bnStatus ) || !BN_is_one( tmp ) )
+		return( CRYPT_ARGERROR_STR1 );
 
 #ifdef USE_FIPS140
 	/* Verify that sizeof( d ) > sizeof( p ) / 2, a weird requirement set by 
@@ -733,7 +772,7 @@ static int checkRSAPrivateKeyComponents( INOUT_PTR PKC_INFO *pkcInfo )
 	   order to succeed, later extended into the range d < n^(0.29) by
 	   Boneh and Durfee/Bloemer and May and d < 1/2 n^(1/2) by Maitra and 
 	   Sarkar) */
-	if( !BN_is_zero( d ) && BN_num_bits( d ) <= pkcInfo->keySizeBits )
+	if( !BN_is_zero( d ) && BN_num_bits( d ) <= pkcInfo->keySizeBits / 2 )
 		return( CRYPT_ARGERROR_STR1 );
 #endif /* USE_FIPS140 */
 
@@ -750,21 +789,6 @@ static int checkRSAPrivateKeyComponents( INOUT_PTR PKC_INFO *pkcInfo )
 	/* Verify that u < p, where u was calculated as q^-1 mod p */
 	if( BN_cmp( &pkcInfo->rsaParam_u, p ) >= 0 )
 		return( CRYPT_ARGERROR_STR1 );
-
-	/* A very small number of systems/compilers can't handle 32 * 32 -> 64
-	   ops which means that we have to use 16-bit bignum components.  For 
-	   the common case where e = F4 the value won't fit into a 16-bit bignum
-	   component so we have to use the full BN_mod() form of the checks that 
-	   are carried out further on */
-#ifdef SIXTEEN_BIT
-	CK( BN_mod( tmp, p1, e, &pkcInfo->bnCTX ) );
-	if( bnStatusError( bnStatus ) || BN_is_zero( tmp ) )
-		return( CRYPT_ARGERROR_STR1 );
-	CK( BN_mod( tmp, q1, e, &pkcInfo->bnCTX ) );
-	if( bnStatusError( bnStatus ) || BN_is_zero( tmp ) )
-		return( CRYPT_ARGERROR_STR1 );
-	return( CRYPT_OK );
-#endif /* Systems without 32 * 32 -> 64 ops */
 
 	/* Verify that gcd( ( p - 1 )( q - 1), e ) == 1
 	
@@ -811,17 +835,21 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int generateRSAkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
 					IN_LENGTH_SHORT_MIN( MIN_PKCSIZE * 8 ) const int keyBits )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
-	BIGNUM *d = &pkcInfo->rsaParam_d, *p = &pkcInfo->rsaParam_p;
-	BIGNUM *q = &pkcInfo->rsaParam_q;
-	BIGNUM *tmp = &pkcInfo->tmp1;
-	int pBits, qBits, bnStatus, status;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	BIGNUM *d, *p, *q, *tmp;
+	int pBits, qBits, bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( keyBits >= bytesToBits( MIN_PKCSIZE ) && \
 			  keyBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	d = &pkcInfo->rsaParam_d; p = &pkcInfo->rsaParam_p; 
+	q = &pkcInfo->rsaParam_q; tmp = &pkcInfo->tmp1;
 
 	/* Determine how many bits to give to each of p and q */
 	pBits = ( keyBits + 1 ) / 2;
@@ -851,7 +879,14 @@ int generateRSAkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	CK( BN_mul( tmp, p, q, &pkcInfo->bnCTX ) );
 	CKPTR( BN_mod_inverse( d, &pkcInfo->rsaParam_e, tmp, &pkcInfo->bnCTX ) );
 	if( bnStatusError( bnStatus ) )
+		{
+		/* Opportunistically restore p and q.  This is an error path so the
+		   caller shouldn't try and do anything further with them, so it's
+		   purely a hygiene thing */
+		( void ) BN_add_word( p, 1 );
+		( void ) BN_add_word( q, 1 );
 		return( getBnStatus( bnStatus ) );
+		}
 
 #ifdef USE_FIPS140
 	/* Check that sizeof( d ) > sizeof( p ) / 2, a weird requirement set by 
@@ -867,7 +902,7 @@ int generateRSAkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   Boneh and Durfee/Bloemer and May and d < 1/2 n^(1/2) by Maitra and 
 	   Sarkar) */
 	if( BN_num_bits( d ) <= pkcInfo->keySizeBits / 2 )
-		return( CRYPT_ERROR_FAILED );
+		return( CRYPT_ERROR_FAILED );	/* Also need to restore p, q */
 #endif /* USE_FIPS140 */
 
 	/* Compute e1 = d mod (p - 1), e2 = d mod (q - 1) */
@@ -903,7 +938,7 @@ int generateRSAkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	if( TEST_FLAG( contextInfoPtr->flags, 
 				   CONTEXT_FLAG_SIDECHANNELPROTECTION ) )
 		{
-		status = enableSidechannelProtection( pkcInfo, TRUE );
+		status = enableSidechannelProtection( pkcInfo );
 		if( cryptStatusError( status ) )
 			return( status );
 		}
@@ -938,10 +973,8 @@ int generateRSAkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int initCheckRSAkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
-	const BIGNUM *n = &pkcInfo->rsaParam_n, *e = &pkcInfo->rsaParam_e;
-	const BIGNUM *d = &pkcInfo->rsaParam_d, *p = &pkcInfo->rsaParam_p;
-	const BIGNUM *q = &pkcInfo->rsaParam_q;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const BIGNUM *n, *e, *d, *p, *q;
 	const BOOLEAN isPrivateKey = TEST_FLAG( contextInfoPtr->flags,
 											CONTEXT_FLAG_ISPUBLICKEY ) ? \
 								 FALSE : TRUE;
@@ -950,6 +983,13 @@ int initCheckRSAkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	n = &pkcInfo->rsaParam_n; e = &pkcInfo->rsaParam_e; 
+	d = &pkcInfo->rsaParam_d; p = &pkcInfo->rsaParam_p; 
+	q = &pkcInfo->rsaParam_q;
 
 	/* Make sure that the necessary key parameters have been initialised */
 	if( BN_is_zero( n ) || BN_is_zero( e ) )
@@ -984,15 +1024,6 @@ int initCheckRSAkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 		ENSURES( pkcInfo->keySizeBits >= bytesToBits( MIN_PKCSIZE ) && \
 				 pkcInfo->keySizeBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
 
-		/* Enable side-channel protection if required */
-		if( TEST_FLAG( contextInfoPtr->flags, 
-					   CONTEXT_FLAG_SIDECHANNELPROTECTION ) )
-			{
-			status = enableSidechannelProtection( pkcInfo, TRUE );
-			if( cryptStatusError( status ) )
-				return( status );
-			}
-
 		/* Checksum the bignums to try and detect fault attacks.  Since 
 		   we're setting the checksum at this point there's no need to check 
 		   the return value.  Note that this isn't the TOCTOU issue that it 
@@ -1011,7 +1042,8 @@ int initCheckRSAkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	   (this only ever occurs for PGP keys).  If there's no u precalculated, 
 	   evaluate it now (this should never occur with any normal source of
 	   keys) */
-	if( BN_is_zero( &pkcInfo->rsaParam_exponent1 ) )
+	if( BN_is_zero( &pkcInfo->rsaParam_exponent1 ) || \
+		BN_is_zero( &pkcInfo->rsaParam_exponent2 ) )
 		{
 		BIGNUM *exponent1 = &pkcInfo->rsaParam_exponent1;
 		BIGNUM *exponent2 = &pkcInfo->rsaParam_exponent2;
@@ -1063,7 +1095,7 @@ int initCheckRSAkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	if( TEST_FLAG( contextInfoPtr->flags, 
 				   CONTEXT_FLAG_SIDECHANNELPROTECTION ) )
 		{
-		status = enableSidechannelProtection( pkcInfo, TRUE );
+		status = enableSidechannelProtection( pkcInfo );
 		if( cryptStatusError( status ) )
 			return( status );
 		}

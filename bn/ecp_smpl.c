@@ -65,6 +65,12 @@
 
 /* Changes for cryptlib - pcg */
 
+/* There are a few data-dependent branches in things like 
+   ec_GFp_simple_add() and ec_GFp_simple_dbl() but the differences don't 
+   seem to be measurable from higher-level code let alone with the even 
+   higher-level countermeasures active.  See also the cryptlib threat 
+   model documentation */
+
 #if defined( INC_ALL )
   #include "ec_lcl.h"
 #else
@@ -607,12 +613,23 @@ int ec_GFp_simple_point_get_affine_coordinates(const EC_GROUP *group,
             }
         }
     } else {
+#if 0	/* pcg */
         if (!BN_mod_inverse(Z_1, Z_, &group->field, ctx)) {
             ECerr(EC_F_EC_GFP_SIMPLE_POINT_GET_AFFINE_COORDINATES,
                   ERR_R_BN_LIB);
             goto err;
         }
-
+#else
+		/* Use Z_2 as a temporary to enable use of a constant-time 
+		   BN_mod_inverse(), we can't do this for Z_ itself which is 
+		   const */
+		if( !BN_copy( Z_2, Z_ ) )
+			goto err;						
+		BN_set_flags( Z_2, BN_FLG_CONSTTIME );
+		if( !BN_mod_inverse( Z_1, Z_2, &group->field, ctx ) )
+			goto err;
+		BN_init( Z_2 );		/* Reset BN_FLG_CONSTTIME */
+#endif	/* pcg */
         if (group->meth->field_encode == 0) {
             /* field_sqr works on standard representation */
             if (!group->meth->field_sqr(group, Z_2, Z_1, ctx))

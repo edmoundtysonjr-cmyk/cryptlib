@@ -1,0 +1,5 @@
+# Functions that generate false positives.
+fun:des_encrypt1
+fun:des_encrypt2
+fun:addEntropyData
+

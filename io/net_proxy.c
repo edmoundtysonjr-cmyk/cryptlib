@@ -48,7 +48,10 @@ int connectViaSocksProxy( INOUT_PTR STREAM *stream )
 	if( cryptStatusOK( status ) )
 		userName[ msgData.length ] = '\0';
 	else
-		strlcpy_s( userName, CRYPT_MAX_TEXTSIZE, "cryptlib" );
+		{
+		status = strlcpy_s( userName, CRYPT_MAX_TEXTSIZE, "cryptlib" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 
 	/* Build up the SOCKSv4 request string:
 
@@ -82,7 +85,8 @@ int connectViaSocksProxy( INOUT_PTR STREAM *stream )
 	*bufPtr++ = 4; *bufPtr++ = 1;
 	mputWord( bufPtr, netStream->port );
 	status = getIPAddress( stream, bufPtr, netStream->host );
-	strlcpy_s( bufPtr + 4, CRYPT_MAX_TEXTSIZE, userName );
+	status = strlcpy_s( bufPtr + 4, CRYPT_MAX_TEXTSIZE, userName );
+	ENSURES( cryptStatusOK( status ) );
 	length = 1 + 1 + 2 + 4 + strnlen_s( userName, CRYPT_MAX_TEXTSIZE ) + 1;
 	if( cryptStatusError( status ) )
 		{
@@ -120,8 +124,9 @@ int connectViaSocksProxy( INOUT_PTR STREAM *stream )
 		LOOP_INDEX i;
 
 		netStream->transportDisconnectFunction( stream, TRUE );
-		strlcpy_s( netStream->errorInfo->errorString, MAX_ERRMSG_SIZE, 
-				   "Socks proxy returned" );
+		status = strlcpy_s( netStream->errorInfo->errorString, MAX_ERRMSG_SIZE, 
+							"Socks proxy returned" );
+		ENSURES( cryptStatusOK( status ) );
 		LOOP_SMALL( i = 0, i < 8, i++ )
 			{
 			int result;
@@ -135,7 +140,9 @@ int connectViaSocksProxy( INOUT_PTR STREAM *stream )
 								 MAX_ERRMSG_SIZE - ( 20 + ( i * 3 ) + 1 ) ) );
 			}
 		ENSURES( LOOP_BOUND_OK );
-		strlcat_s( netStream->errorInfo->errorString, MAX_ERRMSG_SIZE, "." );
+		status = strlcat_s( netStream->errorInfo->errorString, 
+							MAX_ERRMSG_SIZE, "." );
+		ENSURES( cryptStatusOK( status ) );
 		netStream->errorCode = socksBuffer[ 1 ];
 		return( CRYPT_ERROR_OPEN );
 		}
@@ -308,7 +315,7 @@ int findProxyUrl( OUT_BUFFER( proxyMaxLen, *proxyLen ) char *proxy,
 	char urlBuffer[ MAX_DNS_SIZE + 1 + 8 ];
 	wchar_t unicodeURL[ MAX_DNS_SIZE + 1 + 8 ];
 	size_t unicodeUrlLen, wcsProxyLen DUMMY_INIT;
-	int offset, proxyStatus = -1;
+	int offset, proxyStatus = -1, status;
 
 	assert( isWritePtrDynamic( proxy, proxyMaxLen ) );
 	assert( isWritePtr( proxyLen, sizeof( int ) ) );
@@ -374,9 +381,13 @@ int findProxyUrl( OUT_BUFFER( proxyMaxLen, *proxyLen ) char *proxy,
 			proxyStatus = wcstombs_s( &wcsProxyLen, proxy, proxyMaxLen,
 									  proxyInfo.lpszProxy, MAX_DNS_SIZE );
 			GlobalFree( proxyInfo.lpszProxy );
+			proxyInfo.lpszProxy = NULL;
 			}
 		if( proxyInfo.lpszProxyBypass != NULL )
+			{
 			GlobalFree( proxyInfo.lpszProxyBypass );
+			proxyInfo.lpszProxyBypass = NULL;
+			}
 		if( proxyStatus == 0 )
 			{
 			*proxyLen = wcsProxyLen - 1;	/* Exclude '\0' */
@@ -399,11 +410,18 @@ int findProxyUrl( OUT_BUFFER( proxyMaxLen, *proxyLen ) char *proxy,
 			proxyStatus = wcstombs_s( &wcsProxyLen, proxy, proxyMaxLen,
 									  ieProxyInfo.lpszProxy, MAX_DNS_SIZE );
 			GlobalFree( ieProxyInfo.lpszProxy );
+			ieProxyInfo.lpszProxy = NULL;
 			}
 		if( ieProxyInfo.lpszAutoConfigUrl != NULL )
+			{
 			GlobalFree( ieProxyInfo.lpszAutoConfigUrl );
+			ieProxyInfo.lpszAutoConfigUrl = NULL;
+			}
 		if( ieProxyInfo.lpszProxyBypass != NULL )
+			{
 			GlobalFree( ieProxyInfo.lpszProxyBypass );
+			ieProxyInfo.lpszProxyBypass = NULL;
+			}
 		if( proxyStatus == 0 )
 			{
 			*proxyLen = wcsProxyLen - 1;	/* Exclude '\0' */
@@ -418,7 +436,8 @@ int findProxyUrl( OUT_BUFFER( proxyMaxLen, *proxyLen ) char *proxy,
 	   Unicode conversion and following WinHttpGetProxyForUrl() lookup */
 	if( strFindStr( url, urlLen, "://", 3 ) < 0 )
 		{
-		strlcpy_s( urlBuffer, MAX_DNS_SIZE, "http://" );
+		status = strlcpy_s( urlBuffer, MAX_DNS_SIZE, "http://" );
+		ENSURES( cryptStatusOK( status ) );
 		offset = 7;
 		}
 	else
@@ -464,9 +483,13 @@ int findProxyUrl( OUT_BUFFER( proxyMaxLen, *proxyLen ) char *proxy,
 		proxyStatus = wcstombs_s( &wcsProxyLen, proxy, proxyMaxLen,
 								  proxyInfo.lpszProxy, MAX_DNS_SIZE );
 		GlobalFree( proxyInfo.lpszProxy );
+		proxyInfo.lpszProxy = NULL;
 		}
 	if( proxyInfo.lpszProxyBypass != NULL )
+		{
 		GlobalFree( proxyInfo.lpszProxyBypass );
+		proxyInfo.lpszProxyBypass = NULL;
+		}
 	pWinHttpCloseHandle( hSession );
 	if( proxyStatus != 0 )
 		return( CRYPT_ERROR_NOTFOUND );

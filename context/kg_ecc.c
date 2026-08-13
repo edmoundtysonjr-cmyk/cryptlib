@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *				cryptlib ECC Key Generation/Checking Routines				*
-*					Copyright Peter Gutmann 2006-2015						*
+*					Copyright Peter Gutmann 2006-2025						*
 *																			*
 ****************************************************************************/
 
@@ -26,12 +26,9 @@
 /* Enable various side-channel protection mechanisms */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-static int enableSidechannelProtection( INOUT_PTR PKC_INFO *pkcInfo,
-										IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
+static int enableSidechannelProtection( INOUT_PTR PKC_INFO *pkcInfo )
 	{
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
-
-	REQUIRES( isEccAlgo( cryptAlgo ) );
 
 	/* Use constant-time modexp() to protect the private key from timing 
 	   channels.
@@ -52,7 +49,9 @@ static int enableSidechannelProtection( INOUT_PTR PKC_INFO *pkcInfo,
 *																			*
 ****************************************************************************/
 
-/* Get the nominal size of an ECC field based on an CRYPT_ECCCURVE_TYPE */
+/* Get the nominal size of an ECC field based on an CRYPT_ECCCURVE_TYPE.  See
+   the comment for getECCFieldID() for the handling of the special-snowflake
+   curves */
 
 static const MAP_TABLE fieldSizeMapTbl[] = {
 	{ CRYPT_ECCCURVE_P256, 256 },
@@ -91,7 +90,14 @@ int getECCFieldSize( IN_ENUM( CRYPT_ECCCURVE ) \
 	return( CRYPT_OK );
 	}
 
-/* Get a CRYPT_ECCCURVE_TYPE based on a nominal ECC field size */
+/* Get a CRYPT_ECCCURVE_TYPE based on a nominal ECC field size.  Since this
+   is a one-to-many mapping, so for example a field size of 256 bits maps to
+   both CRYPT_ECCCURVE_P256 and CRYPT_ECCCURVE_BRAINPOOL_P256, we always
+   return the standard curve rather than the Brainpool alternative, which is
+   what's required for any ECC-using protocol like TLS and SSH.  In addition 
+   the special-snowflake curves like 25519 are handled through their own code
+   paths so while they're present here for completeness they're never 
+   accessed through these functions */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
 int getECCFieldID( IN_LENGTH_SHORT_MIN( MIN_PKCSIZE_ECC ) \
@@ -154,53 +160,83 @@ int getECCFieldID( IN_LENGTH_SHORT_MIN( MIN_PKCSIZE_ECC ) \
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int generateECCPrivateValue( INOUT_PTR PKC_INFO *pkcInfo,
-									IN_LENGTH_SHORT_MIN( MIN_PKCSIZE_ECC * 8 ) \
-										const int keyBits )
+									IN_BOOL \
+										const BOOLEAN sideChannelProtection )
 	{
 	const ECC_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
-	BIGNUM *d = &pkcInfo->eccParam_d, *p_2 = &pkcInfo->tmp1;
-	int dLen, bnStatus = BN_STATUS, status;
+	const BIGNUM *n = &domainParams->n;
+	BIGNUM *d = &pkcInfo->eccParam_d, *n_1 = &pkcInfo->tmp1;
+	int nBits, dLen, bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
 
 	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
-	REQUIRES( keyBits >= bytesToBits( MIN_PKCSIZE_ECC ) && \
-			  keyBits <= bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
+	REQUIRES( isBooleanValue( sideChannelProtection ) );
 
-	/* Generate the ECC private value d s.t. 2 <= d <= p-2.  Because the mod 
-	   p-2 is expensive we do a quick check to make sure that it's really 
-	   necessary before calling it */
-	status = generateBignum( d, keyBits, 0xC0, 0 );
+	/* Generate the ECC private value d s.t. 1 <= d <= n-1.  Because the mod 
+	   n-1 is expensive we do a quick check to make sure that it's really 
+	   necessary before calling it.  In practice for the NIST curves for 
+	   which n begins with a minimum of 32 1-bits, even more for P-384 and
+	   P-521, this essentially never happens, it's only for the Brainpool 
+	   curves that we end up taking the mod path.  
+	   
+	   The Brainpool curves begin with { A9, 8C, AA } so in theory we could
+	   make the high-byte mask conditional on the MSB of n but this is
+	   now hardcoding in low-level internal details of the curve parameters
+	   (0xC0 is the universal high-byte mask used for all keygen, it just
+	   happens to fit the NIST parameters) and the Brainpool curves are
+	   essentially never used so we just let them fall through the additional
+	   operations below */
+	nBits = BN_num_bits( n );
+	REQUIRES( bitsToBytes( nBits ) >= MIN_PKCSIZE_ECC && \
+			  bitsToBytes( nBits ) <= CRYPT_MAX_PKCSIZE_ECC );
+	status = generateBignum( d, nBits, 0xC0, 0 );
 	if( cryptStatusError( status ) )
 		return( status );
-	CKPTR( BN_copy( p_2, &domainParams->p ) );
-	CK( BN_sub_word( p_2, 2 ) );
+	CKPTR( BN_copy( n_1, n ) );
+	CK( BN_sub_word( n_1, 1 ) );
 	if( bnStatusError( bnStatus ) )
 		return( getBnStatus( bnStatus ) );
-	if( BN_cmp( d, p_2 ) <= 0 )
+	if( BN_cmp( d, n_1 ) <= 0 )
 		{
 		/* We've got d within range, we're done */
+		if( sideChannelProtection )
+			{
+			status = enableSidechannelProtection( pkcInfo );
+			if( cryptStatusError( status ) )
+				return( status );
+			}
+
 		ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 		return( CRYPT_OK );
 		}
 
-	/* Trim d down to size.  Actually we get the upper bound as p-3, but 
-	   over a 256-bit (minimum) number range this doesn't matter */
-	CK( BN_mod( d, d, p_2, &pkcInfo->bnCTX ) );
+	/* Trim d down to size.  To get the range 1 <= d <= n-1 we have to mod
+	   n-1 and add 1 */
+	CK( BN_mod( d, d, n_1, &pkcInfo->bnCTX ) );
+	CK( BN_add_word( d, 1 ) );
 	if( bnStatusError( bnStatus ) )
 		return( getBnStatus( bnStatus ) );
 
 	/* If the value that we ended up with is too small, just generate a new 
 	   value one bit shorter, which guarantees that it'll fit the criteria 
 	   (the target is a suitably large random value, not the closest 
-	   possible fit within the range) */
+	   possible fit within the range).  In the case of the Brainpool curves
+	   this means a small percentage go through the re-generation path,
+	   which means they cover a slightly smaller range than 1 ... n-1, but
+	   this is of no consequence */
 	dLen = BN_num_bits( d );
 	REQUIRES( dLen > 0 && dLen <= bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
-	REQUIRES( !checkOverflowSub( keyBits, 5 ) );
-	if( dLen < keyBits - 5 )
+	if( dLen < nBits - 5 )	/* Range checked above */
 		{
-		status = generateBignum( d, keyBits - 1, 0xC0, 0 );
+		status = generateBignum( d, nBits - 1, 0xC0, 0 );
+		if( cryptStatusError( status ) )
+			return( status );
+		}
+	if( sideChannelProtection )
+		{
+		status = enableSidechannelProtection( pkcInfo );
 		if( cryptStatusError( status ) )
 			return( status );
 		}
@@ -215,8 +251,8 @@ static int generateECCPublicValue( INOUT_PTR PKC_INFO *pkcInfo )
 	{
 	const BIGNUM *d = &pkcInfo->eccParam_d;
 	BIGNUM *qx = &pkcInfo->eccParam_qx, *qy = &pkcInfo->eccParam_qy;
-	const EC_GROUP *ecCTX = pkcInfo->ecCTX;
-	EC_POINT *q = pkcInfo->tmpPoint;
+	const EC_GROUP *ecCTX = &pkcInfo->ecCTX;
+	EC_POINT *q = &pkcInfo->tmpPoint;
 	int bnStatus = BN_STATUS;
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
@@ -262,23 +298,23 @@ static int generateECCPublicValue( INOUT_PTR PKC_INFO *pkcInfo )
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static BOOLEAN checkComponentLength( IN_PTR const BIGNUM *component,
-									 IN_PTR const BIGNUM *p,
+									 IN_PTR const BIGNUM *maxRange,
 									 IN_BOOL const BOOLEAN lowerBoundZero )
 	{
 	int length;
 
 	assert( isReadPtr( component, sizeof( BIGNUM ) ) );
-	assert( isReadPtr( p, sizeof( BIGNUM ) ) );
+	assert( isReadPtr( maxRange, sizeof( BIGNUM ) ) );
 
 	REQUIRES_B( isBooleanValue( lowerBoundZero ) );
 
-	/* Make sure that the component is in the range 0...p - 1 (optionally
-	   MIN_PKCSIZE_ECC if lowerBoundZero is false) */
+	/* Make sure that the component is in the range 0...maxRange - 1 
+	   (optionally MIN_PKCSIZE_ECC if lowerBoundZero is false) */
 	length = BN_num_bytes( component );
 	if( length < ( lowerBoundZero ? 0 : MIN_PKCSIZE_ECC ) || \
 		length > CRYPT_MAX_PKCSIZE_ECC )
 		return( FALSE );
-	if( BN_cmp( component, p ) >= 0 )
+	if( BN_cmp( component, maxRange ) >= 0 )
 		return( FALSE );
 
 	return( TRUE );
@@ -340,8 +376,8 @@ static int checkECCDomainParameters( INOUT_PTR PKC_INFO *pkcInfo,
 	const BIGNUM *gx = &domainParams->gx, *gy = &domainParams->gy;
 	BIGNUM *tmp1 = &pkcInfo->tmp1, *tmp2 = &pkcInfo->tmp2;
 	BIGNUM *tmp3_h = &pkcInfo->tmp3;
-	const EC_GROUP *ecCTX = pkcInfo->ecCTX;
-	EC_POINT *vp = pkcInfo->tmpPoint;
+	const EC_GROUP *ecCTX = &pkcInfo->ecCTX;
+	EC_POINT *vp = &pkcInfo->tmpPoint;
 	const BOOLEAN isStandardCurve = \
 			( pkcInfo->curveType != CRYPT_ECCCURVE_NONE ) ? TRUE : FALSE;
 	BOOLEAN isPrime;
@@ -359,7 +395,9 @@ static int checkECCDomainParameters( INOUT_PTR PKC_INFO *pkcInfo,
 		a, b >= 0, a, b <= p - 1
 		gx, gy >= 0, gx, gy <= p - 1
 		nLen >= MIN_PKCSIZE_ECC, nLen <= CRYPT_MAX_PKCSIZE_ECC
-		hLen >= 1, hLen <= CRYPT_MAX_PKCSIZE_ECC (if present) */
+		hLen >= 1, hLen <= CRYPT_MAX_PKCSIZE_ECC (if present).  These are
+		cheap checks so we perform them even for the hardcoded and checksum-
+		protected NIST and Brainpool parameter sets */
 	length = BN_num_bytes( p );
 	if( length < MIN_PKCSIZE_ECC || length > CRYPT_MAX_PKCSIZE_ECC )
 		return( CRYPT_ARGERROR_STR1 );
@@ -390,7 +428,8 @@ static int checkECCDomainParameters( INOUT_PTR PKC_INFO *pkcInfo,
 	   there's not much need to perform additional validation on them.
 	   
 	   To activate domain validation on known curves, comment out the check
-	   below */
+	   below.  Note that the code beyond this point is never actually used
+	   since we always used standard curves and don't allow custom ones */
 	if( isStandardCurve )
 		return( CRYPT_OK );
 
@@ -411,7 +450,11 @@ static int checkECCDomainParameters( INOUT_PTR PKC_INFO *pkcInfo,
 	/* Verify that a, b and gx, gy are integers in the range 0...p - 1.  
 	   This has already been done in the range checks performed earlier */
 
-	/* Verify that (4a^3 + 27b^2) is not congruent to zero (mod p) */
+	/* Verify that (4a^3 + 27b^2) is not congruent to zero (mod p).  Note
+	   that the intermediates aren't computed mod p so can get quite large,
+	   they'll always fit into a CRYPT_MAX_PKCSIZE bignum but if this code
+	   is ever enabled it'd probably be better the perform the reduction
+	   on intermediate values */
 	CK( BN_sqr( tmp1, a, &pkcInfo->bnCTX ) );
 	CK( BN_mul( tmp1, tmp1, a, &pkcInfo->bnCTX ) );
 	CK( BN_mul_word( tmp1, 4 ) );
@@ -524,20 +567,22 @@ static int checkECCDomainParameters( INOUT_PTR PKC_INFO *pkcInfo,
 	   For the standard named curves in GF( p ) (the P-* NIST curves), h = 1
 	   and is implicitly present */
 	pLen = BN_num_bits( p );
-	REQUIRES( pLen >= bytesToBits( MIN_PKCSIZE_ECC ) && \
-			  pLen <= bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
+	REQUIRES( bitsToBytes( pLen ) >= MIN_PKCSIZE_ECC && \
+			  bitsToBytes( pLen ) <= CRYPT_MAX_PKCSIZE_ECC );
 	CK( BN_one( tmp1 ) );
 	CK( BN_lshift( tmp1, tmp1, ( pLen >> 1 ) + 3 ) );
 	CK( BN_add( tmp1, tmp1, p ) );
 	CK( BN_div( tmp3_h, NULL, tmp1, n, &pkcInfo->bnCTX ) );
 	if( bnStatusError( bnStatus ) )
 		return( getBnStatus( bnStatus ) );
+	if( BN_is_zero( tmp3_h ) )
+		return( CRYPT_ARGERROR_STR1 );
 	tmp3hBits = BN_num_bits( tmp3_h );
 	REQUIRES( tmp3hBits > 0 && \
-			  tmp3hBits < bytesToBits(CRYPT_MAX_PKCSIZE_ECC ) );
+			  tmp3hBits <= bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
 	nBits = BN_num_bits( n );
 	REQUIRES( nBits > 0 && \
-			  nBits < bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
+			  nBits <= bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
 	if( tmp3hBits * 14 > nBits )
 		return( CRYPT_ARGERROR_STR1 );
 	if( isStandardCurve )
@@ -627,13 +672,14 @@ static int checkECCDomainParameters( INOUT_PTR PKC_INFO *pkcInfo,
    any public value such as the input to the ECDH computation */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
-int checkECCPublicValue( INOUT_PTR PKC_INFO *pkcInfo, const BIGNUM *qx, 
-						 const BIGNUM *qy )
+int checkECCPublicValue( INOUT_PTR PKC_INFO *pkcInfo, 
+						 IN_PTR const BIGNUM *qx, 
+						 IN_PTR const BIGNUM *qy )
 	{
 	const ECC_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
 	const BIGNUM *p = &domainParams->p, *n = &domainParams->n;
-	const EC_GROUP *ecCTX = pkcInfo->ecCTX;
-	EC_POINT *q = pkcInfo->tmpPoint;
+	const EC_GROUP *ecCTX = &pkcInfo->ecCTX;
+	EC_POINT *q = &pkcInfo->tmpPoint;
 	int bnStatus = BN_STATUS;
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
@@ -675,17 +721,21 @@ int checkECCPublicValue( INOUT_PTR PKC_INFO *pkcInfo, const BIGNUM *qx,
 		}
 
 	/* Verify that n * Q is the point at infinity, i.e. that Q is in a 
-	   subgroup of order n.  For the NIST and Brainpool curves this 
-	   doesn't really matter much since the cofactor h = 1 so a small-
-	   subgroup attack isn't feasible, but we do it in any case for
-	   sanitary reasons */
-	CK( EC_POINT_mul( ecCTX, q, NULL, q, n, &pkcInfo->bnCTX ) );
-	if( bnStatusError( bnStatus ) )
-		return( getBnStatus( bnStatus ) );
-	if( !EC_POINT_is_at_infinity( ecCTX, q ) )
+	   subgroup of order n, if we're using custom domain parameters.  For 
+	   the NIST and Brainpool curves this isn't needed since the cofactor 
+	   h = 1 and the group has prime order n, so n * Q = point at infinity
+	   because Q is a non-identity point on the curve, so a small-subgroup 
+	   attack isn't feasible */
+	if( pkcInfo->curveType == CRYPT_ECCCURVE_NONE )
 		{
-		DEBUG_DIAG(( "ECC n * Q is not the point at infinity" ));
-		return( CRYPT_ARGERROR_STR1 );
+		CK( EC_POINT_mul( ecCTX, q, NULL, q, n, &pkcInfo->bnCTX ) );
+		if( bnStatusError( bnStatus ) )
+			return( getBnStatus( bnStatus ) );
+		if( !EC_POINT_is_at_infinity( ecCTX, q ) )
+			{
+			DEBUG_DIAG(( "ECC n * Q is not the point at infinity" ));
+			return( CRYPT_ARGERROR_STR1 );
+			}
 		}
 
 	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
@@ -699,11 +749,11 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int checkECCPrivateKey( INOUT_PTR PKC_INFO *pkcInfo )
 	{
 	const ECC_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
-	const BIGNUM *p = &domainParams->p;
+	const BIGNUM *n = &domainParams->n;
 	const BIGNUM *d = &pkcInfo->eccParam_d;
 	BIGNUM *tmp1 = &pkcInfo->tmp1, *tmp2 = &pkcInfo->tmp2;
-	const EC_GROUP *ecCTX = pkcInfo->ecCTX;
-	EC_POINT *q = pkcInfo->tmpPoint;
+	const EC_GROUP *ecCTX = &pkcInfo->ecCTX;
+	EC_POINT *q = &pkcInfo->tmpPoint;
 	int bnStatus = BN_STATUS;
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
@@ -712,8 +762,8 @@ static int checkECCPrivateKey( INOUT_PTR PKC_INFO *pkcInfo )
 
 	/* Verify that the private key parameter sizes are valid:
 
-		d >= MIN_PKCSIZE_ECC, d <= p - 1 */
-	if( !checkComponentLength( d, p, FALSE ) )
+		d >= MIN_PKCSIZE_ECC, d <= n - 1 */
+	if( !checkComponentLength( d, n, FALSE ) )
 		return( CRYPT_ARGERROR_STR1 );
 
 	/* Verify that Q = d * G */
@@ -743,8 +793,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int initECCVariables( INOUT_PTR PKC_INFO *pkcInfo )
 	{
 	const ECC_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
-	EC_GROUP *ecCTX = pkcInfo->ecCTX;
-	EC_POINT *ecPoint = pkcInfo->ecPoint;
+	EC_GROUP *ecCTX = &pkcInfo->ecCTX;
+	EC_POINT *ecPoint = &pkcInfo->ecPoint;
 	int bnStatus = BN_STATUS;
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
@@ -770,21 +820,24 @@ static int initECCVariables( INOUT_PTR PKC_INFO *pkcInfo )
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int generateECCkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
-					IN_LENGTH_SHORT_MIN( MIN_PKCSIZE_ECC * 8 ) \
+					IN_LENGTH_SHORT_MIN( bytesToBits( MIN_PKCSIZE_ECC ) ) \
 						const int keyBits )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
-	const CAPABILITY_INFO *capabilityInfoPtr = \
-								DATAPTR_GET( contextInfoPtr->capabilityInfo );
 	CRYPT_ECCCURVE_TYPE fieldID;
-	int keySizeBits, status;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const BOOLEAN sideChannelProtection = \
+			TEST_FLAG( contextInfoPtr->flags, \
+					   CONTEXT_FLAG_SIDECHANNELPROTECTION ) ? TRUE : FALSE;
+	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( pkcInfo->cryptAlgo == CRYPT_ALGO_ECDH || \
+			  pkcInfo->cryptAlgo == CRYPT_ALGO_ECDSA );
 	REQUIRES( keyBits >= bytesToBits( MIN_PKCSIZE_ECC ) && \
 			  keyBits <= bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
-	REQUIRES( capabilityInfoPtr != NULL );
 
 	/* Find the fieldID matching the requested key size.  This gets a bit
 	   complicated because with fixed-parameter curves the key size is taken 
@@ -792,15 +845,14 @@ int generateECCkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   required that the caller specify exact sizes to match the predefined
 	   curves then they'd end up having to play guessing games to match
 	   byte-valued key sizes to oddball curve sizes like P521).  To handle
-	   this we first map the key size to the matching curve, and then 
-	   retrieve the actual key size in bits from the ECC parameter data */
+	   this we map the key size to the matching curve and then load the
+	   parameters from that */
 	status = getECCFieldID( bitsToBytes( keyBits ), &fieldID );
 	if( cryptStatusError( status ) )
 		return( status );
 	status = loadECCparams( contextInfoPtr, fieldID );
 	if( cryptStatusError( status ) )
 		return( status );
-	keySizeBits = pkcInfo->keySizeBits;
 
 	/* Initialise the mass of variables required by the ECC operations */
 	status = initECCVariables( pkcInfo );
@@ -808,24 +860,24 @@ int generateECCkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		return( status );
 
 	/* Generate the private key */
-	status = generateECCPrivateValue( pkcInfo, keySizeBits );
+	status = generateECCPrivateValue( pkcInfo, sideChannelProtection );
 	if( cryptStatusError( status ) )
 		return( status );
+
+	/* We've now got a private key present, enable side-channel protection 
+	   if required.  This has already been done as a side-effect of 
+	   generateECCPrivateValue() but we make it explicit here */
+	if( sideChannelProtection )
+		{
+		status = enableSidechannelProtection( pkcInfo );
+		if( cryptStatusError( status ) )
+			return( status );
+		}
 
 	/* Calculate the public-key value Q = d * G */
 	status = generateECCPublicValue( pkcInfo );
 	if( cryptStatusError( status ) )
 		return( status );
-
-	/* Enable side-channel protection if required */
-	if( TEST_FLAG( contextInfoPtr->flags, 
-				   CONTEXT_FLAG_SIDECHANNELPROTECTION ) )
-		{
-		status = enableSidechannelProtection( pkcInfo,
-											  capabilityInfoPtr->cryptAlgo );
-		if( cryptStatusError( status ) )
-			return( status );
-		}
 
 	/* Checksum the bignums to try and detect fault attacks.  Since we're
 	   setting the checksum at this point there's no need to check the 
@@ -865,15 +917,16 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int initCheckECCkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					 IN_BOOL const BOOLEAN isECDH )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const ECC_DOMAINPARAMS *domainParams;
-	const CAPABILITY_INFO *capabilityInfoPtr = \
-								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	const EC_GROUP *ecCTX = pkcInfo->ecCTX;
+	const EC_GROUP *ecCTX;
 	const BIGNUM *p;
 	const BOOLEAN isPrivateKey = TEST_FLAG( contextInfoPtr->flags,
 											CONTEXT_FLAG_ISPUBLICKEY ) ? \
 								 FALSE : TRUE;
+	const BOOLEAN sideChannelProtection = \
+			TEST_FLAG( contextInfoPtr->flags, \
+					   CONTEXT_FLAG_SIDECHANNELPROTECTION ) ? TRUE : FALSE;
 	BOOLEAN generatedD = FALSE;
 	int bnStatus = BN_STATUS, status;
 
@@ -881,7 +934,13 @@ int initCheckECCkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isBooleanValue( isECDH ) );
-	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( pkcInfo->cryptAlgo == CRYPT_ALGO_ECDH || \
+			  pkcInfo->cryptAlgo == CRYPT_ALGO_ECDSA );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	ecCTX = &pkcInfo->ecCTX;
 
 	/* If we're loading a named curve then the public-key parameters may not 
 	   have been set yet, in which case we have to set them before we can
@@ -899,11 +958,30 @@ int initCheckECCkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	/* Make sure that the necessary key parameters have been initialised */
 	if( !isECDH )
 		{
-		if( BN_is_zero( &pkcInfo->eccParam_qx ) || \
-			BN_is_zero( &pkcInfo->eccParam_qy ) )
-			return( CRYPT_ARGERROR_STR1 );
-		if( isPrivateKey && BN_is_zero( &pkcInfo->eccParam_d ) )
-			return( CRYPT_ARGERROR_STR1 );
+		/* For private keys we can have Q unavailable (see the comment 
+		   further down about PKCS #11) so we only require that we have d,
+		   and later on some other components, present.  However since
+		   Q comes in two parts we have to make sure that the two halves 
+		   match, either both absent (we generate them) or both present 
+		   (we leave them as is) */
+		if( isPrivateKey )
+			{
+			const BOOLEAN hasQX = BN_is_zero( &pkcInfo->eccParam_qx ) ? \
+								  TRUE : FALSE;
+			const BOOLEAN hasQY = BN_is_zero( &pkcInfo->eccParam_qy ) ? \
+								  TRUE : FALSE;
+			
+			if( BN_is_zero( &pkcInfo->eccParam_d ) )
+				return( CRYPT_ARGERROR_STR1 );
+			if( hasQX != hasQY )
+				return( CRYPT_ARGERROR_STR1 );
+			}
+		else
+			{
+			if( BN_is_zero( &pkcInfo->eccParam_qx ) || \
+				BN_is_zero( &pkcInfo->eccParam_qy ) )
+				return( CRYPT_ARGERROR_STR1 );
+			}
 		}
 
 	/* Make sure that the domain parameters are valid */
@@ -911,22 +989,36 @@ int initCheckECCkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	if( cryptStatusError( status ) )
 		return( status );
 
+	/* ECCs are somewhat weird in that the nominal key size is defined by
+	   executive fiat based on the curve type.  For named curves this is 
+	   fairly simple but for curves loaded as raw parameters we have to
+	   recover the nominal value from the ECC p parameter */
+	if( pkcInfo->keySizeBits <= 0 )
+		{
+		pkcInfo->keySizeBits = BN_num_bits( p );
+		ENSURES( bitsToBytes( pkcInfo->keySizeBits ) >= MIN_PKCSIZE_ECC && \
+				 bitsToBytes( pkcInfo->keySizeBits ) <= CRYPT_MAX_PKCSIZE_ECC );
+		}
+
 	/* Initialise the mass of variables required by the ECC operations */
 	status = initECCVariables( pkcInfo );
 	if( cryptStatusError( status ) )
 		return( status );
 
-	/* Additional verification for ECC domain parameters, verify that 
+	/* Additional verification for custom ECC domain parameters, verify that 
 	   n * G is the point at infinity.  We have to do this at this point 
 	   rather than in checkECCDomainParameters() because it requires 
 	   initialisation of values that haven't been set up yet when 
 	   checkECCDomainParameters() is called */
-	CK( EC_POINT_mul( ecCTX, pkcInfo->tmpPoint, &domainParams->n, 
-					  NULL, NULL, &pkcInfo->bnCTX ) );
-	if( bnStatusError( bnStatus ) )
-		return( getBnStatus( bnStatus ) );
-	if( !EC_POINT_is_at_infinity( ecCTX, pkcInfo->tmpPoint ) )
-		return( CRYPT_ARGERROR_STR1 );
+	if( pkcInfo->curveType == CRYPT_ECCCURVE_NONE )
+		{
+		CK( EC_POINT_mul( ecCTX, &pkcInfo->tmpPoint, &domainParams->n, 
+						  NULL, NULL, &pkcInfo->bnCTX ) );
+		if( bnStatusError( bnStatus ) )
+			return( getBnStatus( bnStatus ) );
+		if( !EC_POINT_is_at_infinity( ecCTX, &pkcInfo->tmpPoint ) )
+			return( CRYPT_ARGERROR_STR1 );
+		}
 
 	/* If it's an ECDH key and there's no d value present, generate one 
 	   now.  This is needed because all ECDH keys are effectively private 
@@ -934,17 +1026,27 @@ int initCheckECCkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   status */
 	if( isECDH && BN_is_zero( &pkcInfo->eccParam_d ) )
 		{
-		status = generateECCPrivateValue( pkcInfo, pkcInfo->keySizeBits );
+		status = generateECCPrivateValue( pkcInfo, sideChannelProtection );
 		if( cryptStatusError( status ) )
 			return( status );
 		CLEAR_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_ISPUBLICKEY );
 		generatedD = TRUE;
 		}
 
+	/* Enable side-channel protection if required */
+	if( sideChannelProtection )
+		{
+		status = enableSidechannelProtection( pkcInfo );
+		if( cryptStatusError( status ) )
+			return( status );
+		}
+
 	/* Some sources (specifically PKCS #11) don't make Q available for
 	   private keys so if the caller is trying to load a private key with a
 	   zero Q value we calculate it for them.  First, we check to make sure
-	   that we have d available to calculate Q */
+	   that we have d available to calculate Q.  This is actually always the
+	   case from the combination of conditions and checks above, but we make
+	   it explicit here */
 	if( BN_is_zero( &pkcInfo->eccParam_qx ) && \
 		BN_is_zero( &pkcInfo->eccParam_d ) )
 		return( CRYPT_ARGERROR_STR1 );
@@ -961,6 +1063,15 @@ int initCheckECCkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   in order to get a d value we have to recreate the Q value */
 	if( BN_is_zero( &pkcInfo->eccParam_qx ) || generatedD )
 		{
+		/* At this point we're in a bit of a catch-22, to generate the ECC
+		   public value we need to work with d but we can't check d until
+		   we've got the ECC public value.  To deal with this we apply the
+		   initial check in checkECCPrivateKey() to d, i.e. checking that 
+		   d >= MIN_PKCSIZE_ECC, d <= n - 1 */
+		if( !checkComponentLength( &pkcInfo->eccParam_d, &domainParams->n, 
+								   FALSE ) )
+			return( CRYPT_ARGERROR_STR1 );
+
 		status = generateECCPublicValue( pkcInfo );
 		if( cryptStatusError( status ) )
 			return( status );
@@ -976,27 +1087,6 @@ int initCheckECCkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	if( isPrivateKey || generatedD )
 		{
 		status = checkECCPrivateKey( pkcInfo );
-		if( cryptStatusError( status ) )
-			return( status );
-		}
-
-	/* ECCs are somewhat weird in that the nominal key size is defined by
-	   executive fiat based on the curve type.  For named curves this is 
-	   fairly simple but for curves loaded as raw parameters we have to
-	   recover the nominal value from the ECC p parameter */
-	if( pkcInfo->keySizeBits <= 0 )
-		{
-		pkcInfo->keySizeBits = BN_num_bits( p );
-		ENSURES( pkcInfo->keySizeBits >= bytesToBits( MIN_PKCSIZE_ECC ) && \
-				 pkcInfo->keySizeBits <= bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
-		}
-
-	/* Enable side-channel protection if required */
-	if( TEST_FLAG( contextInfoPtr->flags, 
-				   CONTEXT_FLAG_SIDECHANNELPROTECTION ) )
-		{
-		status = enableSidechannelProtection( pkcInfo, 
-											  capabilityInfoPtr->cryptAlgo );
 		if( cryptStatusError( status ) )
 			return( status );
 		}

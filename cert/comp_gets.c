@@ -58,12 +58,14 @@ static int oidToText( IN_BUFFER( binaryOidLen ) const BYTE *binaryOID,
 
 	LOOP_MED( i = 2, i < binaryOidLen, i++ )
 		{
-		const int valTmp = value << 7;
-		int data;
+		int valTmp, data;
 
 		ENSURES( LOOP_INVARIANT_MED( i, 2, binaryOidLen - 1 ) );
 
 		/* Pick apart the encoding */
+		if( checkOverflowShift( value, 7 ) )
+			return( CRYPT_ERROR_BADDATA );
+		valTmp = value << 7;
 		data = byteToInt( binaryOID[ i ] );
 		if( value <= 0 && data == 0x80 )
 			{

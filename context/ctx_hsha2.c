@@ -272,7 +272,7 @@ static int selfTest( void )
 /* Return context subtype-specific information */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type, 
+static int getInfo( IN_ENUM( CONTEXT_INFO ) const CONTEXT_INFO_TYPE type, 
 					INOUT_PTR_OPT CONTEXT_INFO *contextInfoPtr,
 					OUT_PTR void *data, 
 					IN_INT_Z const int length )
@@ -282,13 +282,15 @@ static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type,
 	assert( ( length == 0 && isWritePtr( data, sizeof( int ) ) ) || \
 			( length > 0 && isWritePtrDynamic( data, length ) ) );
 
-	REQUIRES( isEnumRange( type, CAPABILITY_INFO ) );
+	REQUIRES( isEnumRange( type, CONTEXT_INFO ) );
 	REQUIRES( ( contextInfoPtr == NULL ) || \
 			  sanityCheckContext( contextInfoPtr ) );
 
-	if( type == CAPABILITY_INFO_STATESIZE )
+	if( type == CONTEXT_INFO_STATESIZE )
 		{
 		int *valuePtr = ( int * ) data;
+
+		REQUIRES( length == sizeof( int ) );
 
 		*valuePtr = SHA2_MAC_STATE_SIZE;
 
@@ -411,8 +413,8 @@ static int hmac( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	MAC_INFO *macInfo = contextInfoPtr->ctxMAC;
-	sha2_ctx *sha2Info = &( ( SHA2_MAC_STATE * ) macInfo->macInfo )->macState;
+	MAC_INFO *macInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	sha2_ctx *sha2Info;
 	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -421,6 +423,11 @@ static int hmac( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRange( noBytes ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( macInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	sha2Info = &( ( SHA2_MAC_STATE * ) macInfo->macInfo )->macState;
 
 	/* If the hash state was reset to allow another round of MAC'ing, copy
 	   the initial MAC state over into the current MAC state */
@@ -517,8 +524,8 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	MAC_INFO *macInfo = contextInfoPtr->ctxMAC;
-	sha2_ctx *sha2Info = &( ( SHA2_MAC_STATE * ) macInfo->macInfo )->macState;
+	MAC_INFO *macInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	sha2_ctx *sha2Info;
 	int sha2DigestSize, sha2BlockSize, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -528,7 +535,11 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( isShortIntegerRangeMin( keyLength, 4 ) );
 			  /* The self-test uses very short keys */
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( macInfo != NULL );
 
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	sha2Info = &( ( SHA2_MAC_STATE * ) macInfo->macInfo )->macState;
 	sha2DigestSize = capabilityInfoPtr->blockSize;
 	sha2BlockSize = ( sha2DigestSize == bitsToBytes( 256 ) ) ? \
 					  SHA256_BLOCK_SIZE : SHA512_BLOCK_SIZE;

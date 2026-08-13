@@ -96,6 +96,22 @@ BOOLEAN sanityCheckEnvelope( const ENVELOPE_INFO *envelopeInfoPtr )
 		return( FALSE );
 		}
 
+	/* Check object handles */
+	if( ( envelopeInfoPtr->iCryptContext != CRYPT_ERROR && \
+		  !isHandleRangeValid( envelopeInfoPtr->iCryptContext ) ) || \
+		( envelopeInfoPtr->iDecryptionKeyset != CRYPT_ERROR && \
+		  !isHandleRangeValid( envelopeInfoPtr->iDecryptionKeyset ) ) || \
+		( envelopeInfoPtr->iEncryptionKeyset != CRYPT_ERROR && \
+		  !isHandleRangeValid( envelopeInfoPtr->iEncryptionKeyset ) ) || \
+		( envelopeInfoPtr->iSigCheckKeyset != CRYPT_ERROR && \
+		  !isHandleRangeValid( envelopeInfoPtr->iSigCheckKeyset ) ) || \
+		( envelopeInfoPtr->iExtraCertChain != CRYPT_ERROR && \
+		  !isHandleRangeValid( envelopeInfoPtr->iExtraCertChain ) ) )
+		{
+		DEBUG_PUTS(( "sanityCheckEnvelope: Internal object handles" ));
+		return( FALSE );
+		}
+
 	/* Check algorithm defaults */
 	if( !isEnumRangeOpt( envelopeInfoPtr->defaultHash, CRYPT_ALGO ) || \
 		!isEnumRangeOpt( envelopeInfoPtr->defaultAlgo, CRYPT_ALGO ) || \
@@ -183,6 +199,10 @@ BOOLEAN sanityCheckEnvelope( const ENVELOPE_INFO *envelopeInfoPtr )
 		envelopeInfoPtr->blockSize < 0 || \
 		envelopeInfoPtr->blockSize > CRYPT_MAX_IVSIZE )
 		{
+		/* We can't check the blockSizeMask because it has different values
+		   depending on whether we're not encrypting, currently encrypting 
+		   with a stream cipher, or currently encrypting with a block 
+		   cipher */
 		DEBUG_PUTS(( "sanityCheckEnvelope: Block buffer info" ));
 		return( FALSE );
 		}
@@ -280,6 +300,7 @@ static int envelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 			isReadPtrDynamic( buffer, length ) );
 	assert( isWritePtr( bytesCopied, sizeof( int ) ) );
 
+	REQUIRES( sanityCheckEnvelope( envelopeInfoPtr ) );
 	REQUIRES( ( buffer == NULL && length == 0 ) || \
 			  ( buffer != NULL && isBufsizeRangeNZ( length ) ) );
 	REQUIRES( processPostambleFunction != NULL );
@@ -311,14 +332,14 @@ static int envelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		/* If the envelope buffer hasn't been allocated yet, allocate it now */
 		if( envelopeInfoPtr->buffer == NULL )
 			{
+			REQUIRES( rangeCheck( envelopeInfoPtr->bufSize, MIN_BUFFER_SIZE, 
+								  MAX_BUFFER_SIZE ) );
 			envelopeInfoPtr->buffer = \
 								safeBufferAlloc( envelopeInfoPtr->bufSize );
 			if( envelopeInfoPtr->buffer == NULL )
 				return( CRYPT_ERROR_MEMORY );
-			REQUIRES( rangeCheck( envelopeInfoPtr->bufSize, MIN_BUFFER_SIZE, 
-								  MAX_BUFFER_SIZE ) );
 			memset( envelopeInfoPtr->buffer, 0, envelopeInfoPtr->bufSize );
-			}
+			}		/* Range checked above */
 
 		/* Emit the header information into the envelope */
 		status = processPreambleFunction( envelopeInfoPtr );
@@ -378,7 +399,10 @@ static int envelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 	ENSURES( envelopeInfoPtr->state == ENVELOPE_STATE_POSTDATA );
 
-	/* We're past the main data-processing state, emit the postamble */
+	/* We're past the main data-processing state, emit the postamble.  
+	   Although the ENV_PROCESSPOSTAMBLE_FUNCTION can return OK_SPECIAL in
+	   general, when used for enveloping it doesn't so we don't have to
+	   special-case it */
 	status = processPostambleFunction( envelopeInfoPtr, FALSE );
 	if( cryptStatusError( status ) )
 		{
@@ -400,7 +424,7 @@ static int deenvelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	const ENV_COPYTOENVELOPE_FUNCTION copyToEnvelopeFunction = \
 				( ENV_COPYTOENVELOPE_FUNCTION ) \
 				FNPTR_GET( envelopeInfoPtr->copyToEnvelopeFunction );
-	BYTE *bufPtr = ( BYTE * ) buffer;
+	const BYTE *bufPtr = ( const BYTE * ) buffer;
 	int bytesIn = length, status = CRYPT_OK;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
@@ -408,6 +432,7 @@ static int deenvelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 			isReadPtrDynamic( buffer, length ) );
 	assert( isWritePtr( bytesCopied, sizeof( int ) ) );
 
+	REQUIRES( sanityCheckEnvelope( envelopeInfoPtr ) );
 	REQUIRES( ( buffer == NULL && length == 0 ) || \
 			  ( buffer != NULL && isBufsizeRangeNZ( length ) ) );
 	REQUIRES( copyToEnvelopeFunction != NULL );
@@ -425,20 +450,32 @@ static int deenvelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		/* Perform any initialisation actions */
 		if( envelopeInfoPtr->buffer == NULL )
 			{
+			/* The first push has to have at least some data associated with
+			   it so that we can detect the type.  In theory we could 
+			   require some minimum data size before we accept it based on
+			   a pathologically minimal envelope, e.g. a data-only envelope
+			   of a 1-byte message, but the code is written to handle 
+			   arbitrarily tiny initial data amounts and the self-test code 
+			   exercises the ability to do this even if, most likely, no-one 
+			   else ever will */
+			if( length < 1 )
+				return( CRYPT_ERROR_UNDERFLOW );
+			
 			/* Allocate the envelope buffer */
+			REQUIRES( rangeCheck( envelopeInfoPtr->bufSize, MIN_BUFFER_SIZE, 
+								  MAX_BUFFER_SIZE ) );
 			envelopeInfoPtr->buffer = \
 								safeBufferAlloc( envelopeInfoPtr->bufSize );
 			if( envelopeInfoPtr->buffer == NULL )
 				return( CRYPT_ERROR_MEMORY );
-			REQUIRES( rangeCheck( envelopeInfoPtr->bufSize, MIN_BUFFER_SIZE, 
-								  MAX_BUFFER_SIZE ) );
 			memset( envelopeInfoPtr->buffer, 0, envelopeInfoPtr->bufSize );
-
+					/* Range checked above */
+					
 			/* Try and determine what the data format being used is.  If it 
 			   looks like PGP data, try and process it as such, otherwise 
 			   default to PKCS #7/CMS/S/MIME */
 #ifdef USE_PGP
-			if( length > 0 && ( bufPtr[ 0 ] & 0x80 ) )
+			if( bufPtr[ 0 ] & 0x80 )
 				{
 				/* When we initially created the envelope we defaulted to CMS
 				   formatting so we have to select PGP de-enveloping before 
@@ -472,7 +509,9 @@ static int deenvelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 			REQUIRES( !checkOverflowSub( envelopeInfoPtr->bufSize, 
 										 envelopeInfoPtr->bufPos ) );
-			ENSURES( bytesToCopy >= 0 && bytesToCopy <= length && \
+			REQUIRES( !checkOverflowAdd( envelopeInfoPtr->bufPos, 
+										 bytesToCopy ) );
+			ENSURES( bytesToCopy >= 0 && bytesToCopy <= bytesIn && \
 					 envelopeInfoPtr->bufPos + \
 						bytesToCopy <= envelopeInfoPtr->bufSize );
 			if( bytesToCopy > 0 )
@@ -481,10 +520,8 @@ static int deenvelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 										envelopeInfoPtr->bufSize ) );
 				memcpy( envelopeInfoPtr->buffer + envelopeInfoPtr->bufPos,
 						bufPtr, bytesToCopy );
-				REQUIRES( !checkOverflowAdd( envelopeInfoPtr->bufPos, 
-											 bytesToCopy ) );
-  				envelopeInfoPtr->bufPos += bytesToCopy;
-  				REQUIRES( !checkOverflowSub( bytesIn, bytesToCopy ) );
+				envelopeInfoPtr->bufPos += bytesToCopy;	/* Checked above */
+				REQUIRES( !checkOverflowSub( bytesIn, bytesToCopy ) );
 				bytesIn -= bytesToCopy;
 				*bytesCopied = bytesToCopy;
 				bufPtr += bytesToCopy;
@@ -618,6 +655,8 @@ static int deenvelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 			REQUIRES( !checkOverflowSub( envelopeInfoPtr->bufSize,
 										 envelopeInfoPtr->bufPos ) );
+			REQUIRES( !checkOverflowAdd( envelopeInfoPtr->bufPos, 
+										 bytesToCopy ) );
 			ENSURES( bytesToCopy >= 0 && bytesToCopy <= bytesIn && \
 					 envelopeInfoPtr->bufPos + \
 						bytesToCopy <= envelopeInfoPtr->bufSize );
@@ -627,11 +666,8 @@ static int deenvelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 										envelopeInfoPtr->bufSize ) );
 				memcpy( envelopeInfoPtr->buffer + envelopeInfoPtr->bufPos,
 						bufPtr, bytesToCopy );
-				REQUIRES( !checkOverflowAdd( envelopeInfoPtr->bufPos, 
-											 bytesToCopy ) );
-				envelopeInfoPtr->bufPos += bytesToCopy;
-				REQUIRES( !checkOverflowAdd( envelopeInfoPtr->bufPos, 
-											 bytesToCopy ) );
+				envelopeInfoPtr->bufPos += bytesToCopy;	/* Checked above */
+				REQUIRES( !checkOverflowAdd( *bytesCopied, bytesToCopy ) );
 				*bytesCopied += bytesToCopy;
 				}
 			}
@@ -731,7 +767,7 @@ static int deenvelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 			envelopeInfoPtr->deenvState = DEENVSTATE_NONE;
 			if( TEST_FLAG( envelopeInfoPtr->dataFlags, 
 						   ENVDATA_FLAG_HASHACTIONSACTIVE ) )
-				return( length ? CRYPT_ERROR_BADDATA : CRYPT_OK );
+				return( ( length > 0 ) ? CRYPT_ERROR_BADDATA : CRYPT_OK );
 			}
 
 		/* This is just raw additional data so we feed it directly to the 
@@ -768,6 +804,7 @@ static int envelopePop( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	assert( isWritePtrDynamic( buffer, length ) );
 	assert( isWritePtr( bytesCopied, sizeof( int ) ) );
 
+	REQUIRES( sanityCheckEnvelope( envelopeInfoPtr ) );
 	REQUIRES( isBufsizeRangeNZ( length ) );
 	REQUIRES( copyFromEnvelopeFunction != NULL );
 
@@ -831,6 +868,7 @@ static int deenvelopePop( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	assert( isWritePtrDynamic( buffer, length ) );
 	assert( isWritePtr( bytesCopied, sizeof( int ) ) );
 
+	REQUIRES( sanityCheckEnvelope( envelopeInfoPtr ) );
 	REQUIRES( isBufsizeRangeNZ( length ) );
 	REQUIRES( copyFromEnvelopeFunction != NULL );
 
@@ -939,7 +977,12 @@ static int envelopeMessageFunction( INOUT_PTR TYPECAST( ENVELOPE_INFO * ) \
 				   CRYPT_ERROR_UNDERFLOW then we want to try and alert the 
 				   caller to the fact that there's a problem, so we convert 
 				   a non-finished state for an authenticated envelope into 
-				   an integrity-check failure */
+				   an integrity-check failure.
+				   
+			   Note that we can't actually defend against all possible 
+			   cases, the caller should be checking that the full de-envelope
+			   process succeeded, but we can at least try and alert to the
+			   instances where it's feasible */
 			if( envelopeInfoPtr->state == ENVELOPE_STATE_DATA )
 				status = CRYPT_ERROR_INCOMPLETE;
 			if( ( envelopeInfoPtr->state == ENVELOPE_STATE_POSTDATA || \
@@ -985,23 +1028,29 @@ static int envelopeMessageFunction( INOUT_PTR TYPECAST( ENVELOPE_INFO * ) \
 			{
 			krnlSendNotifier( envelopeInfoPtr->iSigCheckKeyset,
 							  IMESSAGE_DECREFCOUNT );
+			envelopeInfoPtr->iSigCheckKeyset = CRYPT_ERROR;
 			}
 		if( envelopeInfoPtr->iEncryptionKeyset != CRYPT_ERROR )
 			{
 			krnlSendNotifier( envelopeInfoPtr->iEncryptionKeyset,
 							  IMESSAGE_DECREFCOUNT );
+			envelopeInfoPtr->iEncryptionKeyset = CRYPT_ERROR;
 			}
 		if( envelopeInfoPtr->iDecryptionKeyset != CRYPT_ERROR )
 			{
 			krnlSendNotifier( envelopeInfoPtr->iDecryptionKeyset,
 							  IMESSAGE_DECREFCOUNT );
+			envelopeInfoPtr->iDecryptionKeyset = CRYPT_ERROR;
 			}
 
-		/* Clean up other envelope objects */
+		/* Clean up other envelope objects.  Note that we don't touch the
+		   iCryptContext which is merely a local reference to the context in
+		   the action list, it's destroyed when the action list is deleted */
 		if( envelopeInfoPtr->iExtraCertChain != CRYPT_ERROR )
 			{
 			krnlSendNotifier( envelopeInfoPtr->iExtraCertChain,
 							  IMESSAGE_DECREFCOUNT );
+			envelopeInfoPtr->iExtraCertChain = CRYPT_ERROR;
 			}
 
 		/* Clear and free the buffers if necessary */
@@ -1175,7 +1224,8 @@ static int envelopeMessageFunction( INOUT_PTR TYPECAST( ENVELOPE_INFO * ) \
 
 		assert( isWritePtrDynamic( msgData->data, msgData->length ) );
 
-		REQUIRES( isBufsizeRangeNZ( msgData->length ) );
+		REQUIRES( msgData->data != NULL && \
+				  isBufsizeRangeNZ( msgData->length ) );
 
 		/* Unless we're told otherwise, we've copied zero bytes */
 		msgData->length = 0;
@@ -1267,11 +1317,6 @@ static int initEnvelope( OUT_HANDLE_OPT CRYPT_ENVELOPE *iCryptEnvelope,
 	DATAPTR_SET( envelopeInfoPtr->lastAction, NULL );
 	DATAPTR_SET( envelopeInfoPtr->contentList, NULL );
 	DATAPTR_SET( envelopeInfoPtr->contentListCurrent, NULL );
-	envelopeInfoPtr->storageSize = storageSize;
-	status = initMemPool( envelopeInfoPtr->memPoolState, 
-						  envelopeInfoPtr->storage, storageSize );
-	if( cryptStatusError( status ) )
-		return( status );
 
 	/* Set up any internal objects to contain invalid handles.  We also set 
 	   the payload size to CRYPT_UNUSED, the default indefinite length 
@@ -1281,6 +1326,16 @@ static int initEnvelope( OUT_HANDLE_OPT CRYPT_ENVELOPE *iCryptEnvelope,
 	envelopeInfoPtr->iSigCheckKeyset = envelopeInfoPtr->iEncryptionKeyset = \
 		envelopeInfoPtr->iDecryptionKeyset = CRYPT_ERROR;
 	envelopeInfoPtr->payloadSize = CRYPT_UNUSED;
+
+	/* Initialise the envelope storage.  We have to do this after setting up
+	   the object handles above otherwise a failure here would result in a
+	   destroy message being sent to the envelope without the handles set to
+	   obviously-invalid values */
+	envelopeInfoPtr->storageSize = storageSize;
+	status = initMemPool( envelopeInfoPtr->memPoolState, 
+						  envelopeInfoPtr->storage, storageSize );
+	if( cryptStatusError( status ) )
+		return( status );
 
 	/* Set up the enveloping methods */
 	if( isDeenvelope )

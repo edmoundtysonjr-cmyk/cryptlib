@@ -460,7 +460,6 @@
     <ClCompile Include="bn\bn_gcd.c" />
     <ClCompile Include="bn\bn_mul.c" />
     <ClCompile Include="bn\bn_recp.c" />
-    <ClCompile Include="bn\ecp_mont.c" />
     <ClCompile Include="bn\ecp_smpl.c" />
     <ClCompile Include="bn\ec_lib.c" />
     <ClCompile Include="bn\ec_mult.c" />

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *				cryptlib DLP Key Generation/Checking Routines				*
-*						Copyright Peter Gutmann 1997-2019					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -26,12 +26,9 @@
 /* Enable various side-channel protection mechanisms */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-static int enableSidechannelProtection( INOUT_PTR PKC_INFO *pkcInfo,
-										IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
+static int enableSidechannelProtection( INOUT_PTR PKC_INFO *pkcInfo )
 	{
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
-
-	REQUIRES( isDlpAlgo( cryptAlgo ) );
 
 	/* Use constant-time modexp() to protect the private key from timing 
 	   channels */
@@ -130,13 +127,13 @@ static int enableSidechannelProtection( INOUT_PTR PKC_INFO *pkcInfo,
 	 =  TY - ((M*AD + AN*TX/256)*TX - ((256*M*AD+2*AN*TX-AN*x)/256)*x)/256/AD */
 
 CHECK_RETVAL_RANGE( 160, 1000 ) \
-static int getDLPexpSize( IN_LENGTH_SHORT_MIN( MIN_PKCSIZE * 8 ) \
+static int getDLPexpSize( IN_LENGTH_SHORT_MIN( bytesToBits( MIN_PKCSIZE ) ) \
 							const int primeBits )
 	{
 	int value;
 
-	REQUIRES( primeBits >= bytesToBits( MIN_PKCSIZE ) && \
-			  primeBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
+	REQUIRES( bitsToBytes( primeBits ) >= MIN_PKCSIZE && \
+			  bitsToBytes( primeBits ) <= CRYPT_MAX_PKCSIZE );
 
 	/* If it's over TX bits, it's linear */
 	if( primeBits > TX )
@@ -148,7 +145,7 @@ static int getDLPexpSize( IN_LENGTH_SHORT_MIN( MIN_PKCSIZE * 8 ) \
 					   ( ( 256 * M * AD + AN * 2 * TX - AN * primeBits ) / 256 ) * \
 					   primeBits ) / ( AD * 256 );
 		}
-	ENSURES( value >= 160 && value < 1000 );
+	ENSURES( value >= 160 && value <= 1000 );
 
 	/* At this point we run into a problem with SSH, it hardcodes the 
 	   exponent size at 160 bits no matter what the prime size is so that
@@ -213,7 +210,7 @@ static int getDLPexpSize( IN_LENGTH_SHORT_MIN( MIN_PKCSIZE * 8 ) \
 #define MIN_EXPONENT_SIZE_BITS	160
 
 /* The maximum number of factors required to generate a prime using the Lim-
-   Lee algorithm, which evaluates to 25 for a 4 kbit max.prime size */
+   Lee algorithm, which evaluates to 26 for a 4 kbit max.prime size */
 
 #define MAX_NO_FACTORS			( ( bytesToBits( CRYPT_MAX_PKCSIZE ) / \
 									MIN_EXPONENT_SIZE_BITS ) + 1 )
@@ -260,7 +257,7 @@ static int findGeneratorForPQ( INOUT_PTR PKC_INFO *pkcInfo )
 	   we use small integers it makes this operation much faster */
 	LOOP_MED( gCounter = 3, gCounter < FAILSAFE_ITERATIONS_MED, gCounter++ )
 		{
-		ENSURES( LOOP_INVARIANT_MED( gCounter, 3, 
+		ENSURES( LOOP_INVARIANT_MED( gCounter, 3, \
 									 FAILSAFE_ITERATIONS_MED - 1 ) );
 
 		CK( BN_mod_exp_mont_word( g, gCounter, j, p, &pkcInfo->bnCTX, 
@@ -271,6 +268,13 @@ static int findGeneratorForPQ( INOUT_PTR PKC_INFO *pkcInfo )
 			break;
 		}
 	ENSURES( LOOP_BOUND_OK );
+	if( BN_cmp_word( g, 1 ) <= 0 )
+		{
+		/* We exited the loop without finding a g candidate, something has
+		   gone seriously wrong since this should only occur with 
+		   probability 1/q */
+		return( CRYPT_ERROR_FAILED );
+		}
 
 	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
@@ -283,11 +287,18 @@ static int findGeneratorForPQ( INOUT_PTR PKC_INFO *pkcInfo )
 
    This function allows the generation of reproducible (NUMS) prime values 
    if getRandomInfo is provided as a randomness source instead of the 
-   default built-in source */
+   default built-in source (note that this will require additional changes
+   in generatePrime() if exactly reproducible values rather than just the
+   use of a caller-supplied randomness source are required).  
+   
+   Note that the should-never-occur REQUIRES()/ENSURES() checks force an 
+   exit without cleaning up the BIGNUM arrays, but these are both should-
+   never-occur conditions and contain values for which keygen has been 
+   abandoned, so we're not leaking any information about actual keys */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int generateDLPPublicValues( INOUT_PTR PKC_INFO *pkcInfo, 
-									IN_LENGTH_SHORT_MIN( MIN_PKCSIZE * 8 ) \
+									IN_LENGTH_SHORT_MIN( bytesToBits( MIN_PKCSIZE ) ) \
 										const int pBits,
 									IN_PTR_OPT \
 										const GET_RANDOM_INFO *getRandomInfo )
@@ -303,12 +314,6 @@ static int generateDLPPublicValues( INOUT_PTR PKC_INFO *pkcInfo,
 	int bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
-	assert( getDLPexpSize( 1024 ) == MIN_EXPONENT_SIZE_BITS );
-			/* 1024-bit keys have special handling for pre-FIPS 186-3
-			   compatibility */
-	assert( CRYPT_MAX_PKCSIZE < bitsToBytes( 1030 ) || \
-			getDLPexpSize( 1030 ) == 168 );
-			/* First size over MIN_EXPONENT_SIZE_BITS */
 	assert( getRandomInfo == NULL || \
 			isReadPtr( getRandomInfo, sizeof( GET_RANDOM_INFO ) ) );
 
@@ -317,27 +322,28 @@ static int generateDLPPublicValues( INOUT_PTR PKC_INFO *pkcInfo,
 			  pBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
 	REQUIRES( safeExpSizeBits >= MIN_EXPONENT_SIZE_BITS && \
 			  safeExpSizeBits < 512 );
+	REQUIRES( noChecks >= 1 && noChecks <= MAX_NO_PRIME_CHECKS );
 
 	ENSURES( getDLPexpSize( 1024 ) == MIN_EXPONENT_SIZE_BITS );
 			 /* 1024-bit keys have special handling for pre-FIPS 186-3 
 				compatibility */
-#if CRYPT_MAX_PKCSIZE >= bytesToBits( 1536 )
+#if CRYPT_MAX_PKCSIZE >= bitsToBytes( 1536 )
 	ENSURES( getDLPexpSize( 1536 ) == 198 );
 #endif /* CRYPT_MAX_PKCSIZE bits >= 1536 */
-#if CRYPT_MAX_PKCSIZE >= bytesToBits( 2048 )
+#if CRYPT_MAX_PKCSIZE >= bitsToBytes( 2048 )
 	ENSURES( getDLPexpSize( 2048 ) == 225 );
 #endif /* CRYPT_MAX_PKCSIZE bits >= 2048 */
-#if CRYPT_MAX_PKCSIZE >= bytesToBits( 3072 )
+#if CRYPT_MAX_PKCSIZE >= bitsToBytes( 3072 )
 	ENSURES( getDLPexpSize( 3072 ) == 270 );
 #endif /* CRYPT_MAX_PKCSIZE bits >= 3072 */
-#if CRYPT_MAX_PKCSIZE >= bytesToBits( 4096 )
+#if CRYPT_MAX_PKCSIZE >= bitsToBytes( 4096 )
 	ENSURES( getDLPexpSize( 4096 ) == 305 );
 #endif /* CRYPT_MAX_PKCSIZE bits >= 4096 */
 
 	/* Determine how many factors we need and the size in bits of the 
 	   factors.  For the range checks below, the minimum value for
-	   factorBits is 860, the minimum value for nFactors is 5 when
-	   MIN_PKCSIZE is 1024 */
+	   factorBits is 847, the minimum value for nFactors is 5 when
+	   MIN_PKCSIZE is ( 1024 - 16 ) = 1008 */
 	REQUIRES( !checkOverflowSub( pBits, safeExpSizeBits ) );
 	factorBits = ( pBits - safeExpSizeBits ) - 1;
 	ENSURES( factorBits >= bytesToBits( MIN_PKCSIZE ) - \
@@ -348,11 +354,13 @@ static int generateDLPPublicValues( INOUT_PTR PKC_INFO *pkcInfo,
 	ENSURES( nFactors >= ( bytesToBits( MIN_PKCSIZE ) - MIN_EXPONENT_SIZE_BITS ) / \
 							MIN_EXPONENT_SIZE_BITS && \
 			 nFactors <= MAX_NO_FACTORS );
-	ENSURES( nPrimes > ( bytesToBits( MIN_PKCSIZE ) - MIN_EXPONENT_SIZE_BITS ) / \
+	ENSURES( nPrimes >= ( bytesToBits( MIN_PKCSIZE ) - MIN_EXPONENT_SIZE_BITS ) / \
 							MIN_EXPONENT_SIZE_BITS && \
 			 nPrimes <= MAX_NO_PRIMES );
 	REQUIRES( !checkOverflowDiv( factorBits, nFactors ) );
 	factorBits /= nFactors;
+	REQUIRES( factorBits >= 120 && \
+			  factorBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
 
 	/* Generate a random prime q and multiply it by 2 to form the base for 
 	   the other factors */
@@ -554,55 +562,88 @@ cleanup:
 	return( status );
 	}
 
-/* Generate the DLP private value x and public value y */
+/* Generate the DLP private value x and public value y.  We have to enable
+   side-channel protection immediately after generating the value if
+   required because we're about to perform computations with it before
+   we get back to the general enabling in the calling code */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-static int generateDLPPrivateValue( INOUT_PTR PKC_INFO *pkcInfo )
+static int generateDLPPrivateValue( INOUT_PTR PKC_INFO *pkcInfo,
+									IN_BOOL \
+										const BOOLEAN sideChannelProtection )
 	{
-	BIGNUM *x = &pkcInfo->dlpParam_x, *q = &pkcInfo->dlpParam_q; 
-	const int qBits = BN_num_bits( q );
-	int bnStatus = BN_STATUS, status;
+	const DH_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
+	const BIGNUM *p, *q;
+	BIGNUM *x = &pkcInfo->dlpParam_x; 
+	BIGNUM *q2 = &pkcInfo->dlpTmp1;
+	int expBits, bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
 
 	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
-	REQUIRES( ( qBits == 0 ) || \
-			  ( qBits >= MIN_EXPONENT_SIZE_BITS && \
-				qBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) ) );
+	REQUIRES( isBooleanValue( sideChannelProtection ) );
 
-	/* If it's a PKCS #3 DH key then there won't be a q value present so we 
-	   have to estimate the appropriate x size in the same way that we 
-	   estimated the q size when we generated the public key components */
-	if( qBits == 0 )
+	/* Get the domain parameters either as built-in parameter sets or from
+	   the context data */
+	if( domainParams != NULL )
 		{
-		const DH_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
-		const BIGNUM *p = ( domainParams != NULL ) ? \
-						  &domainParams->p : &pkcInfo->dlpParam_p;
-		const int pLen = BN_num_bits( p );
+		p = &domainParams->p;
+		q = &domainParams->q;
+		}
+	else
+		{
+		p = &pkcInfo->dlpParam_p;
+		q = &pkcInfo->dlpParam_q;
+		}
 
-		REQUIRES( pLen >= bytesToBits( MIN_PKCSIZE ) && \
-				  pLen <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
-		return( generateBignum( x, getDLPexpSize( pLen ), 0xC0, 0 ) );
+	/* For the fixed domain parameters (but not the ones we've generated
+	   ourselves), q is roughly the same size as p so if we make x the same 
+	   size as q then we get a ridiculously large (and slow to work with) 
+	   value.  To deal with this we get the size from p, see the long 
+	   comment in getDLPexpSize() for details.
+	   
+	   "Imperfect Forward Secrecy: How Diffie-Hellman Fails in Practice" 
+	   mentions that "for efficiency reasons some implementations use 
+	   ephemeral keys gx with a short exponent x; commonly suggested sizes 
+	   for x are as small as 160 or 224 bits, intended to match the 
+	   estimated strength of a 1024- or 2048-bit group. For safe p, such 
+	   exponent lengths are not known to decrease security, as the most 
+	   efficient attack will be the Pollard lambda algorithm" */
+	status = expBits = getDLPexpSize( BN_num_bits( p ) );
+	if( cryptStatusError( status ) )
+		return( status );
+
+	/* If it's a PKCS #3 DH key then there won't be a q value present so we
+	   just generate the exponent and exit */
+	if( BN_is_zero( q ) )
+		{
+		status = generateBignum( x, expBits, 0xC0, 0 );
+		if( cryptStatusOK( status ) && sideChannelProtection )
+			status = enableSidechannelProtection( pkcInfo );
+		return( status );
 		}
 
 	/* Generate the DLP private value x s.t. 2 <= x <= q-2 (this is the 
 	   lowest common denominator of FIPS 186's 1...q-1 and X9.42's 2...q-2). 
 	   Because the mod q-2 is expensive we do a quick check to make sure 
-	   that it's really necessary before evaluating it */
-	status = generateBignum( x, qBits, 0xC0, 0 );
+	   that it's really necessary before evaluating it, most of the time 
+	   it won't be because of the oversize q value, see the comment 
+	   earlier */
+	status = generateBignum( x, expBits, 0xC0, 0 );
 	if( cryptStatusError( status ) )
 		return( status );
-	CK( BN_sub_word( q, 2 ) );
+	CKPTR( BN_copy( q2, q ) );
+	CK( BN_sub_word( q2, 2 ) );
 	if( bnStatusError( bnStatus ) )
 		return( getBnStatus( bnStatus ) );
-	if( BN_cmp( x, q ) > 0 )
+	if( BN_cmp( x, q2 ) > 0 )
 		{
 		int xLen;
 
 		/* Trim x down to size.  Actually we get the upper bound as q - 3, 
 		   but over a MIN_EXPONENT_SIZE_BITS (minimum) number range this 
 		   doesn't matter */
-		CK( BN_mod( x, x, q, &pkcInfo->bnCTX ) );
+		CK( BN_mod( x, x, q2, &pkcInfo->bnCTX ) );
 		if( bnStatusError( bnStatus ) )
 			return( getBnStatus( bnStatus ) );
 
@@ -611,14 +652,25 @@ static int generateDLPPrivateValue( INOUT_PTR PKC_INFO *pkcInfo )
 		   criteria (the target is a suitably large random value, not the 
 		   closest possible fit within the range) */
 		xLen = BN_num_bits( x );
-		REQUIRES( xLen > 0 && xLen <= qBits );
-		REQUIRES( !checkOverflowSub( qBits, 5 ) );
-		if( xLen < qBits - 5 )
-			status = generateBignum( x, qBits - 1, 0xC0, 0 );
+		REQUIRES( xLen > 0 && xLen <= expBits );
+		REQUIRES( !checkOverflowSub( expBits, 5 ) );
+		if( xLen < expBits - 5 )
+			status = generateBignum( x, expBits - 1, 0xC0, 0 );
 		}
-	CK( BN_add_word( q, 2 ) );
 	if( bnStatusError( bnStatus ) )
 		return( getBnStatus( bnStatus ) );
+	if( sideChannelProtection )
+		{
+		/* We enable side-channel protection here because, with very small
+		   probability, we may have had to re-generate x, because BN_mod()
+		   isn't constant-time, and in any case because a side-channel
+		   attack while we're actually doing a keygen is pretty unlikely,
+		   long-term DLP keys are generated offline and ephemeral DH values
+		   for TLS and SSH are generated before there's any network comms */
+		status = enableSidechannelProtection( pkcInfo );
+		if( cryptStatusError( status ) )
+			return( status );
+		}
 
 	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
@@ -675,7 +727,7 @@ static int checkDLPDomainParameters( INOUT_PTR PKC_INFO *pkcInfo,
 	const BIGNUM *g = &pkcInfo->dlpParam_g;
 	BIGNUM *tmp = &pkcInfo->tmp1;
 	const int gBits = BN_num_bits( g );
-	BOOLEAN isPrime;
+	BOOLEAN isPrime DUMMY_INIT;
 	int length, bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
@@ -825,6 +877,10 @@ static int checkDLPDomainParameters( INOUT_PTR PKC_INFO *pkcInfo,
 	if( length < DLPPARAM_MIN_Q || length > DLPPARAM_MAX_Q )
 		return( CRYPT_ARGERROR_STR1 );
 
+	/* The remaining checks are both expensive and not really needed since 
+	   we're not doing anything with the keys */
+	FUZZ_SKIP_REMAINDER();
+
 	/* Verify that q is not (obviously) composite.  Note that we can't 
 	   use primeProbable() because this updates the Montgomery CTX data, 
 	   it's OK to use it early in the keygen process before everything is 
@@ -840,6 +896,7 @@ static int checkDLPDomainParameters( INOUT_PTR PKC_INFO *pkcInfo,
 	if( bnStatusError( bnStatus ) )
 		return( CRYPT_ARGERROR_STR1 );
 	status = primeProbableFermat( pkcInfo, q, &pkcInfo->montCTX2, &isPrime );
+	BN_MONT_CTX_free( &pkcInfo->montCTX2 );
 	if( cryptStatusError( status ) )
 		return( status );
 	if( !isPrime )
@@ -880,43 +937,56 @@ static int checkDLPDomainParameters( INOUT_PTR PKC_INFO *pkcInfo,
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-static int checkDLPPublicKey( INOUT_PTR PKC_INFO *pkcInfo, 
-							  IN_BOOL const BOOLEAN isPKCS3 )
+static int checkDLPPublicKey( INOUT_PTR PKC_INFO *pkcInfo )
 	{
 	const DH_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
-	const BIGNUM *p = ( domainParams != NULL ) ? \
-					  &domainParams->p : &pkcInfo->dlpParam_p;
-	const BIGNUM *g = ( domainParams != NULL ) ? \
-					  &domainParams->g : &pkcInfo->dlpParam_g;
+	const BIGNUM *p, *q, *g;
 	BIGNUM *y = &pkcInfo->dlpParam_y, *tmp = &pkcInfo->tmp1;
-	int bnStatus = BN_STATUS, length, status;
+	int bnStatus = BN_STATUS, length;
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
 
 	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
-	REQUIRES( isBooleanValue( isPKCS3 ) );
+
+	/* Get the domain parameters either as built-in parameter sets or from
+	   the context data */
+	if( domainParams != NULL )
+		{
+		p = &domainParams->p;
+		q = &domainParams->q;
+		g = &domainParams->g;
+		}
+	else
+		{
+		p = &pkcInfo->dlpParam_p;
+		q = &pkcInfo->dlpParam_q;
+		g = &pkcInfo->dlpParam_g;
+		}
 
 	/* Verify that yLen >= DLPPARAM_MIN_Y, yLen <= DLPPARAM_MAX_Y */
 	length = BN_num_bytes( y );
 	if( length < DLPPARAM_MIN_Y || length > DLPPARAM_MAX_Y )
 		return( CRYPT_ARGERROR_STR1 );
 
-	/* Verify that y < p - 1 */
-	CK( BN_add_word( y, 1 ) );
-	status = BN_cmp( y, p );
-	CK( BN_sub_word( y, 1 ) );
-	if( bnStatusError( bnStatus ) || status >= 0 )
+	/* Verify that y < p - 1, i.e. y + 1 < p */
+	CKPTR( BN_copy( tmp, y ) );
+	CK( BN_add_word( tmp, 1 ) );
+	if( bnStatusError( bnStatus ) || BN_cmp( tmp, p ) >= 0 )
 		{
 		DEBUG_DIAG(( "DLP y value >= p - 1" ));
 		return( CRYPT_ARGERROR_STR1 );
 		}
 
 	/* Verify that y has the correct order in the subgroup, i.e. that
-	   y ^ q mod p == 1 */
-	if( !isPKCS3 )
+	   y ^ q mod p == 1.  We have to be careful when applying this because
+	   the check is valid for FIPS 186/X9.42 values (q is the subgroup 
+	   order) but not PKCS #3 ones with safe primes (q is the cofactor 
+	   (p-1)/2).  To deal with this we check that the latter isn't the
+	   case */
+	if( !BN_is_zero( q ) && BN_num_bits( q ) < BN_num_bits( p ) - 1 )
 		{
-		CK( BN_mod_exp_mont( tmp, y, &pkcInfo->dlpParam_q, p,
-							 &pkcInfo->bnCTX, &pkcInfo->dlpParam_mont_p ) );
+		CK( BN_mod_exp_mont( tmp, y, q, p, &pkcInfo->bnCTX, 
+							 &pkcInfo->dlpParam_mont_p ) );
 		if( bnStatusError( bnStatus ) )
 			return( CRYPT_ARGERROR_STR1 );
 		if( !BN_is_one( tmp ) )
@@ -945,16 +1015,10 @@ static int checkDLPPublicKey( INOUT_PTR PKC_INFO *pkcInfo,
 /* Perform validity checks on the private key */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-static int checkDLPPrivateKey( INOUT_PTR PKC_INFO *pkcInfo,
-							   IN_BOOL const BOOLEAN isPKCS3 )
+static int checkDLPPrivateKey( INOUT_PTR PKC_INFO *pkcInfo )
 	{
 	const DH_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
-	const BIGNUM *p = ( domainParams != NULL ) ? \
-					  &domainParams->p : &pkcInfo->dlpParam_p;
-	const BIGNUM *q = ( domainParams != NULL ) ? \
-					  &domainParams->q : &pkcInfo->dlpParam_q;
-	const BIGNUM *g = ( domainParams != NULL ) ? \
-					  &domainParams->g : &pkcInfo->dlpParam_g;
+	const BIGNUM *p, *q, *g;
 	const BIGNUM *x = &pkcInfo->dlpParam_x, *y = &pkcInfo->dlpParam_y;
 	BIGNUM *tmp = &pkcInfo->tmp1;
 	int bnStatus = BN_STATUS, length;
@@ -963,6 +1027,21 @@ static int checkDLPPrivateKey( INOUT_PTR PKC_INFO *pkcInfo,
 
 	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 
+	/* Get the domain parameters either as built-in parameter sets or from
+	   the context data */
+	if( domainParams != NULL )
+		{
+		p = &domainParams->p;
+		q = &domainParams->q;
+		g = &domainParams->g;
+		}
+	else
+		{
+		p = &pkcInfo->dlpParam_p;
+		q = &pkcInfo->dlpParam_q;
+		g = &pkcInfo->dlpParam_g;
+		}
+
 	/* Verify that xLen >= DLPPARAM_MIN_X, xLen <= DLPPARAM_MAX_X */
 	length = BN_num_bytes( x );
 	if( length < DLPPARAM_MIN_X || length > DLPPARAM_MAX_X )
@@ -970,15 +1049,15 @@ static int checkDLPPrivateKey( INOUT_PTR PKC_INFO *pkcInfo,
 
 #ifndef CONFIG_FUZZ
 	/* Verify that x < q - 1 */
-	if( !isPKCS3 )
+	if( !BN_is_zero( q ) )
 		{
 		/* We have to use a temporary for q - 1 because q may be a fixed 
 		   domain parameter */
 		CKPTR( BN_copy( tmp, q ) );
-		CK( BN_sub_word( tmp, 2 ) );
+		CK( BN_sub_word( tmp, 1 ) );
 		if( bnStatusError( bnStatus ) )
 			return( getBnStatus( bnStatus ) );
-		if( BN_cmp( x, tmp ) > 0 )
+		if( BN_cmp( x, tmp ) >= 0 )
 			return( CRYPT_ARGERROR_STR1 );
 		}
 
@@ -1006,12 +1085,16 @@ static int checkDLPPrivateKey( INOUT_PTR PKC_INFO *pkcInfo,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int generateDLPkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
-					IN_LENGTH_SHORT_MIN( MIN_PKCSIZE * 8 ) const int keyBits )
+					IN_LENGTH_SHORT_MIN( bytesToBits( MIN_PKCSIZE ) ) \
+						const int keyBits )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	const BIGNUM *p = &pkcInfo->dlpParam_p;
+	const BIGNUM *p;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const BOOLEAN sideChannelProtection = \
+			TEST_FLAG( contextInfoPtr->flags, \
+					   CONTEXT_FLAG_SIDECHANNELPROTECTION ) ? TRUE : FALSE;
 	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -1020,6 +1103,11 @@ int generateDLPkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( keyBits >= bytesToBits( MIN_PKCSIZE ) && \
 			  keyBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	p = &pkcInfo->dlpParam_p;
 
 	/* Generate the domain parameters */
 	pkcInfo->keySizeBits = keyBits;
@@ -1028,9 +1116,19 @@ int generateDLPkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		return( status );
 
 	/* Generate the private key */
-	status = generateDLPPrivateValue( pkcInfo );
+	status = generateDLPPrivateValue( pkcInfo, sideChannelProtection );
 	if( cryptStatusError( status ) )
 		return( status );
+
+	/* We've now got a private key present, enable side-channel protection 
+	   if required.  This has already been done as a side-effect of 
+	   generateDLPPrivateValue() but we make it explicit here */
+	if( sideChannelProtection )
+		{
+		status = enableSidechannelProtection( pkcInfo );
+		if( cryptStatusError( status ) )
+			return( status );
+		}
 
 	/* Since the keygen is randomised it may occur that the final size of 
 	   the public value that determines its nominal size is slightly smaller 
@@ -1038,23 +1136,13 @@ int generateDLPkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   effective key size after we've finished generating the public value
 	   that determines its nominal size */
 	pkcInfo->keySizeBits = BN_num_bits( p );
-	ENSURES( pkcInfo->keySizeBits >= bytesToBits( MIN_PKCSIZE ) && \
-			 pkcInfo->keySizeBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
+	ENSURES( bitsToBytes( pkcInfo->keySizeBits ) >= MIN_PKCSIZE && \
+			 bitsToBytes( pkcInfo->keySizeBits ) <= CRYPT_MAX_PKCSIZE );
 
 	/* Calculate y */
 	status = generateDLPPublicValue( pkcInfo );
 	if( cryptStatusError( status ) )
 		return( status );
-
-	/* Enable side-channel protection if required */
-	if( TEST_FLAG( contextInfoPtr->flags, 
-				   CONTEXT_FLAG_SIDECHANNELPROTECTION ) )
-		{
-		status = enableSidechannelProtection( pkcInfo, 
-											  capabilityInfoPtr->cryptAlgo );
-		if( cryptStatusError( status ) )
-			return( status );
-		}
 
 	/* Checksum the bignums to try and detect fault attacks.  Since we're
 	   setting the checksum at this point there's no need to check the 
@@ -1064,9 +1152,9 @@ int generateDLPkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	/* Make sure that the generated values are valid */
 	status = checkDLPDomainParameters( pkcInfo, FALSE, TRUE );
 	if( cryptStatusOK( status ) )
-		status = checkDLPPublicKey( pkcInfo, FALSE );
+		status = checkDLPPublicKey( pkcInfo );
 	if( cryptStatusOK( status ) )
-		status = checkDLPPrivateKey( pkcInfo, FALSE );
+		status = checkDLPPrivateKey( pkcInfo );
 	if( cryptStatusError( status ) )
 		return( status );
 
@@ -1092,16 +1180,18 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int initCheckDLPkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
 					 IN_BOOL const BOOLEAN isPKCS3 )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
-	const DH_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const DH_DOMAINPARAMS *domainParams;
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	const BIGNUM *p = &pkcInfo->dlpParam_p, *g = &pkcInfo->dlpParam_g;
-	const BIGNUM *x = &pkcInfo->dlpParam_x, *y = &pkcInfo->dlpParam_y;
-	BIGNUM *tmp = &pkcInfo->tmp1;
+	const BIGNUM *p, *g, *x, *y;
+	BIGNUM *tmp;
 	const BOOLEAN isPrivateKey = TEST_FLAG( contextInfoPtr->flags, 
 											CONTEXT_FLAG_ISPUBLICKEY ) ? \
 								 FALSE : TRUE;
+	const BOOLEAN sideChannelProtection = \
+			TEST_FLAG( contextInfoPtr->flags, \
+					   CONTEXT_FLAG_SIDECHANNELPROTECTION ) ? TRUE : FALSE;
 	BOOLEAN isDH, generatedX = FALSE;
 	int bnStatus = BN_STATUS, status;
 
@@ -1110,7 +1200,13 @@ int initCheckDLPkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isBooleanValue( isPKCS3 ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( pkcInfo != NULL );
 
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	domainParams = pkcInfo->domainParams;
+	p = &pkcInfo->dlpParam_p; g = &pkcInfo->dlpParam_g; 
+	x = &pkcInfo->dlpParam_x; y = &pkcInfo->dlpParam_y; tmp = &pkcInfo->tmp1;
 	isDH = ( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_DH ) ? TRUE : FALSE;
 
 	/* Make sure that the necessary key parameters have been initialised.  
@@ -1168,8 +1264,8 @@ int initCheckDLPkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	if( bnStatusError( bnStatus ) )
 		return( CRYPT_ARGERROR_STR1 );
 	pkcInfo->keySizeBits = BN_num_bits( p );
-	ENSURES( pkcInfo->keySizeBits >= bytesToBits( MIN_PKCSIZE ) && \
-			 pkcInfo->keySizeBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
+	ENSURES( bitsToBytes( pkcInfo->keySizeBits ) >= MIN_PKCSIZE && \
+			 bitsToBytes( pkcInfo->keySizeBits ) <= CRYPT_MAX_PKCSIZE );
 
 	/* Additional verification that would normally be performed in 
 	   checkDLPDomainParameters() but that requires initialisation of values 
@@ -1208,11 +1304,20 @@ int initCheckDLPkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   also update the context flags to reflect this change in status */
 	if( isDH && BN_is_zero( x ) )
 		{
-		status = generateDLPPrivateValue( pkcInfo );
+		status = generateDLPPrivateValue( pkcInfo, sideChannelProtection );
 		if( cryptStatusError( status ) )
 			return( status );
 		CLEAR_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_ISPUBLICKEY );
 		generatedX = TRUE;
+		}
+
+	/* We've now got a private key present, enable side-channel protection 
+	   if required */
+	if( sideChannelProtection )
+		{
+		status = enableSidechannelProtection( pkcInfo );
+		if( cryptStatusError( status ) )
+			return( status );
 		}
 
 	/* Some sources (specifically PKCS #11) don't make y available for
@@ -1267,24 +1372,14 @@ int initCheckDLPkey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		}
 
 	/* Make sure that the public key is valid */
-	status = checkDLPPublicKey( pkcInfo, isPKCS3 );
+	status = checkDLPPublicKey( pkcInfo );
 	if( cryptStatusError( status ) )
 		return( status );
 
 	/* Make sure that the private key is valid */
 	if( isPrivateKey || generatedX )
 		{
-		status = checkDLPPrivateKey( pkcInfo, isPKCS3 );
-		if( cryptStatusError( status ) )
-			return( status );
-		}
-
-	/* Enable side-channel protection if required */
-	if( TEST_FLAG( contextInfoPtr->flags, 
-				   CONTEXT_FLAG_SIDECHANNELPROTECTION ) )
-		{
-		status = enableSidechannelProtection( pkcInfo, 
-											  capabilityInfoPtr->cryptAlgo );
+		status = checkDLPPrivateKey( pkcInfo );
 		if( cryptStatusError( status ) )
 			return( status );
 		}

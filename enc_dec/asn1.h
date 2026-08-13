@@ -238,7 +238,16 @@ int peekTag( INOUT_PTR STREAM *stream );
 	status = read();
 	if( checkStatusPeekTag( stream, status, tag ) && \
 		tag == MAKE_CTAG( 0 ) )
-		status = read(); */
+		{
+		do_stuff();
+		}
+	if( cryptStatusError( status ) )
+		return( status );	// Residual error from peekTag() 
+
+   Note the terminating status check, depending on whether the 
+   cryptStatusError() or tag comparison is triggered in the peek the 
+   intervening code will be skipped and status will be left with a value 
+   that's not an error but not CRYPT_OK either */
 
 #define checkStatusPeekTag( stream, status, tag ) \
 		( !cryptStatusError( status ) && \
@@ -566,7 +575,7 @@ int readCharacterString( INOUT_PTR STREAM *stream,
 			( ( value ) > 0xFF ) ? 2 : ( value ) ? 1 : 0 ) )
 RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int writeBitString( INOUT_PTR STREAM *stream, 
-					IN_INT_Z const int bitString, 
+					IN_INT const int bitString, 
 					IN_TAG const int tag );
 RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int readBitStringTag( INOUT_PTR STREAM *stream, 

@@ -5,11 +5,7 @@
 *																			*
 ****************************************************************************/
 
-#if defined( INC_ALL )
-  #include "crypt.h"
-#else
-  #include "crypt.h"
-#endif /* Compiler-specific includes */
+#include "crypt.h"
 
 /****************************************************************************
 *																			*
@@ -49,7 +45,7 @@ int strFindStr( IN_BUFFER( strLen ) const char *str,
 				IN_BUFFER( findStrLen ) const char *findStr, 
 				IN_LENGTH_SHORT const int findStrLen )
 	{
-	const int findCh = toUpper( findStr[ 0 ] );
+	int findCh;
 	LOOP_INDEX i;
 
 	assert( isReadPtrDynamic( str, strLen ) );
@@ -57,12 +53,16 @@ int strFindStr( IN_BUFFER( strLen ) const char *str,
 
 	REQUIRES_EXT( isShortIntegerRangeNZ( strLen ), -1 );
 	REQUIRES_EXT( isShortIntegerRangeNZ( findStrLen ), -1 );
-	REQUIRES_EXT( findCh >= 0 && findCh <= 0x7F, -1 );
 
 	/* If the string to find is larger than the string being searched, we 
 	   can never have a match */
 	if( findStrLen > strLen )
 		return( -1 );
+
+	/* Get the first character of the search string for a quick-reject 
+	   match */
+	findCh = toUpper( findStr[ 0 ] );
+	REQUIRES_EXT( findCh >= 0 && findCh <= 0x7F, -1 );
 
 	LOOP_MAX( i = 0, i <= strLen - findStrLen, i++ )
 		{
@@ -153,8 +153,16 @@ int strStripWhitespace( OUT_PTR_PTR_COND const char **newStringPtr,
 	ENSURES_EXT( LOOP_BOUND_OK, -1 );
 	if( startPos >= strLen )
 		return( -1 );
+	if( string[ startPos ] == '\0' )
+		{
+		/* We're about to walk backwards through the string looking for, 
+		   among other things, a '\0', so we can't be starting the string
+		   at a '\0' both because we don't allow it as leading "whitespace" 
+		   and because, worst-case, it could lead to an empty string if
+		   there's only more whitespace following it */
+		return( -1 );
+		}
 	ENSURES_EXT( rangeCheck( startPos, 0, strLen - 1 ), -1 );
-	*newStringPtr = string + startPos;
 	LOOP_MAX_REV( endPos = strLen,
 				  endPos > startPos && \
 					( string[ endPos - 1 ] == ' ' || \
@@ -168,6 +176,8 @@ int strStripWhitespace( OUT_PTR_PTR_COND const char **newStringPtr,
 
 	ENSURES_EXT( !checkOverflowSub( endPos, startPos ), -1 );
 	ENSURES_EXT( rangeCheck( endPos - startPos, 1, strLen ), -1 );
+
+	*newStringPtr = string + startPos;
 	return( endPos - startPos );
 	}
 
@@ -270,11 +280,11 @@ int strGetNumeric( IN_BUFFER( strLen ) const char *str,
 	   more checks we have the harder it is for gcc to find an excuse to 
 	   remove them (see the comments in the checkOverflowXYZ() functions in 
 	   misc/safety.h) */
-	LOOP_LARGE( ( i = 0, value = 0 ), i < strLen, i++ )
+	LOOP_SMALL( ( i = 0, value = 0 ), i < strLen, i++ )
 		{
 		int ch;
 
-		ENSURES( LOOP_INVARIANT_LARGE( i, 0, strLen - 1 ) );
+		ENSURES( LOOP_INVARIANT_SMALL( i, 0, strLen - 1 ) );
 
 		ch = byteToInt( str[ i ] ) - '0';
 		if( ch < 0 || ch > 9 )
@@ -285,7 +295,8 @@ int strGetNumeric( IN_BUFFER( strLen ) const char *str,
 		if( checkOverflowAdd( value, ch ) )
 			return( CRYPT_ERROR_BADDATA );
 		value += ch;
-		ENSURES( isIntegerRange( value ) );
+		if( !isIntegerRange( value ) )
+			return( CRYPT_ERROR_BADDATA );
 		}
 	ENSURES( LOOP_BOUND_OK );
 
@@ -318,13 +329,15 @@ int strParseNumeric( IN_BUFFER( strMaxLen ) const char *str,
 	*numericValue = 0;
 
 	/* Figure out which substring portion of the string is the numeric 
-	   value */
-	LOOP_LARGE( numericStrLen = 0, 
-				numericStrLen < strMaxLen && \
+	   value.  We limit the number of characters that we handle to 5, 
+	   regardless of the size of the input string, because we should never 
+	   be dealing with more than that many digits in a string */
+	LOOP_SMALL( numericStrLen = 0, 
+				numericStrLen < strMaxLen && numericStrLen < 6 && \
 					isDigit( str[ numericStrLen ] ),
 				numericStrLen++ )
 		{
-		ENSURES( LOOP_INVARIANT_LARGE( numericStrLen, 0, strMaxLen - 1 ) );
+		ENSURES( LOOP_INVARIANT_SMALL( numericStrLen, 0, strMaxLen - 1 ) );
 		}
 	ENSURES( LOOP_BOUND_OK );
 	if( numericStrLen < 1 || numericStrLen > 5 )
@@ -340,7 +353,7 @@ int strParseNumeric( IN_BUFFER( strMaxLen ) const char *str,
 	return( numericStrLen );
 	}
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int strGetHex( IN_BUFFER( strLen ) const char *str, 
 			   IN_LENGTH_SHORT const int strLen, 
 			   OUT_INT_Z int *numericValue, 
@@ -350,7 +363,7 @@ int strGetHex( IN_BUFFER( strLen ) const char *str,
 	const int strMaxLen = ( maxValue > 0xFFF ) ? 4 : \
 						  ( maxValue > 0xFF ) ? 3 : \
 						  ( maxValue > 0xF ) ? 2 : 1;
-	LOOP_INDEX i;
+	LOOP_INDEX digitIndex;
 	int value = 0;
 
 	assert( isReadPtrDynamic( str, strLen ) );
@@ -369,21 +382,27 @@ int strGetHex( IN_BUFFER( strLen ) const char *str,
 
 	/* Process the numeric string.  We don't have to perform the same level 
 	   of overflow checking as we do in strGetNumeric() because the maximum
-	   value is capped to fit into an int */
-	LOOP_MAX( i = 0, i < strLen, i++ )
+	   value is capped to fit into an int.
+	   
+	   The 'digitIndex < 4' check in the loop is redundant since we've 
+	   already checked it via the code flow that leads to the comparison to
+	   strMaxLen, it's included below to make it explicit what the hard
+	   limit is */
+	LOOP_SMALL( digitIndex = 0, digitIndex < strLen && \
+								digitIndex < 4, digitIndex++ )
 		{
 		int ch;
 
-		ENSURES( LOOP_INVARIANT_MAX( i, 0, strLen - 1 ) );
+		ENSURES( LOOP_INVARIANT_SMALL( digitIndex, 0, strLen - 1 ) );
 	
-		ch = toLower( str[ i ] );
-		if( !isXDigit( ch ) )
+		ch = toLower( str[ digitIndex ] );
+		if( !isXDigit( ch ) || checkOverflowShift( value, 4 ) )
 			return( CRYPT_ERROR_BADDATA );
 		value = ( value << 4 ) | \
 				( ( ch <= '9' ) ? ch - '0' : ch - ( 'a' - 10 ) );
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( value < minValue || value > maxValue )
+	if( digitIndex > 4 || value < minValue || value > maxValue )
 		return( CRYPT_ERROR_BADDATA );
 
 	*numericValue = value;
@@ -452,10 +471,10 @@ BOOLEAN strIsPrintable( IN_BUFFER( strLen ) const void *str,
 						+---- strLen ----+
 
    so "Error string of arbitrary length..." with a buffer size of 20 would 
-   become "Error string [...]" */
+   become "Error string o[...]" */
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-char *sanitiseString( INOUT_BUFFER( strMaxLen, strLen ) void *string, 
+char *sanitiseString( INOUT_BUFFER_FIXED( strMaxLen ) void *string, 
 					  IN_LENGTH_SHORT const int strMaxLen, 
 					  IN_LENGTH_SHORT const int strLen )
 	{
@@ -488,11 +507,11 @@ char *sanitiseString( INOUT_BUFFER( strMaxLen, strLen ) void *string,
 
 	/* If there was more input than we could fit into the buffer and there's 
 	   room for a continuation indicator, add this to the output string (we
-	   silently truncate if the string is eight characters or less since it 
-	   would replace most of the string with the truncation indicator).  We 
-	   check for strLen >= strMaxLen rather than > strMaxLen because we need 
-	   an extra byte for the '\0', since the case of strLen == strMaxLen 
-	   wouldn't leave us any room */
+	   silently truncate if the available space is eight characters or less 
+	   since it would replace most of the string with the truncation 
+	   indicator).  We check for strLen >= strMaxLen rather than > strMaxLen 
+	   because we need an extra byte for the '\0', since the case of 
+	   strLen == strMaxLen wouldn't leave us any room */
 	if( ( strLen >= strMaxLen ) && ( strMaxLen > 8 ) )
 		{
 		REQUIRES_EXT( boundsCheck( strMaxLen - 6, 5, strMaxLen ),
@@ -523,49 +542,129 @@ char *sanitiseString( INOUT_BUFFER( strMaxLen, strLen ) void *string,
 /* Minimal wrappers for the TR 24731 functions to map them to older stdlib 
    equivalents.  Because of potential issues when comparing a (signed)
    literal value -1 to the unsigned size_t we explicitly check for both
-   '( size_t ) -1' as well as a general check for a negative return value */
+   '( size_t ) -1' as well as a general check for a negative return value.
+   
+   We can't really emulate mbstowcs_s() properly via mbstowcs() because 
+   'count' is the number of widechars to store in the destination buffer 
+   (up to 'dstmax'), not a byte count.  The real mbstowcs_s() converts 
+   'count' characters to widechars and stores them in 'dst' until 
+   'dstmax' is reached, while mbstowcs() just keeps going until it hits a 
+   null terminator.
 
-RETVAL_RANGE( -1, 0 ) \
+   However we're only called from two locations, one is in 
+   io/net_proxy.c:findProxyUrl() for Windows autoproxy handling where we 
+   need to use Unicode strings but also know that the real mbstowcs_s() is 
+   present so the call will never end up here, the other is from 
+   cert/dn_string:getASN1StringInfo() where we're being called as an 
+   emulation of the nonexistent mbstrlen() so 'dst' is always NULL (checked
+   for with a REQUIRES() statement on the input).  In this case we're not 
+   writing anything to the output and the caller will check the range of 
+   'retVal' when they receive it.
+	   
+   This is complicated by the totally stupid semantics of the function which 
+   state that:
+	   
+	If [destination] pwcs is a null pointer, mbstowcs() shall return the 
+	length required to convert the entire array regardless of the value of 
+	[size] n.
+		
+   This means that if the destination is a nonnull pointer then the size 
+   argument is applied, if not then it's completely ignored.  To deal with 
+   this braindamage have to copy the input to a buffer, null-terminate it,
+   and then pass it to mbstowcs.
+	   
+   This is in theory a bit of a problem because we don't know how big the 
+   buffer needs to be, however because of the way that we're called (see 
+   above) the call can only come from the certificate code and that caps 
+   almost all strings at CRYPT_MAX_TEXTSIZE except for a few exceptions like 
+   CRYPT_CERTINFO_CERTPOLICY_EXPLICITTEXT which are supposed to be 
+   CRYPT_MAX_TEXTSIZE except that many CAs ignore this so are capped at 200 
+   characters instead (see cert/ext_def.c and 
+   cert/ext_rdattr.c:readAttributeField() which hard-limits the 
+   CRYPT_CERTINFO_CERTPOLICY_EXPLICITTEXT to 200 characters, discarding the 
+   rest).  So an output size of 512 wchar_t's is more than enough.
+   
+   However even this probably isn't the best solution, so instead we have
+   to hand-assemble it from mbrtowc().  Note though that as of cryptlib
+   3.4.9.4 this function isn't called any more (see
+   cert/ext_rdattr.c:readAttributeField()), but is present only to record 
+   its functionality */
+
+RETVAL_RANGE( -1, 0 ) STDC_NONNULL_ARG( ( 1, 4 ) ) \
 int mbstowcs_s( OUT_PTR size_t *retval, 
-				OUT_BUFFER_FIXED( dstmax ) wchar_t *dst, 
-				IN_LENGTH_SHORT size_t dstmax, 
+				OUT_BUFFER_OPT_FIXED( dstmax ) wchar_t *dst, 
+				IN_LENGTH_SHORT_Z size_t dstmax, 
 				IN_BUFFER( count ) const char *src, 
 				IN_LENGTH_SHORT size_t count )
 	{
-	size_t bytesCopied;
+#if 0
+	BYTE buffer[ 512 + 1 + 8 ];
+	size_t wcCopied;
+#else
+	mbstate_t mbState = { 0 };
+	size_t offset;
+	int wcCount = 0, LOOP_ITERATOR;
+#endif /* 0 */
 
 	assert( isWritePtr( retval, sizeof( size_t ) ) );
 	assert( dst == NULL );
 	assert( isReadPtrDynamic( src, count ) );
 
-	REQUIRES_EXT( dst == NULL, -1 );	/* See comment below */
-	REQUIRES_EXT( isShortIntegerRangeNZ( dstmax ), -1 );
-	REQUIRES_EXT( ( isShortIntegerRangeNZ( count ) && \
-					count <= dstmax ), -1 );
+	static_assert( 1000 - 1 < FAILSAFE_ITERATIONS_LARGE,
+				   "mbstowcs_s() loop bound" );
+
+	REQUIRES_EXT( dst == NULL, -1 );
+	REQUIRES_EXT( dstmax == 0, -1 );
+	REQUIRES_EXT( isShortIntegerRangeNZ( count ), -1 );
 
 	/* Clear return value */
 	*retval = 0;
 
-	/* We can't really emulate mbstowcs_s() properly because 'count' is the 
-	   number of widechars to store in the destination buffer (up to 
-	   'dstmax'), not a byte count.  The real mbstowcs_s() converts 'count' 
-	   characters to widechars and stores them in 'dst' until 'dstmax' is 
-	   reached, while mbstowcs() just keeps going until it hits a null 
-	   terminator.
-	   
-	   However we're only called from two locations, one is in 
-	   io/net_proxy.c:findProxyUrl() for Windows autoproxy handling where we 
-	   need to use Unicode strings but also know that the real mbstowcs_s() 
-	   is present so the call will never end up here, the other is from 
-	   cert/dn_string:getASN1StringInfo() where we're being called as an 
-	   emulation of the nonexistent mbstrlen() so 'dst' is always NULL (thus
-	   the REQUIRES() statement above).  In this case we're not writing 
-	   anything to the output and the caller will check the range of 
-	   'retVal' when they receive it */
-	bytesCopied = mbstowcs( dst, src, count );
-	if( ( bytesCopied == ( size_t ) -1 ) || ( bytesCopied <= 0 ) )
+#if 0
+	if( count > 512 )
 		return( -1 );
-	*retval = bytesCopied;
+	REQUIRES_EXT( rangeCheck( count, 1, 512 ), -1 );
+	memcpy( buffer, src, count );
+	buffer[ count ] = '\0';
+	wcCopied = mbstowcs( NULL, buffer, count );
+	if( ( wcCopied == ( size_t ) -1 ) || ( wcCopied <= 0 ) || \
+		wcCopied >= 512 )
+		return( -1 );
+	*retval = wcCopied;
+#else
+	if( count >= 1000 )
+		return( -1 );
+	LOOP_LARGE_INITCHECK( offset = 0, offset < count )
+		{
+		size_t bytesConsumed;
+		
+		ENSURES_EXT( LOOP_INVARIANT_LARGE_XXX( offset, 0, count - 1 ), -1 );
+		
+		REQUIRES_EXT( !checkOverflowSub( count, offset ), -1 );
+		bytesConsumed = mbrtowc( NULL, src + offset, count - offset, 
+								 &mbState );
+		if( bytesConsumed == 0 )
+			{
+			/* We've found an embedded nul character, this shouldn't be 
+			   present so we report it as an error */
+			return( -1 );
+			}
+		if( bytesConsumed == ( size_t ) -1 || \
+			bytesConsumed == ( size_t ) -2 )
+			{
+			/* The error return, and the other error return.  We can't 
+			   easily compare for < 0 because we don't know what size a 
+			   size_t is, so can't cast it to a signed equivalent */
+			return( -1 );
+			}
+		REQUIRES_EXT( !checkOverflowAdd( offset, bytesConsumed ), -1 );
+		offset += bytesConsumed;
+		wcCount++;
+		}
+	ENSURES_EXT( LOOP_BOUND_OK, -1 );
+	*retval = wcCount;
+#endif /* 0 */
+
 	return( 0 );
 	}
 
@@ -575,14 +674,17 @@ RETVAL_RANGE( -1, 0 ) \
 int wcstombs_s( OUT_PTR size_t *retval, 
 				OUT_BUFFER_FIXED( dstmax ) char *dst, 
 				IN_LENGTH_SHORT size_t dstmax, 
-				IN_BUFFER( count ) const wchar_t *src, 
+				IN_BUFFER( count * sizeof( wchar_t ) ) \
+					const wchar_t *src, 
 				IN_LENGTH_SHORT size_t count )
 	{
 	size_t bytesCopied;
 
 	assert( isWritePtr( retval, sizeof( size_t ) ) );
 	assert( isWritePtrDynamic( dst, dstmax ) );
-	assert( isReadPtrDynamic( src, count ) );
+			/* For wcstombs_s() args */
+	assert( isReadPtrDynamic( src, count * sizeof( wchar_t ) ) );
+			/* For wcstombs() args */
 
 	REQUIRES_EXT( isShortIntegerRangeNZ( dstmax ), -1 );
 	REQUIRES_EXT( ( isShortIntegerRangeNZ( count ) && \
@@ -594,7 +696,9 @@ int wcstombs_s( OUT_PTR size_t *retval,
 	/* As is the case for mbstowcs_s() above, this is only used under Windows
 	   for which we have the full wcstombs_s() present and never call this 
 	   function, and in one location for Windows CE which is extinct, it's 
-	   just left here for consistency */
+	   just left here for consistency.  In addition it would need updating 
+	   to use the same technique as the mbstowcs_s() emulation, but since 
+	   it's dead code there's no point to updating it any more */
 	bytesCopied = wcstombs( dst, src, count );
 	if( ( bytesCopied == ( size_t ) -1 ) || ( bytesCopied <= 0 ) )
 		return( -1 );
@@ -630,6 +734,8 @@ BOOLEAN testIntString( void )
 
 	/* Test strFindStr() */
 	if( strFindStr( "abcdefgh", 8, "abc", 3 ) != 0 || \
+		strFindStr( "abcDEFgh", 8, "def", 3 ) != 3 || \
+		strFindStr( "ABCdefGH", 8, "DEF", 3 ) != 3 || \
 		strFindStr( "abcdefgh", 8, "fgh", 3 ) != 5 || \
 		strFindStr( "abcdefgh", 8, "ghi", 3 ) != -1 || \
 		strFindStr( "abcdefgh", 8, "abcdefghi", 9 ) != -1 )
@@ -654,6 +760,12 @@ BOOLEAN testIntString( void )
 	stringLen = strStripWhitespace( &stringPtr, "abcdefgh", 8 );
 	if( stringLen != 8 || memcmp( stringPtr, "abcdefgh", 8 ) )
 		return( FALSE );
+	stringLen = strStripWhitespace( &stringPtr, "abcdefgh\0\0", 10 );
+	if( stringLen != 8 || memcmp( stringPtr, "abcdefgh", 8 ) )
+		return( FALSE );
+	stringLen = strStripWhitespace( &stringPtr, "abcdefgh\0 \0", 11 );
+	if( stringLen != 8 || memcmp( stringPtr, "abcdefgh", 8 ) )
+		return( FALSE );
 	stringLen = strStripWhitespace( &stringPtr, " abcdefgh", 9 );
 	if( stringLen != 8 || memcmp( stringPtr, "abcdefgh", 8 ) )
 		return( FALSE );
@@ -669,7 +781,16 @@ BOOLEAN testIntString( void )
 	stringLen = strStripWhitespace( &stringPtr, " abcdefgh x ", 12 );
 	if( stringLen != 10 || memcmp( stringPtr, "abcdefgh x", 10 ) )
 		return( FALSE );
+	stringLen = strStripWhitespace( &stringPtr, "\0" "abcdefgh\0", 10 );
+	if( stringLen != -1 || stringPtr != NULL )
+		return( FALSE );
+	stringLen = strStripWhitespace( &stringPtr, " \0" "abcdefgh\0", 11 );
+	if( stringLen != -1 || stringPtr != NULL )
+		return( FALSE );
 	stringLen = strStripWhitespace( &stringPtr, "  \t ", 4 );
+	if( stringLen != -1 || stringPtr != NULL )
+		return( FALSE );
+	stringLen = strStripWhitespace( &stringPtr, "\0\0\0\0", 4 );
 	if( stringLen != -1 || stringPtr != NULL )
 		return( FALSE );
 

@@ -176,8 +176,8 @@ static int writeNumeric( INOUT_PTR STREAM *stream,
    for problems in nested sizeofObject() computations.
    
    In addition to the general sizeofObject(), we also provide a 
-   sizeofShortObject() that avoids the need to cast values to ints all over 
-   the code */
+   sizeofShortObject() that checks that it's getting an INTLENGTH_SHORT-
+   sized object */
 
 RETVAL_LENGTH_NOERROR \
 int sizeofObject( IN_LENGTH_Z const int length )
@@ -525,7 +525,8 @@ int writeCharacterString( INOUT_PTR STREAM *stream,
 /* Write a bit string */
 
 RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-int writeBitString( INOUT_PTR STREAM *stream, IN_INT_Z const int bitString, 
+int writeBitString( INOUT_PTR STREAM *stream, 
+					IN_INT const int bitString, 
 					IN_TAG const int tag )
 	{
 	BYTE buffer[ 16 + 8 ];
@@ -535,7 +536,22 @@ int writeBitString( INOUT_PTR STREAM *stream, IN_INT_Z const int bitString,
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
-	REQUIRES_S( bitString >= 0 && bitString < INT_MAX );
+	REQUIRES_S( bitString > 0 && bitString < INT_MAX );
+				/* The code below assumes that at least one bit is set, 
+				   since we shouldn't be seeing bit flags that don't have 
+				   any flags set.  For example the only values that can be
+				   set for CRYPT_CERTINFO_CRLREASON are 
+				   CRYPT_CRLREASON_UNSPECIFIED ... CRYPT_CRLREASON_LAST - 1, 
+				   and for CRYPT_CERTINFO_KEYUSAGE, CRYPT_KEYUSAGE_NONE + 1 
+				   ... CRYPT_KEYUSAGE_LAST - 1.  If it's required to write 
+				   empty bit strings then it would need to be special-cased 
+				   by writing the fixed string { 03 01 00 } as per X.690 
+				   section 8.6.2.3, "if the bitstring is empty, there shall 
+				   be no subsequent octets, and the initial octet shall be 
+				   zero".  The code below will actually do this but it'd be
+				   better to hardcode the special case to avoid having to
+				   reason through all the maths to verify that it's handled
+				   correctly */
 	REQUIRES_S( tag == DEFAULT_TAG || ( tag >= 0 && tag < MAX_TAG_VALUE ) );
 
 	/* ASN.1 bitstrings start at bit 0 so we need to reverse the order of
@@ -552,18 +568,24 @@ int writeBitString( INOUT_PTR STREAM *stream, IN_INT_Z const int bitString,
 		if( data > 0 )
 			noBits++;
 
-		/* Reverse the bits */
+		/* Reverse the bits.  In this case we're using the full number
+		   of bits in the (unsigned) integer so we don't 
+		   checkOverflowShift(), which would bail out when we get to the
+		   last bit */
 		value <<= 1;
 		if( data & 1 )
 			value |= 1;
 		data >>= 1;
 		}
 	ENSURES_S( LOOP_BOUND_OK );
+	ENSURES_S( rangeCheck( noBits, 1, 32 ) );
 
-	/* Write the data as an ASN.1 BITSTRING */
+	/* Write the data as an ASN.1 BITSTRING.  Since we're now bit-reversed
+	   we don't have to conditionally write each byte past the first one but 
+	   can truncate the write at the appropriate byte location */
 	buffer[ 0 ] = ( tag == DEFAULT_TAG ) ? \
 				  BER_BITSTRING : intToByte( MAKE_CTAG_PRIMITIVE( tag ) );
-	buffer[ 1 ] = 1 + intToByte( ( ( noBits + 7 ) >> 3 ) );
+	buffer[ 1 ] = intToByte( 1 + ( ( noBits + 7 ) >> 3 ) );
 	buffer[ 2 ] = intToByte( ~( ( noBits - 1 ) & 7 ) & 7 );
 	buffer[ 3 ] = intToByte( value >> 24 );
 	buffer[ 4 ] = intToByte( value >> 16 );

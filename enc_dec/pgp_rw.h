@@ -52,7 +52,7 @@ int pgpWriteLength( INOUT_PTR STREAM *stream,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int pgpReadPacketHeader( INOUT_PTR STREAM *stream, OUT_OPT_BYTE int *ctb, 
 						 OUT_OPT_LENGTH_Z int *length, 
-						 IN_LENGTH_SHORT const int minLength,
+						 IN_LENGTH_SHORT_Z const int minLength,
 						 IN_LENGTH const int maxLength );
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1 ) ) \
 int pgpReadPacketHeaderI( INOUT_PTR STREAM *stream, OUT_OPT_BYTE int *ctb, 

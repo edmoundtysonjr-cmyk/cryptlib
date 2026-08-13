@@ -19,10 +19,17 @@
   #include "mechs/mech.h"
 #endif /* Compiler-specific includes */
 
-/* The minimum size of a signature */
+/* The minimum size of a signature.  The DSA length is for a composite 
+   value determined by the wrappers for each component, for ASN.1 it's a 
+   tag + length byte, for PGP is't a 2-byte bit count, for TLS it's a 
+   2-byte length count, for SSH it's a 4-byte length count.  So we need 
+   at least two bytes plus the minimum length size for each component.
+   For the other values there are no wrappers, it's either an RSA
+   integer, an X9.62 fixed-size encoded point value, or a fixed-size
+   Bernstein signature */
 
 #if defined( USE_DSA )
-  #define MIN_SIGNATURE_SIZE	( 18 + 18 )
+  #define MIN_SIGNATURE_SIZE	( ( 2 + 18 ) + ( 2 + 18 ) )
 #elif defined( USE_ECDSA )
   #define MIN_SIGNATURE_SIZE	MIN_PKCSIZE_ECCPOINT
 #else
@@ -32,6 +39,80 @@
 /* Context-specific tags for the SignerInfo record */
 
 enum { CTAG_SI_SKI };
+
+/****************************************************************************
+*																			*
+*								Utility Routines							*
+*																			*
+****************************************************************************/
+
+/* Check whether a signature has valid information.  This checks for two 
+   things, first that the algorithm is valid (see the comment for the 
+   default case) and secondly that it's of a valid length for a particular 
+   algorithm.  Note that we don't go even deeper and check the length for
+   a particular encoding format, all that we're doing here is making sure
+   that the higher-level code doesn't get passed an obviously invalid 
+   signature length */
+
+CHECK_RETVAL_BOOL \
+static BOOLEAN isValidSignatureInfo( IN_ALGO \
+										const CRYPT_ALGO_TYPE cryptAlgo,
+									 IN_LENGTH_SHORT const int length )
+	{
+	REQUIRES_B( isPkcAlgo( cryptAlgo ) );
+	REQUIRES_B( isShortIntegerRange( length ) );
+	
+	/* It's possible to get this far with a sufficiently malformed 
+	   signature, for example one with a DH or X25519 ID, which passes 
+	   the check for a valid PKC but isn't a signing algorithm, so we
+	   weed these out here */
+	if( !isSigAlgo( cryptAlgo ) )
+		return( FALSE );
+	
+	switch( cryptAlgo )
+		{
+		case CRYPT_ALGO_RSA:
+			/* RSA just has the raw integer value */
+			if( length < MIN_PKCSIZE || length > CRYPT_MAX_PKCSIZE )
+				return( FALSE );
+			break;
+
+#ifdef USE_DSA
+		case CRYPT_ALGO_DSA:
+			/* See the comment for MIN_SIGNATURE_SIZE for the minimum size,
+			   for the maximum size it's an ASN.1 wrapper 
+			   SEQUENCE { INTEGER, INTEGER } of maximum length 8 bytes */
+			if( length < ( ( 2 + 18 ) + ( 2 + 18 ) ) || \
+				length > ( ( CRYPT_MAX_PKCSIZE * 2 ) + 8 ) )
+				return( FALSE );
+			break;
+#endif /* USE_DSA */
+
+#ifdef USE_ECDSA
+		case CRYPT_ALGO_ECDSA:
+			/* The maximum size is again the ASN.1 encoding 
+			   SEQUENCE { INTEGER, INTEGER } of up to 8 bytes */
+			if( length < MIN_PKCSIZE_ECCPOINT || \
+				length > ( ( CRYPT_MAX_PKCSIZE_ECC * 2 ) + 8 ) )
+				return( FALSE );
+			break;
+#endif /* USE_ECDSA */
+
+#ifdef USE_ED25519
+		case CRYPT_ALGO_ED25519:
+			/* The Bernstein signature data is a fixed-length value */
+			if( length < ( MIN_PKCSIZE_BERNSTEIN * 2 ) || \
+				length > ( MAX_PKCSIZE_BERNSTEIN * 2 ) )
+				return( FALSE );
+			break;
+#endif /* USE_ED25519 */
+
+		default:
+			retIntError_Boolean();
+		}
+	
+	return( TRUE );
+	}
 
 /****************************************************************************
 *																			*
@@ -127,6 +208,9 @@ static int readX509Signature( INOUT_PTR STREAM *stream,
 		}
 	if( cryptStatusError( status ) )
 		return( status );
+	if( !isValidSignatureInfo( queryInfo->cryptAlgo, 
+							   queryInfo->dataLength ) )
+		return( CRYPT_ERROR_BADDATA );
 	queryInfo->hashAlgo = algoIDparams.hashAlgo;
 	queryInfo->hashParam = algoIDparams.hashParam; 
 
@@ -257,7 +341,7 @@ static int readCmsSignature( INOUT_PTR STREAM *stream,
 		status = sSkip( stream, length, MAX_INTLENGTH_SHORT );
 		}
 	if( cryptStatusError( status ) )
-		return( status );
+		return( status );	/* Residual error from peekTag() */
 
 	/* Read the CMS/cryptlib signature algorithm and the start of the 
 	   signature.  CMS separates the signature algorithm from the hash 
@@ -293,6 +377,9 @@ static int readCmsSignature( INOUT_PTR STREAM *stream,
 		}
 	if( cryptStatusError( status ) )
 		return( status );
+	if( !isValidSignatureInfo( queryInfo->cryptAlgo, 
+							   queryInfo->dataLength ) )
+		return( CRYPT_ERROR_BADDATA );
 	if( algoIDparams.encodingType != ALGOID_ENCODING_NONE )
 		{
 		/* If an alternative encoding is being used, record this and make
@@ -457,6 +544,9 @@ static int readCryptlibSignature( INOUT_PTR STREAM *stream,
 		}
 	if( cryptStatusError( status ) )
 		return( status );
+	if( !isValidSignatureInfo( queryInfo->cryptAlgo, 
+							   queryInfo->dataLength ) )
+		return( CRYPT_ERROR_BADDATA );
 
 	/* Make sure that the remaining signature data is present */
 	return( sSkip( stream, queryInfo->dataLength, MAX_INTLENGTH_SHORT ) );
@@ -764,6 +854,11 @@ static int readSignatureSubpackets( INOUT_PTR STREAM *stream,
 		return( CRYPT_ERROR_OVERFLOW );
 		}
 
+	/* Make sure that we've read the exact amount of data that we were
+	   expecting */
+	if( stell( stream ) != endPos )
+		return( CRYPT_ERROR_BADDATA );
+		
 	/* Make sure that the mandatory fields are present in the subpacket 
 	   data.  We also need to check for the presence of the keyID but this
 	   can be in either the authenticated or unauthenticated attributes so
@@ -1063,8 +1158,12 @@ static int readPgpSignature( INOUT_PTR STREAM *stream,
 			}
 
 #if defined( USE_DSA ) || defined( USE_ECDSA )
+#ifdef USE_DSA  
 		case CRYPT_ALGO_DSA:
+#endif /* USE_DSA */
+#ifdef USE_ECDSA
 		case CRYPT_ALGO_ECDSA:
+#endif /* USE_ECDSA */
 			{
 			const int minLength = \
 						( queryInfo->cryptAlgo == CRYPT_ALGO_DSA ) ? \
@@ -1111,8 +1210,22 @@ static int readPgpSignature( INOUT_PTR STREAM *stream,
 			REQUIRES( isBufsizeRangeNZ( dataStartPos ) );
 
 			/* The Ed25519 signature is a fixed-length value encoded as an 
-			   MPI */
-			status = readInteger16Ubits( stream, NULL, &dummy, 32, 32, 
+			   MPI.  Note that this is the RFC 9580 version of the signature,
+			   not the deprecated Ed25519Legacy version that was present in
+			   some drafts.
+			   
+			   In addition this is an OpenPGP v6 signature that will be
+			   rejected by the higher-level PGP code so it's currently only
+			   present for forwards compatibility.  In particular the
+			   behaviour will depend on whether we read the whole signature
+			   as an MPI or just the 64-byte 25519 data like the other
+			   signature formats do, so just a pure readInteger16Ubits() 
+			   call.  If it's the former than isValidSignatureInfo() will 
+			   need to be updated to handle the MPI wrapper around the 
+			   signature data */
+			status = readInteger16Ubits( stream, NULL, &dummy, 
+										 ( MIN_PKCSIZE_BERNSTEIN * 2 ), 
+										 ( MAX_PKCSIZE_BERNSTEIN * 2 ), 
 										 BIGNUM_CHECK_VALUE_FIXEDLEN );
 			if( cryptStatusOK( status ) )
 				{
@@ -1130,6 +1243,9 @@ static int readPgpSignature( INOUT_PTR STREAM *stream,
 		default:
 			retIntError();
 		}
+	if( !isValidSignatureInfo( queryInfo->cryptAlgo, 
+							   queryInfo->dataLength ) )
+		return( CRYPT_ERROR_BADDATA );
 
 	/* Make sure that we've read the entire object.  This check is necessary 
 	   to detect corrupted length values, which can result in reading past 
@@ -1216,9 +1332,11 @@ static int readSshSignature( INOUT_PTR STREAM *stream,
 				queryInfo->cryptAlgo = CRYPT_ALGO_RSA;
 			else
 				{
+#ifdef USE_DSA
 				if( !memcmp( buffer, "ssh-dss", 7 ) )
 					queryInfo->cryptAlgo = CRYPT_ALGO_DSA;
 				else
+#endif /* USE_DSA */
 					return( CRYPT_ERROR_BADDATA );
 				}
 			queryInfo->hashAlgo = CRYPT_ALGO_SHA1;
@@ -1260,39 +1378,8 @@ static int readSshSignature( INOUT_PTR STREAM *stream,
 	status = length = readUint32( stream );
 	if( cryptStatusError( status ) )
 		return( status );
-	switch( queryInfo->cryptAlgo )
-		{
-		case CRYPT_ALGO_RSA:
-			if( length < MIN_PKCSIZE || length > CRYPT_MAX_PKCSIZE )
-				return( CRYPT_ERROR_BADDATA );
-			break;
-
-#ifdef USE_DSA
-		case CRYPT_ALGO_DSA:
-			if( length != ( 20 + 20 ) )
-				return( CRYPT_ERROR_BADDATA );
-			break;
-#endif /* USE_DSA */
-
-#ifdef USE_ECDSA
-		case CRYPT_ALGO_ECDSA:
-			if( length < MIN_PKCSIZE_ECCPOINT || \
-				length > MAX_PKCSIZE_ECCPOINT )
-				return( CRYPT_ERROR_BADDATA );
-			break;
-#endif /* USE_ECDSA */
-
-#ifdef USE_ED25519
-		case CRYPT_ALGO_ED25519:
-			if( length < ( MIN_PKCSIZE_BERNSTEIN * 2 ) || \
-				length > ( MAX_PKCSIZE_BERNSTEIN * 2 ) )
-				return( CRYPT_ERROR_BADDATA );
-			break;
-#endif /* USE_ED25519 */
-
-		default:
-			retIntError();
-		}
+	if( !isValidSignatureInfo( queryInfo->cryptAlgo, length ) )
+		return( CRYPT_ERROR_BADDATA );
 	status = streamOffsetFromPosition( stream, startPos,
 									   &queryInfo->dataStart );
 	if( cryptStatusError( status ) )
@@ -1438,7 +1525,10 @@ static int readTlsSignature( INOUT_PTR STREAM *stream,
 	/* Clear return value */
 	memset( queryInfo, 0, sizeof( QUERY_INFO ) );
 
-	/* Read the start of the signature */
+	/* Read the start of the signature.  Unfortunately we have no idea from
+	   the signature itself what sort of signature we're actually reading 
+	   here so we can't call isValidSignatureInfo() but have to use a 
+	   generic check */
 	status = length = readUint16( stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1601,8 +1691,7 @@ static int readTls12Signature( INOUT_PTR STREAM *stream,
 	status = length = readUint16( stream );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( length < min( MIN_PKCSIZE, MIN_PKCSIZE_ECCPOINT ) || \
-		length > CRYPT_MAX_PKCSIZE )
+	if( !isValidSignatureInfo( queryInfo->cryptAlgo, length ) )
 		return( CRYPT_ERROR_BADDATA );
 	status = streamOffsetFromPosition( stream, startPos,
 									   &queryInfo->dataStart );

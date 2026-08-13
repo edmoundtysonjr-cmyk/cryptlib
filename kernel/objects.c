@@ -18,10 +18,10 @@
 
 /* Define the following to use fixed (deterministic) object handles.  This
    orders object handles sequentially, making it easier to pin down 
-   approximately where/when a leftover objects was created, as well as
+   approximately where/when a leftover object was created, as well as
    ensuring that handles have consistent values across runs.  There's a
    companion define to enable reporting of object creation, which places
-   the leftover object within the over flow of objects.
+   the leftover object within the overall flow of objects.
    
    Note that enabling fixed object handles will require disabling the kernel 
    smoke test in test/testlib.c:main() because this overruns the number of 
@@ -74,9 +74,7 @@ static const OBJECT_INFO OBJECT_INFO_TEMPLATE = {
 /* LFSR parameters for selecting the next object handle */
 
 #define LFSR_MASK				MAX_NO_OBJECTS
-#if MAX_NO_OBJECTS == 16
-  #define LFSRPOLY				0x13
-#elif MAX_NO_OBJECTS == 32
+#if MAX_NO_OBJECTS == 32
   #define LFSRPOLY				0x25
 #elif MAX_NO_OBJECTS == 64
   #define LFSRPOLY				0x43
@@ -102,6 +100,8 @@ static const OBJECT_INFO OBJECT_INFO_TEMPLATE = {
   #define LFSRPOLY				0x1002DL
   /* Further LFSR polynomials are 0x20009L, 0x40027L, 0x80027L, 0x100009L, 
      0x200005L, 0x400003L, ... */
+#else
+  #error Invalid MAX_NO_OBJECTS value
 #endif /* LFSR polynomial for object table size */
 
 /* A template used to initialise the object allocation state data */
@@ -137,7 +137,7 @@ int initObjects( void )
 
 	/* Perform a consistency check on various things that need to be set
 	   up in a certain way for things to work properly */
-	static_assert( MAX_NO_OBJECTS >= 16, "Object table param" );
+	static_assert( MAX_NO_OBJECTS >= 32, "Object table param" );
 	static_assert_opt( OBJECT_INFO_TEMPLATE.type == OBJECT_TYPE_NONE, \
 					   "Object table param" );
 	static_assert_opt( OBJECT_INFO_TEMPLATE.subType == 0, \
@@ -178,7 +178,7 @@ int initObjects( void )
 				   "Object table param" );
 #endif /* CONFIG_CRYPTO_HW1 || CONFIG_CRYPTO_HW2 */
 
-	/* Allocate and initialise the object table */
+	/* Initialise the object table */
 	LOOP_EXT( i = 0, i < MAX_NO_OBJECTS, i++, MAX_NO_OBJECTS + 1 )
 		{
 		ENSURES( LOOP_INVARIANT_EXT( i, 0, MAX_NO_OBJECTS - 1,
@@ -229,7 +229,6 @@ void endObjects( void )
 	krnlData->objectUniqueID = 0;
 	MUTEX_UNLOCK( objectTable );
 	MUTEX_DESTROY( objectTable );
-	krnlData = NULL;
 	}
 
 /****************************************************************************
@@ -243,12 +242,15 @@ void endObjects( void )
 CHECK_RETVAL \
 int destroyObjectData( IN_HANDLE const int objectHandle )
 	{
+	KERNEL_DATA *krnlData = getSystemStorage( SYSTEM_STORAGE_KRNLDATA );
+							/* For MUTEX access */
 	OBJECT_INFO *objectTable = getSystemStorage( SYSTEM_STORAGE_OBJECT_TABLE );
 	OBJECT_INFO *objectInfoPtr;
 	void *objectPtr;
-	int status;
+	int status = CRYPT_OK;
 
 	/* Precondition: It's a valid object */
+	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
 	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_OBJECT_TABLE ) );
 	REQUIRES( isValidObject( objectHandle ) );
 
@@ -264,7 +266,6 @@ int destroyObjectData( IN_HANDLE const int objectHandle )
 	if( TEST_FLAG( objectInfoPtr->flags, OBJECT_FLAG_SECUREMALLOC ) )
 		{
 		status = krnlMemfree( &objectPtr );
-		ENSURES( cryptStatusOK( status ) );
 		}
 	else
 		{
@@ -273,15 +274,21 @@ int destroyObjectData( IN_HANDLE const int objectHandle )
 		zeroise( objectPtr, objectInfoPtr->objectSize );
 		if( TEST_FLAG( objectInfoPtr->flags, OBJECT_FLAG_STATICALLOC ) )
 			{
+			MUTEX_LOCK( allocation );
 			status = releaseBuiltinObjectStorage( objectInfoPtr->type,
 												  objectInfoPtr->subType,
 												  objectPtr );
-			ENSURES( cryptStatusOK( status ) );
+			MUTEX_UNLOCK( allocation );
 			}
 		else
 			clFree( "destroyObjectData", objectPtr );
 		}
 	CLEAR_TABLE_ENTRY( &objectTable[ objectHandle ] );
+
+	/* Verify that everything went OK after first making sure that we've 
+	   cleared the object table entry, otherwise we'd potentially exit
+	   without clearing it if the ENSURES() triggers */
+	ENSURES( cryptStatusOK( status ) );
 
 	return( CRYPT_OK );
 	}
@@ -381,13 +388,11 @@ static int destroySelectedObjects( IN_RANGE( 1, 3 ) const int currentDepth )
 		dependentObject = objectTable[ objectHandle ].dependentObject;
 		if( isValidObject( dependentObject ) )
 			{
-			if( isValidObject( objectTable[ dependentObject ].dependentObject ) )
+			if( isValidObject( objectTable[ dependentObject ].dependentObject ) || \
+				isValidObject( objectTable[ dependentObject ].dependentDevice ) )
 				depth = 3;
 			else
-				{
-				if( isValidObject( objectTable[ dependentObject ].dependentDevice ) )
-					depth = 2;
-				}
+				depth = 2;
 			}
 		else
 			{
@@ -407,8 +412,12 @@ static int destroySelectedObjects( IN_RANGE( 1, 3 ) const int currentDepth )
 		if( depth >= currentDepth )
 			{
 			KERNEL_DATA *krnlData = getSystemStorage( SYSTEM_STORAGE_KRNLDATA );
+									/* For MUTEX access */
 
 			REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
+
+			/* Remember that there were leftover objects */
+			status = CRYPT_ERROR_INCOMPLETE;
 
 			/* The following sequence of operations aren't the problem that 
 			   they appear to be, the first is a pointer to the object 
@@ -419,8 +428,7 @@ static int destroySelectedObjects( IN_RANGE( 1, 3 ) const int currentDepth )
 						 objectTable[ objectHandle ].uniqueID ));
 			objectTable = NULL;
 			MUTEX_UNLOCK( objectTable );
-			krnlSendNotifier( objectHandle, IMESSAGE_DESTROY );
-			status = CRYPT_ERROR_INCOMPLETE;
+			( void ) krnlSendNotifier( objectHandle, IMESSAGE_DESTROY );
 			MUTEX_LOCK( objectTable );
 			objectTable = getSystemStorage( SYSTEM_STORAGE_OBJECT_TABLE );
 			REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_OBJECT_TABLE ) );
@@ -715,7 +723,7 @@ int krnlCreateObject( OUT_HANDLE_OPT int *objectHandle,
 	OBJECT_STATE_INFO *objectStateInfo = &krnlData->objectStateInfo;
 	OBJECT_SUBTYPE bitCount;
 	BOOLEAN isStaticAlloc = FALSE;
-	int localObjectHandle, status = CRYPT_OK;
+	int localObjectHandle DUMMY_INIT, status = CRYPT_OK;
 
 	assert( isWritePtr( krnlData, sizeof( KERNEL_DATA ) ) );
 	assert( isWritePtr( objectDataPtr, sizeof( void * ) ) );
@@ -750,8 +758,7 @@ int krnlCreateObject( OUT_HANDLE_OPT int *objectHandle,
 
 	/* If we haven't been initialised yet or we're in the middle of a
 	   shutdown, we can't create any new objects */
-	if( !isWritePtr( krnlData, sizeof( KERNEL_DATA ) ) || \
-		krnlData->initLevel <= INIT_LEVEL_NONE )
+	if( krnlData->initLevel <= INIT_LEVEL_NONE )
 		return( CRYPT_ERROR_NOTINITED );
 	if( krnlData->shutdownLevel >= SHUTDOWN_LEVEL_MESSAGES )
 		{
@@ -765,7 +772,14 @@ int krnlCreateObject( OUT_HANDLE_OPT int *objectHandle,
 	   table lock).  The object is always created as an internal object, 
 	   it's up to the caller to make it externally visible.
 	   
-	   The apparently redundant clearning of objectInfo before overwriting
+	   The check for whether it's a system object or not is performed 
+	   without the initialisation mutex locked by this function, but when 
+	   the system objects are being created it's locked by the caller 
+	   throughout the overall cryptlib initialisation phase so it's safe
+	   to access here, and after the initialisation has completed it'll 
+	   never be < NO_SYSTEM_OBJECTS.
+	   
+	   The apparently redundant cleaning of objectInfo before overwriting
 	   it with the object-info template is due to yet another gcc bug, in
 	   this case in the x64 debug (-o0) build, for which it doesn't memcpy()
 	   the template across but sets each field individually, leaving 
@@ -874,10 +888,27 @@ int krnlCreateObject( OUT_HANDLE_OPT int *objectHandle,
 	ENSURES( sanityCheckObject( &objectInfo ) );
 
 	/* Make sure that the kernel has been initialised and lock the object
-	   table for exclusive access */
+	   table for exclusive access.  Note that during the cryptlib 
+	   initialisation phase the initialisation mutex is locked throughout, 
+	   the following sequence takes advantage of recursive mutexes */
 	MUTEX_LOCK( initialisation );
 	MUTEX_LOCK( objectTable );
 	MUTEX_UNLOCK( initialisation );
+	if( krnlData->shutdownLevel >= SHUTDOWN_LEVEL_MESSAGES )
+		{
+		/* Fix a TOCTOU issue in which another thread can trigger a shutdown
+		   between the earlier shutdown check and us acquiring the object 
+		   table mutex */
+		DEBUG_DIAG(( "Can't create new objects during a shutdown" ));
+		assert( DEBUG_WARN );
+
+		/* Exit via the error cleanup path further down.  We have to use a 
+		   goto to get there because the alternative would be a convoluted 
+		   series of conditionals to avoid doing anything else between here 
+		   and the cleanup */
+		status = CRYPT_ERROR_PERMISSION;
+		goto cleanup;
+		}
 
 	/* Finish setting up the object table entry with any remaining data */
 	objectInfo.uniqueID = krnlData->objectUniqueID;
@@ -928,10 +959,14 @@ int krnlCreateObject( OUT_HANDLE_OPT int *objectHandle,
 		status = localObjectHandle = findFreeObjectEntry( localObjectHandle );
 		}
 
-
 	/* If there's a problem with allocating a handle then it either means 
 	   that we've run out of entries in the object table or there's a more 
-	   general error */
+	   general error.
+	   
+	   We can also get here from the goto further up which sends us here 
+	   with an error status set, unfortunately the label has to be before 
+	   the block otherwise the jump bypasses the objectPtr setup */
+cleanup:
 	if( cryptStatusError( status ) )
 		{
 		void *objectPtr = DATAPTR_GET( objectInfo.objectPtr );
@@ -950,15 +985,29 @@ int krnlCreateObject( OUT_HANDLE_OPT int *objectHandle,
 		   and return the error status */
 		if( TEST_FLAG( objectInfo.flags, OBJECT_FLAG_SECUREMALLOC ) )
 			{
-			int localStatus = krnlMemfree( &objectPtr );
+			int localStatus;
+			
+			localStatus = krnlMemfree( &objectPtr );
 			ENSURES( cryptStatusOK( localStatus ) );
 			}
 		else
 			{
 			REQUIRES( isIntegerRangeNZ( objectInfo.objectSize ) ); 
 			zeroise( objectPtr, objectInfo.objectSize );
-			if( !TEST_FLAG( objectInfo.flags, OBJECT_FLAG_STATICALLOC ) ) 
-				clFree( "destroyObjectData", objectPtr );
+			if( TEST_FLAG( objectInfo.flags, OBJECT_FLAG_STATICALLOC ) )
+				{
+				int localStatus;
+				
+				MUTEX_LOCK( allocation );
+				localStatus = \
+					releaseBuiltinObjectStorage( objectInfo.type,
+												 objectInfo.subType,
+												 objectPtr );
+				MUTEX_UNLOCK( allocation );
+				ENSURES( cryptStatusOK( localStatus ) );
+				}
+			else
+				clFree( "krnlCreateObject", objectPtr );
 			}
 		zeroise( &objectInfo, sizeof( OBJECT_INFO ) );
 
@@ -976,7 +1025,7 @@ int krnlCreateObject( OUT_HANDLE_OPT int *objectHandle,
 		time_t theTime;
 
 		/* We've set up all of the objects that have fixed handles, from now 
-		   on we're using dynamically assigned handled.  To start this 
+		   on we're using dynamically assigned handles.  To start this 
 		   process we get a non-constant seed to use for the initial object 
 		   handle.  See the comment in findFreeObjectEntry() for why this is 
 		   done, and why it only uses a relatively weak seed.  
@@ -992,13 +1041,15 @@ int krnlCreateObject( OUT_HANDLE_OPT int *objectHandle,
 		   randomised location in the table */
 #ifndef USE_FIXED_OBJECTHANDLES
 		objectStateInfo->objectHandle = \
-				( int ) theTime & ( LFSR_MASK - 1 );
+					( int ) ( theTime & ( LFSR_MASK - 1 ) );
 #endif /* USE_FIXED_OBJECTHANDLES */
 		if( objectStateInfo->objectHandle < NO_SYSTEM_OBJECTS )
 			{
 			/* Can occur with probability
 			   NO_SYSTEM_OBJECTS / MAX_NO_OBJECTS */
-			objectStateInfo->objectHandle = NO_SYSTEM_OBJECTS + 42;
+			static_assert( NO_SYSTEM_OBJECTS + 17 < MAX_NO_OBJECTS,
+						   "LFSR fixup vs. MAX_NO_OBJECTS" );
+			objectStateInfo->objectHandle = NO_SYSTEM_OBJECTS + 17;
 			}
 		}
 	else
@@ -1008,7 +1059,8 @@ int krnlCreateObject( OUT_HANDLE_OPT int *objectHandle,
 	if( krnlData->objectUniqueID < 0 || \
 		krnlData->objectUniqueID >= INT_MAX - 1 )
 		{
-		/* Value is out of range, reset it to the start of the valid range */
+		/* Value is out of range, reset it to the start of the valid range 
+		   for non-system objects */
 		krnlData->objectUniqueID = NO_SYSTEM_OBJECTS;
 		}
 	else
@@ -1029,6 +1081,9 @@ int krnlCreateObject( OUT_HANDLE_OPT int *objectHandle,
 	ENSURES_MUTEX( objectInfo.actionFlags == actionFlags, objectTable );
 	ENSURES_MUTEX( FNPTR_ISSET( objectInfo.messageFunction ), 
 				   objectTable );
+
+	/* Clean up */
+	zeroise( &objectInfo, sizeof( OBJECT_INFO ) );
 
 	/* Report what's just been created, useful for determining where 
 	   leftover objects are coming from.  We only enable this when tracking 

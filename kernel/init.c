@@ -72,14 +72,10 @@ BOOLEAN sanityCheckObject( const OBJECT_INFO *objectInfoPtr )
 			}
 		}
 
-	/* Check safe pointers.  We check the function pointer as well even 
-	   though it's somewhat redundant because it's validated each time its 
+	/* Check safe pointers.  The object info pointer has already been 
+	   checked above, we check the function pointer as well even though it's 
+	   somewhat redundant because it's validated each time that it's 
 	   dereferenced */
-	if( !DATAPTR_ISVALID( objectInfoPtr->objectPtr ) )
-		{
-		DEBUG_PUTS(( "sanityCheckObject: Object pointer" ));
-		return( FALSE );
-		}
 	if( !FNPTR_ISVALID( objectInfoPtr->messageFunction ) )
 		{
 		DEBUG_PUTS(( "sanityCheckObject: Message function" ));
@@ -156,13 +152,13 @@ BOOLEAN sanityCheckObject( const OBJECT_INFO *objectInfoPtr )
 			return( FALSE );
 			}
 		}
-	if( !isIntegerRange( objectInfoPtr->intRefCount ) || \
-		!isIntegerRange( objectInfoPtr->extRefCount ) )
+	if( !isShortIntegerRange( objectInfoPtr->intRefCount ) || \
+		!isShortIntegerRange( objectInfoPtr->extRefCount ) )
 		{
 		DEBUG_PUTS(( "sanityCheckObject: Reference count" ));
 		return( FALSE );
 		}
-	if( !isIntegerRange( objectInfoPtr->lockCount ) ) 
+	if( !isShortIntegerRange( objectInfoPtr->lockCount ) ) 
 		{
 		DEBUG_PUTS(( "sanityCheckObject: Lock count" ));
 		return( FALSE );
@@ -184,7 +180,6 @@ BOOLEAN sanityCheckObject( const OBJECT_INFO *objectInfoPtr )
 			}
 		}
 	else
-
 		{
 		if( objectInfoPtr->owner != DEFAULTUSER_OBJECT_HANDLE && \
 			!isHandleRangeValid( objectInfoPtr->owner ) )
@@ -228,7 +223,7 @@ BOOLEAN sanityCheckObject( const OBJECT_INFO *objectInfoPtr )
    management functions check the state of the initialisation flag before
    they do anything and returning CRYPT_ERROR_NOTINITED if cryptlib hasn't
    been initialised.  Since everything in cryptlib depends on the creation
-   of objects, any attempt to use cryptlib without it being properly
+   of objects, any attempts to use cryptlib without it being properly
    initialised are caught.
 
    Reading the initialisation flag presents something of a chicken-and-egg
@@ -319,6 +314,8 @@ void preInit( void )
 	int status;				/* For MUTEX access */
 
 	initBuiltinStorage();
+	REQUIRES_V( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
+
 	MUTEX_CREATE( initialisation, status );
 	if( cryptStatusError( status ) )
 		{
@@ -333,7 +330,6 @@ void preInit( void )
 		   which point they can be detected */
 		retIntError_Void();
 		}
-	REQUIRES_V( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
 	}
 
 void postShutdown( void )
@@ -353,7 +349,12 @@ void postShutdown( void )
 
 /* Begin and complete the kernel initialisation, leaving the initialisation
    mutex locked between the two calls to allow external initialisation of
-   further, non-kernel-related items */
+   further, non-kernel-related items.
+   
+   The kernel data is statically allocated (as is all the other 
+   getSystemStorage() data) and initialised, so it's safe to both get a
+   reference to it and check it even before preInit() has been called in the
+   static-init case */
 
 CHECK_RETVAL_ACQUIRELOCK( MUTEX_LOCKNAME( initialisation ) ) \
 int krnlBeginInit( void )
@@ -369,18 +370,35 @@ int krnlBeginInit( void )
 		preInit();
 #endif /* STATIC_INIT */
 
+	/* It's possible, with sufficient effort, to build cryptlib in a manner 
+	   in which preInit() is never called, for example by mixing up static 
+	   and shared builds so that preInit() should be called via an
+	   __attribute__ ((constructor)) but isn't and is also skipped because
+	   STATIC_INIT isn't defined due to an apparent shared-library build.  
+	   To detect this we check that the option information storage has been 
+	   set up, which is only the case if preInit() has been called.  Note 
+	   that the problem here isn't that preInit() hasn't been called but 
+	   that the overall build is messed up, the preInit() issue is just a 
+	   convenient way to detect this */
+	if( !checkBuiltinStorage( BUILTIN_STORAGE_OPTION_INFO ) )
+		{
+		DEBUG_DIAG(( "cryptlib pre-initialisation function hasn't been "
+					 "called due to an incorrect build of the code" ));
+		retIntError();
+		}
+
 	/* Lock the initialisation mutex to make sure that other threads don't
 	   try to access it */
 	MUTEX_LOCK( initialisation );
 
-	/* If we're already initialised, don't to anything */
+	/* If we're already initialised, don't do anything */
 	if( krnlData->initLevel > INIT_LEVEL_NONE )
 		{
 		MUTEX_UNLOCK( initialisation );
 		return( CRYPT_ERROR_INITED );
 		}
 
-#ifndef USE_EMBEDDED_OS
+#if !defined( USE_EMBEDDED_OS ) && !defined( CONFIG_NO_TIME_CHECK )
 	/* If the time is screwed up we can't safely do much since so many
 	   protocols and operations depend on it, however since embedded 
 	   systems may not have RTCs or if they have them they're inevitably 
@@ -402,9 +420,11 @@ int krnlBeginInit( void )
 		MUTEX_UNLOCK( initialisation );
 		DEBUG_DIAG(( "System time is invalid, cannot continue without a "
 					 "correctly set system clock" ));
+		DEBUG_DIAG(( "To disable this check, build with "
+					 "-DCONFIG_NO_TIME_CHECK" ));
 		retIntError();
 		}
-#endif /* USE_EMBEDDED_OS */
+#endif /* !USE_EMBEDDED_OS && !CONFIG_NO_TIME_CHECK */
 
 	/* Initialise the ephemeral portions of the kernel data block.  Since
 	   the shutdown level value is non-ephemeral (it has to persist across
@@ -413,9 +433,10 @@ int krnlBeginInit( void )
 	clearKernelData();
 	krnlData->shutdownLevel = SHUTDOWN_LEVEL_NONE;
 
-	/* Initialise all of the kernel modules.  Except for the allocation of
-	   the kernel object table this is all straight static initialisation
-	   and self-checking, so we should never fail at this stage */
+	/* Initialise all of the kernel modules.  This is all straight static 
+	   initialisation and self-checking (initAllocation() initialises the
+	   bookkeeping functions that handle kernel allocation, it doesn't
+	   actually allocate anything), so we should never fail at this stage */
 	status = initAllocation();
 	if( cryptStatusOK( status ) )
 		status = initAttributeACL();
@@ -440,13 +461,7 @@ int krnlBeginInit( void )
 	if( cryptStatusError( status ) )
 		{
 		MUTEX_UNLOCK( initialisation );
-#ifdef CONFIG_FAULT_MALLOC
-		/* If we're using memory fault-injection then a failure at this 
-		   point is expected */
-		return( CRYPT_ERROR_MEMORY );
-#else
 		retIntError();
-#endif /* CONFIG_FAULT_MALLOC */
 		}
 
 	/* The kernel data block has been initialised */
@@ -463,6 +478,11 @@ RELEASELOCK( MUTEX_LOCKNAME( initialisation ) ) \
 void krnlCompleteInit( void )
 	{
 	KERNEL_DATA *krnlData = getSystemStorage( SYSTEM_STORAGE_KRNLDATA );
+
+	REQUIRES_V( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
+				/* Another should-never-occur failure, this exits with the 
+				   mutex locked because we have no idea what state anything
+				   is in */
 
 	/* Enter with the initialisation mutex held */
 
@@ -492,11 +512,13 @@ int krnlBeginShutdown( void )
 	{
 	KERNEL_DATA *krnlData = getSystemStorage( SYSTEM_STORAGE_KRNLDATA );
 
+	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
+
 	/* Lock the initialisation mutex to make sure that other threads don't
 	   try to access it */
 	MUTEX_LOCK( initialisation );
 
-	/* If we're already shut down, don't to anything */
+	/* If we're already shut down, don't do anything */
 	if( krnlData->initLevel <= INIT_LEVEL_NONE )
 		{
 		MUTEX_UNLOCK( initialisation );
@@ -523,6 +545,11 @@ int krnlCompleteShutdown( void )
 	{
 	KERNEL_DATA *krnlData = getSystemStorage( SYSTEM_STORAGE_KRNLDATA );
 
+	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
+			  /* Another should-never-occur failure, this exits with the 
+				 mutex locked because we have no idea what state anything
+				 is in */
+
 	/* Enter with the initialisation mutex held */
 
 	/* Once the kernel objects have been destroyed, we're in the closing-down
@@ -537,18 +564,20 @@ int krnlCompleteShutdown( void )
 					  krnlData->shutdownLevel >= SHUTDOWN_LEVEL_MESSAGES ),
 					initialisation );
 
-	/* Shut down all of the kernel modules */
-	endAllocation();
-	endAttributeACL();
-	endCertMgmtACL();
-	endInternalMsgs();
-	endKeymgmtACL();
-	endMechanismACL();
-	endMessageACL();
-	endObjects();
-	endObjectAltAccess();
-	endSemaphores();
+	/* Shut down all of the kernel modules.  Again, endAllocation() doesn't
+	   free any memory since initAllocation() never allocates any, it simply
+	   cleans up the bookkeeping information */
 	endSendMessage();
+	endSemaphores();
+	endObjectAltAccess();
+	endObjects();
+	endMessageACL();
+	endMechanismACL();
+	endKeymgmtACL();
+	endInternalMsgs();
+	endCertMgmtACL();
+	endAttributeACL();
+	endAllocation();
 
 	/* At this point all kernel services have been shut down.  We make the 
 	   checks ENSURES() rather than ENSURES_MUTEX() because we can't recover
@@ -582,6 +611,8 @@ CHECK_RETVAL_BOOL \
 BOOLEAN krnlIsExiting( void )
 	{
 	const KERNEL_DATA *krnlData = getSystemStorage( SYSTEM_STORAGE_KRNLDATA );
+
+	REQUIRES_EXT( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ), TRUE );
 
 	return( ( krnlData->shutdownLevel >= SHUTDOWN_LEVEL_THREADS ) ? \
 			TRUE : FALSE );

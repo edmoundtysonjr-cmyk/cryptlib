@@ -63,6 +63,9 @@ static int sizeofDataItem( const PKCS15_INFO *pkcs15infoPtr,
 	REQUIRES( isShortIntegerRange( labelSize ) );
 	REQUIRES( isShortIntegerRangeNZ( dataSize ) );
 
+	/* When calculating the size of the OIDs, we use OID_CRYPTLIB_CONFIGDATA
+	   as a representative since all of the cryptlib content-type OIDs have
+	   the same size */
 	*length = sizeofShortObject( \
 					sizeofShortObject( labelSize ) + \
 					sizeofShortObject( sizeofOID( OID_CRYPTLIB_CONTENTTYPE ) ) + \
@@ -189,6 +192,21 @@ int pkcs15Flush( INOUT_PTR STREAM *stream,
 				dataSize += length;
 				break;
 				}
+				
+			case PKCS15_SUBTYPE_UNRECOGNISED:
+				/* This one is a bit of a problem because it's an unknown
+				   object type so we don't know how to write it.  We can 
+				   certainly read a keyset with this type of object since it
+				   just ends up as a placeholder and we can use the keys and
+				   other information present alongside it, but we can't 
+				   write it back out again.  To avoid creating a potentially
+				   corrupted, meaning with objects missing, keyset, we return
+				   an error.  This isn't really a problem because in 
+				   cryptlib's entire existence this code path has never been
+				   triggered */
+				DEBUG_DIAG(( "Attempt to write an unrecognised object type "
+							 "of size %d", pkcs15info[ i ].dataDataSize ));
+				return( CRYPT_ERROR_NOTAVAIL );
 
 			default:
 				retIntError();
@@ -301,6 +319,8 @@ int pkcs15Flush( INOUT_PTR STREAM *stream,
 		ENSURES( LOOP_BOUND_OK );
 		}
 	ENSURES( cryptStatusOK( status ) );
+			 /* We use an ENSURES() here because we're just doing a bunch of
+			    wrapper + fixed swrite() writes which shouldn't be failing */
 
 	/* If this is an in-memory keyset, we're done */
 #if defined( USE_HARDWARE ) || defined( USE_TPM )

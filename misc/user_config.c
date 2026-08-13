@@ -150,7 +150,7 @@ static const BUILTIN_OPTION_INFO builtinOptionInfo[] = {
 	MK_OPTION( CRYPT_OPTION_NET_READTIMEOUT, NET_TIMEOUT_READ, 504 ),
 	MK_OPTION( CRYPT_OPTION_NET_WRITETIMEOUT, NET_TIMEOUT_WRITE, 505 ),
 	MK_OPTION_B( CRYPT_OPTION_MISC_ASYNCINIT, TRUE, 506 ),
-	MK_OPTION( CRYPT_OPTION_MISC_SIDECHANNELPROTECTION, 1, 507 ),
+	MK_OPTION( CRYPT_OPTION_MISC_SIDECHANNELPROTECTION, TRUE, 507 ),
 
 	/* All options beyond this point are ephemeral and aren't stored to disk. 
 	   Remember to update the LAST_STORED_OPTION define in user_int.h when 
@@ -253,8 +253,8 @@ static void setConfigChanged( INOUT_ARRAY( configOptionsCount ) \
 	{
 	OPTION_INFO *optionInfoPtr;
 
-	assert( isReadPtrDynamic( optionList, 
-							  sizeof( OPTION_INFO ) * configOptionsCount ) );
+	assert( isWritePtrDynamic( optionList, 
+							   sizeof( OPTION_INFO ) * configOptionsCount ) );
 
 	REQUIRES_V( isShortIntegerRangeNZ( configOptionsCount ) );
 
@@ -267,17 +267,19 @@ static void setConfigChanged( INOUT_ARRAY( configOptionsCount ) \
 
 /* Check whether a configuration option has been changed */
 
-CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN checkConfigChanged( IN_ARRAY( configOptionsCount ) \
-								const OPTION_INFO *optionList,
-							IN_INT_SHORT const int configOptionsCount )
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+static int processConfigChanged( INOUT_ARRAY( configOptionsCount ) \
+									OPTION_INFO *optionList,
+								 IN_INT_SHORT const int configOptionsCount,
+								 IN_BOOL const BOOLEAN checkOnly )
 	{
 	LOOP_INDEX i;
 
-	assert( isReadPtrDynamic( optionList, 
-							  sizeof( OPTION_INFO ) * configOptionsCount ) );
+	assert( isWritePtrDynamic( optionList, 
+							   sizeof( OPTION_INFO ) * configOptionsCount ) );
 
-	REQUIRES_B( isShortIntegerRangeNZ( configOptionsCount ) );
+	REQUIRES( isShortIntegerRangeNZ( configOptionsCount ) );
+	REQUIRES( isBooleanValue( checkOnly ) );
 
 	/* When checking whether an option has changed, we only look through the 
 	   non-ephemeral options rather than the entire range */
@@ -287,15 +289,37 @@ BOOLEAN checkConfigChanged( IN_ARRAY( configOptionsCount ) \
 					optionList[ i ].builtinOptionInfo->option <= LAST_STORED_OPTION, 
 				i++ )
 		{
-		ENSURES_B( LOOP_INVARIANT_LARGE( i, 0, configOptionsCount - 1 ) );
+		ENSURES( LOOP_INVARIANT_LARGE( i, 0, configOptionsCount - 1 ) );
 
-		if( optionList[ i ].dirty )
-			return( TRUE );
+		if( checkOnly )
+			{
+			/* We're just doing a check, indicate whether there's a changed 
+			   option present */
+			if( optionList[ i ].dirty )
+				return( OK_SPECIAL );
+			}
+		else
+			{
+			/* It's a reset, clear the option-changed flag */
+			optionList[ i ].dirty = FALSE;
+			}
 		}
-	ENSURES_B( LOOP_BOUND_OK );
-	ENSURES_B( i < configOptionsCount );
+	ENSURES( LOOP_BOUND_OK );
+	ENSURES( i < configOptionsCount );
 
-	return( FALSE );
+	return( CRYPT_OK );
+	}
+
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
+BOOLEAN checkConfigChanged( INOUT_ARRAY( configOptionsCount ) \
+								OPTION_INFO *optionList,
+							IN_INT_SHORT const int configOptionsCount )
+	{
+	const int status = processConfigChanged( optionList, 
+											 configOptionsCount, TRUE );
+
+	/* Convert the integer return value into a boolean */
+	return( ( status == OK_SPECIAL ) ? TRUE : FALSE );
 	}
 
 /****************************************************************************
@@ -329,7 +353,15 @@ int getOption( IN_ARRAY( configOptionsCount ) const OPTION_INFO *configOptions,
 	ENSURES( optionInfoPtr != NULL && \
 			 ( optionInfoPtr->builtinOptionInfo->type == OPTION_NUMERIC || \
 			   optionInfoPtr->builtinOptionInfo->type == OPTION_BOOLEAN ) );
-	*value = optionInfoPtr->intValue;
+	if( option == CRYPT_OPTION_SELFTESTOK )
+		{
+		/* The self-test OK option can contain in-progress indicators as well
+		   as success/failure codes, so we need to convert anything that 
+		   isn't a success into a failure */
+		*value = ( optionInfoPtr->intValue == TRUE ) ? TRUE : FALSE;
+		}
+	else
+		*value = optionInfoPtr->intValue;
 
 	return( CRYPT_OK );
 	}
@@ -361,7 +393,11 @@ int getOptionString( IN_ARRAY( configOptionsCount ) \
 	ENSURES( optionInfoPtr != NULL && \
 			 optionInfoPtr->builtinOptionInfo->type == OPTION_STRING );
 	if( optionInfoPtr->intValue <= 0 )
+		{
+		/* Zero-length entry, there's nothing there */
 		return( CRYPT_ERROR_NOTFOUND );
+		}
+	ENSURES( optionInfoPtr->strValue != NULL );
 	*strPtrPtr = optionInfoPtr->strValue;
 	*strLen = optionInfoPtr->intValue;
 
@@ -385,8 +421,8 @@ int setOption( INOUT_ARRAY( configOptionsCount ) OPTION_INFO *configOptions,
 	const BUILTIN_OPTION_INFO *builtinOptionInfoPtr;
 	OPTION_INFO *optionInfoPtr;
 
-	assert( isReadPtrDynamic( configOptions, 
-							  sizeof( OPTION_INFO ) * configOptionsCount ) );
+	assert( isWritePtrDynamic( configOptions, 
+							   sizeof( OPTION_INFO ) * configOptionsCount ) );
 
 	REQUIRES( isShortIntegerRangeNZ( configOptionsCount ) );
 	REQUIRES( option > CRYPT_OPTION_FIRST && option < CRYPT_OPTION_LAST );
@@ -404,8 +440,10 @@ int setOption( INOUT_ARRAY( configOptionsCount ) OPTION_INFO *configOptions,
 			   builtinOptionInfoPtr->type == OPTION_BOOLEAN ) );
 
 	/* If the stored value is the same as the new one, there's nothing to 
-	   do */
-	if( optionInfoPtr->intValue == value )
+	   do, the exception being the self-test trigger option which is 
+	   retriggerable */
+	if( option != CRYPT_OPTION_SELFTESTOK && \
+		optionInfoPtr->intValue == value )
 		return( CRYPT_OK );
 
 	/* If we're forcing a commit by returning the configuration-changed flag 
@@ -454,6 +492,10 @@ int setOption( INOUT_ARRAY( configOptionsCount ) OPTION_INFO *configOptions,
 	   status, perform an algorithm test */
 	if( option == CRYPT_OPTION_SELFTESTOK )
 		{
+		/* The kernel only allows this to be set to TRUE to trigger the self-
+		   test */
+		REQUIRES( value == TRUE );
+		
 		/* The self-test can take some time to complete.  While it's running
 		   we don't want to leave the user object locked since this will
 		   block most other threads, which all eventually read some sort of
@@ -498,6 +540,23 @@ int setOption( INOUT_ARRAY( configOptionsCount ) OPTION_INFO *configOptions,
 			if( exceptionInfo[ i ].currentOptionValue != value )
 				continue;
 
+			/* Make sure that we're not trying to set the value that's 
+			   currently been set.  The general check only catches one 
+			   possible type of infinite recursion (setting option x 
+			   triggers another set of option x), to catch everything we 
+			   unfortunately need to hardware in knowledge of the 
+			   triggering and triggered option combinations, the hash size
+			   parameter for hash/MAC algorithms and the key size for PKC
+			   algorithms */
+			REQUIRES( option != exceptionInfo[ i ].destinationOptionType );
+			REQUIRES( ( ( option == CRYPT_OPTION_ENCR_HASH || \
+						  option == CRYPT_OPTION_ENCR_MAC ) && \
+						  exceptionInfo[ i ].destinationOptionType == \
+										CRYPT_OPTION_ENCR_HASHPARAM ) || \
+					   ( option == CRYPT_OPTION_PKC_ALGO && \
+						 exceptionInfo[ i ].destinationOptionType == \
+										CRYPT_OPTION_PKC_KEYSIZE ) );
+
 			/* We're setting the current option to something that requires a 
 			   change to another option.  What to do if this fails is a bit 
 			   tricky, in theory we could try and undo the previous change 
@@ -519,16 +578,36 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int setOptionSpecial( INOUT_ARRAY( configOptionsCount ) \
 							OPTION_INFO *configOptions, 
 					  IN_INT_SHORT const int configOptionsCount, 
-					  IN_RANGE_FIXED( CRYPT_OPTION_SELFTESTOK ) \
-							const CRYPT_ATTRIBUTE_TYPE option,
+					  IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE option,
 					  IN_INT_Z const int value )
 	{
 	OPTION_INFO *optionInfoPtr;
 
-	assert( isReadPtrDynamic( configOptions, 
-							  sizeof( OPTION_INFO ) * configOptionsCount ) );
+	assert( isWritePtrDynamic( configOptions, 
+							   sizeof( OPTION_INFO ) * configOptionsCount ) );
 
-	REQUIRES( isShortIntegerRangeNZ( configOptionsCount ) );
+	REQUIRES( option == CRYPT_OPTION_CONFIGCHANGED || \
+			  option == CRYPT_OPTION_SELFTESTOK );
+	REQUIRES( isBooleanValue( value ) );
+
+	/* Get a pointer to the option information and make sure that everything
+	   is OK */
+	optionInfoPtr = ( OPTION_INFO * ) \
+					getOptionInfo( configOptions, configOptionsCount, 
+								   option );
+	ENSURES( optionInfoPtr != NULL );
+
+	/* Once we've updated the configuration, we need to reset the overall
+	   configuration-changed flag as well as the flags for each option */
+	if( option == CRYPT_OPTION_CONFIGCHANGED )
+		{
+		REQUIRES( value == FALSE );
+		optionInfoPtr->intValue = FALSE;
+
+		/* Clear the configuration-changed flag on the options */
+		return( processConfigChanged( configOptions, configOptionsCount, 
+									  FALSE ) );
+		}
 
 	/* The update of the self-test status is performed in two phases.  When 
 	   we begin the self-test, triggered by the user setting the 
@@ -537,16 +616,7 @@ int setOptionSpecial( INOUT_ARRAY( configOptionsCount ) \
 	   self-test-in-progress state.  Once the self-test completes it's set 
 	   to the test result value via setOptionSpecial(), which can only be 
 	   accessed from inside the user object */
-	REQUIRES( option == CRYPT_OPTION_SELFTESTOK );
-
-	/* Get a pointer to the option information and make sure that everything
-	   is OK */
-	optionInfoPtr = ( OPTION_INFO * ) \
-					getOptionInfo( configOptions, configOptionsCount, 
-								   option );
-	ENSURES( optionInfoPtr != NULL && \
-			 optionInfoPtr->intValue == CRYPT_ERROR );
-
+	REQUIRES( optionInfoPtr->intValue == CRYPT_ERROR );
 	optionInfoPtr->intValue = value;
 
 	return( CRYPT_OK );
@@ -651,8 +721,8 @@ int deleteOption( INOUT_ARRAY( configOptionsCount ) OPTION_INFO *configOptions,
 	const BUILTIN_OPTION_INFO *builtinOptionInfoPtr;
 	OPTION_INFO *optionInfoPtr;
 
-	assert( isReadPtrDynamic( configOptions, 
-							  sizeof( OPTION_INFO ) * configOptionsCount ) );
+	assert( isWritePtrDynamic( configOptions, 
+							   sizeof( OPTION_INFO ) * configOptionsCount ) );
 
 	REQUIRES( isShortIntegerRangeNZ( configOptionsCount ) );
 	REQUIRES( option > CRYPT_OPTION_FIRST && option < CRYPT_OPTION_LAST );
@@ -693,6 +763,18 @@ int initOptions( OUT_PTR_PTR_COND void **configOptionsPtr,
 	{
 	OPTION_INFO *optionList;
 	LOOP_INDEX i;
+
+	assert( isWritePtr( configOptionsPtr, sizeof( void * ) ) );
+	assert( isWritePtr( configOptionsCount, sizeof( int ) ) );
+
+	static_assert( OPTION_INFO_COUNT == \
+							FAILSAFE_ARRAYSIZE( builtinOptionInfo, \
+												BUILTIN_OPTION_INFO ) - 1,
+				   "Option info count vs. builtinOptionInfo array size" );
+				   /* Arrays are over-allocated by two elements.
+				      FAILSAFE_ARRAYSIZE() is one larger than the last valid
+				      element, so FAILSAFE_ARRAYSIZE() - 1 is the last valid
+				      element */
 
 	/* Clear return values */
 	*configOptionsPtr = NULL;
@@ -744,13 +826,14 @@ int initOptions( OUT_PTR_PTR_COND void **configOptionsPtr,
 	}
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-void endOptions( IN_ARRAY( configOptionsCount ) OPTION_INFO *configOptions, 
+void endOptions( INOUT_ARRAY( configOptionsCount ) \
+					OPTION_INFO *configOptions, 
 				 IN_INT_SHORT const int configOptionsCount )
 	{
 	OPTION_INFO *optionList = configOptions;
 	LOOP_INDEX i;
 
-	assert( isReadPtrDynamic( configOptions, 
+	assert( isWritePtrDynamic( configOptions, 
 							  sizeof( OPTION_INFO ) * configOptionsCount ) );
 
 	REQUIRES_V( isShortIntegerRangeNZ( configOptionsCount ) );
@@ -776,7 +859,8 @@ void endOptions( IN_ARRAY( configOptionsCount ) OPTION_INFO *configOptions,
 
 			/* If the string value that's currently set isn't the default
 			   setting, clear and free it */
-			if( optionInfoPtr->strValue != builtinOptionInfoPtr->strDefault )
+			if( optionInfoPtr->strValue != NULL && \
+				optionInfoPtr->strValue != builtinOptionInfoPtr->strDefault )
 				{
 				REQUIRES_V( isShortIntegerRangeNZ( optionInfoPtr->intValue ) ); 
 				zeroise( optionInfoPtr->strValue, optionInfoPtr->intValue );

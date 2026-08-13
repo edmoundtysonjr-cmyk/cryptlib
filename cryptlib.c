@@ -229,11 +229,15 @@ static int dispatchManagementAction( IN_ARRAY( mgmtFunctionCount ) \
 
 	/* If we're performing a startup and the kernel is shutting down, bail 
 	   out now */
-	if( ( action == MANAGEMENT_ACTION_INIT || \
+	if( ( action == MANAGEMENT_ACTION_PRE_INIT || \
+		  action == MANAGEMENT_ACTION_INIT || \
 		  action == MANAGEMENT_ACTION_INIT_DEFERRED ) && krnlIsExiting() )
 		return( CRYPT_ERROR_PERMISSION );
 
-	/* Dispatch each management action in turn */
+	/* Dispatch each management action in turn.  Note that these are handled
+	   as groups of actions so if one fails we continue with the next until
+	   we've processed the entire group.  This is required for the shutdown,
+	   which also act on groups of actions */
 	LOOP_MED( i = 0, i < mgmtFunctionCount && \
 					 mgmtFunctions[ i ] != NULL, i++ )
 		{
@@ -247,6 +251,7 @@ static int dispatchManagementAction( IN_ARRAY( mgmtFunctionCount ) \
 		/* If we're performing a startup and the kernel is shutting down, 
 		   bail out now */
 		if( ( action == MANAGEMENT_ACTION_INIT || \
+			  action == MANAGEMENT_ACTION_PRE_INIT || \
 			  action == MANAGEMENT_ACTION_INIT_DEFERRED ) && krnlIsExiting() )
 			return( CRYPT_ERROR_PERMISSION );
 		}
@@ -302,7 +307,8 @@ static void displayBuildParams( void )
 	const void *storagePtr;
 	int storageSize;
 
-	/* Dump general build parameters */
+	/* Dump general build parameters.  The version print relies on 
+	   CRYPTLIB_VERSION being a three-digit value */
 	DEBUG_PUTS(( "** Build parameters **" ));
 	DEBUG_PRINT(( "cryptlib version is %d.%d.%d, ", 
 				  CRYPTLIB_VERSION / 100, ( CRYPTLIB_VERSION / 10 ) % 10,  
@@ -406,7 +412,7 @@ static void displayBuildParams( void )
 	storageSize = getBuiltinObjectStorageSize( OBJECT_TYPE_DEVICE, 
 											   SUBTYPE_DEV_SYSTEM, 256 );
 	DEBUG_PRINT(( "Object storage: System device = 0x%lX, %d bytes.\n", 
-				  storagePtr, storageSize ));
+				  ( uintptr_t ) storagePtr, storageSize ));
 	( void ) releaseBuiltinObjectStorage( OBJECT_TYPE_DEVICE, 
 										  SUBTYPE_DEV_SYSTEM, storagePtr );
 	storagePtr = getBuiltinObjectStorage( OBJECT_TYPE_USER, 
@@ -414,7 +420,7 @@ static void displayBuildParams( void )
 	storageSize = getBuiltinObjectStorageSize( OBJECT_TYPE_USER, 
 											   SUBTYPE_USER_SO, 256 );
 	DEBUG_PRINT(( "Object storage: User object = 0x%lX, %d bytes.\n", 
-				  storagePtr, storageSize ));
+				  ( uintptr_t ) storagePtr, storageSize ));
 	( void ) releaseBuiltinObjectStorage( OBJECT_TYPE_USER, SUBTYPE_USER_SO, 
 										  storagePtr );
 #ifdef USE_KEYSETS
@@ -423,7 +429,7 @@ static void displayBuildParams( void )
 	storageSize = getBuiltinObjectStorageSize( OBJECT_TYPE_KEYSET, 
 											   SUBTYPE_KEYSET_FILE, 256 );
 	DEBUG_PRINT(( "Object storage: Keyset object = 0x%lX, %d bytes.\n", 
-				  storagePtr, storageSize ));
+				  ( uintptr_t ) storagePtr, storageSize ));
 	( void ) releaseBuiltinObjectStorage( OBJECT_TYPE_KEYSET, 
 										  SUBTYPE_KEYSET_FILE, storagePtr );
 #endif /* USE_KEYSETS */
@@ -476,6 +482,9 @@ static void displayBuildParams( void )
 
 	/* Dump extended config/build options */
 	DEBUG_PRINT(( "Extended build options:" ));
+#ifdef USE_3DES
+	DEBUG_PRINT(( " USE_3DES" ));
+#endif /* USE_3DES */
 #ifdef USE_CAST
 	DEBUG_PRINT(( " USE_CAST" ));
 #endif /* USE_CAST */
@@ -649,24 +658,24 @@ static void displayBuildParams( void )
 	DEBUG_PUTS(( "gcc version = " __VERSION__ "." ));
 #endif /* __GNUC__ */
 #ifdef __HP_cc
-	DEBUG_PRINTF(( "HP cc version = %06d.\n", __HP_cc ));
+	DEBUG_PRINT(( "HP cc version = %06d.\n", __HP_cc ));
 #endif /* __HP_cc */
 #ifdef __IAR_SYSTEMS_ICC__
-	DEBUG_PRINTF(( "IAR cc version = %d (%d.%d.%d)\n", __IAR_SYSTEMS_ICC__, 
-				   __VER__ / 1000000L, ( __VER__ / 1000L ) % 1000L,
-				   __VER__ % 1000L ));
+	DEBUG_PRINT(( "IAR cc version = %d (%d.%d.%d)\n", __IAR_SYSTEMS_ICC__, 
+				  __VER__ / 1000000L, ( __VER__ / 1000L ) % 1000L,
+				  __VER__ % 1000L ));
 #endif /* __IAR_SYSTEMS_ICC__ */
 #ifdef _MSC_VER
-	DEBUG_PRINT(( "Visual C version = %ld (%ld).\n", _MSC_VER, 
+	DEBUG_PRINT(( "Visual C version = %d (%d).\n", _MSC_VER, 
 				  _MSC_FULL_VER ));
 #endif /* _MSC_VER */
 #ifdef __RENESAS__
-	DEBUG_PRINT(( "Renesas CC-RX version = %lX.\n", __RENESAS_VERSION__ ));
+	DEBUG_PRINT(( "Renesas CC-RX version = %X.\n", __RENESAS_VERSION__ ));
 #endif /* __RENESAS__ */
 #ifdef __SUNPRO_C
 	DEBUG_PRINT(( "SunPro cc version = %X.\n", __SUNPRO_C ));
 #endif /* __SUNPRO_C */
-#if defined( __xlc__ )
+#if defined( __xlC__ )
 	DEBUG_PRINT(( "IBM xlc version = %X.\n", __xlC__ ));
 #elif defined( __IBMC__ )
 	DEBUG_PRINT(( "IBM c89 version = %X.\n", __IBMC__ ));
@@ -755,6 +764,7 @@ static void displayConfigParams( void )
    manual for more details, although we do try and produce diagnostic output 
    if this is enabled */
 
+CHECK_RETVAL_BOOL \
 static BOOLEAN sanityCheckBuild( void )
 	{
 	static const int intVal = 1;
@@ -768,9 +778,9 @@ static BOOLEAN sanityCheckBuild( void )
 	   here that catches the endianness problem rather than just returning a 
 	   generic self-test fail error */
 #ifdef DATA_LITTLEENDIAN
-	if( !*( ( char * ) &intVal ) )
+	if( !*( ( const char * ) &intVal ) )
 #else
-	if( *( ( char * ) &intVal ) )
+	if( *( ( const char * ) &intVal ) )
 #endif /* DATA_LITTLEENDIAN */
 			{
 			/* We should probably sound klaxons as well at this point */
@@ -809,6 +819,19 @@ static BOOLEAN sanityCheckBuild( void )
 		return( FALSE );
 		}
 
+	/* Related to the above, make sure that pointers aren't larger than we
+	   expect them */
+	static_assert( sizeof( void * ) <= 16,
+				   "This system appears to have pointers larger than 128 "
+				   "bits, please let the cryptlib developers know" );
+	if( sizeof( void * ) > 16 )
+		{
+		DEBUG_PRINT(( "Error in build: Pointers are larger than 128 bits, "
+					  "this will require adjusting every location that uses "
+					  "ALIGN_SPECIFIER() to align memory blocks" ));
+		return( FALSE );
+		}
+
 	/* Warn if unsafe build options are enabled in a release build.  For 
 	   debug builds this is done through displayBuildParams().  Since this 
 	   is going to stderr from an unexpected source we identify what's
@@ -819,14 +842,12 @@ static BOOLEAN sanityCheckBuild( void )
 			 "testing and never in production.\n\n" );
 #endif /* NDEBUG && USE_UNSAFE_BUILD_OPTIONS */
 
-	/* Perform various checks around time_t and Y2038.  Alongside runtime 
-	   checks in debug mode we also use C99 static_assert() if available to
-	   alert at compile time */
-#if defined( __STDC_VERSION__ ) && ( __STDC_VERSION__ >= 199901L ) && \
-	!defined( TIMET_64BIT )
+	/* Perform various checks around time_t and Y2038 */
+#ifndef TIMET_64BIT 
 	static_assert( sizeof( time_t ) <= 4,
-				   "This system appears to support 64-bit time_t, please let the cryptlib developers know" );
-#endif /* C99 && !TIMET_64BIT */
+				   "This system appears to support 64-bit time_t, please "
+				   "let the cryptlib developers know" );
+#endif /* !TIMET_64BIT */
 #ifdef TIMET_64BIT
 	if( sizeof( time_t ) < 8 )
 		{
@@ -851,8 +872,11 @@ static BOOLEAN sanityCheckBuild( void )
 		time_t theTime;
 		long long llTime;
 
-		theTime = YEARS_TO_SECONDS( 2050 - 1970 );
-		llTime = YEARS_TO_SECONDS( 2050 - 1970 );
+		/* It's a 32-bit time_t but something thinks it can handle times 
+		   past Y2038, for example due to it being an unsigned value, 
+		   perform various checks to make sure that this is actually safe */
+		llTime = YEARS_TO_SECONDS_LL( 2050 - 1970 );
+		theTime = ( time_t ) llTime;
 		if( theTime < MIN_TIME_VALUE || theTime != llTime )
 			{
 			DEBUG_PUTS(( "Time values above Y2038 are enabled but time_t "
@@ -901,7 +925,7 @@ static BOOLEAN sanityCheckBuild( void )
 		tmStruct.tm_sec = 5;
 		theTime = mktime( &tmStruct );
 		if( theTime < ( 0xF4B0B225UL - ( 14 * 3600L ) ) || \
-			theTime > ( 0xF4B0B225UL + ( 14 * 86400L ) ) )
+			theTime > ( 0xF4B0B225UL + ( 14 * 3600L ) ) )
 			{
 			/* mktime() is a pain because it converts to the local time so 
 			   we check whether the result is within 14 hours of the UTC
@@ -1040,6 +1064,9 @@ int initCryptlib( void )
 		BOOLEAN_INT asyncInit = FALSE;
 #endif /* USE_THREAD_FUNCTIONS */
 
+		/* Note that initLevel 2 is currently identical to initLevel 1, it's
+		   only present here in case here's a need to differentiate the two 
+		   in the future */
 		initLevel = 2;
 		CFI_CHECK_UPDATE( "initCompletionFunctions" );
 
@@ -1060,6 +1087,9 @@ int initCryptlib( void )
 				{
 				/* The thread couldn't be started, try again with a 
 				   synchronous init */
+				DEBUG_DIAG(( "Asynchronous initialisation couldn't be "
+							 "initiated, status %d, falling back to "
+							 "synchronous initialisation", status ));
 				asyncInit = FALSE;
 				}
 			}

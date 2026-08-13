@@ -5,6 +5,10 @@
 *																			*
 ****************************************************************************/
 
+/* There are no known public implementations of the SCVP protocol.  Unless
+   you have very good reasons to use it, be aware that this is almost 
+   certainly not something that you should be using */
+
 #if defined( INC_ALL )
   #include "crypt.h"
   #include "asn1.h"
@@ -880,8 +884,19 @@ static int createScvpResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	/* Write a gap for the outer SEQUENCE wrapper.  This will always be in 
 	   the range of 1-2K ... 16K or so, so we know that the length will be 
-	   encoded as two bytes.  To fill the space we write a dummy length of 
-	   10K which will be overwritten once we know the actual length */
+	   encoded as two bytes which covers lengths of 256 ... 65535.  To fill 
+	   the space we write a dummy length of 10K which will be overwritten 
+	   once we know the actual length.
+	   
+	   This is a bit of a kludge but it's bounded by two factors, the first
+	   being that there's more than enough bloat in the response to always 
+	   produce a size over 256 bytes but never enough to get remotely close 
+	   to 64K, the second being that with no known public implementations
+	   of this it's not really possible to determine what will actually get
+	   sent and whether some odd corner case is capable of triggering an 
+	   underflow, so until we have anything at all to test against we rely
+	   on an ENSURES() further down to warn us about probably-impossible
+	   exception conditions */
 	writeSequence( &stream, 10000 );
 
 	/* Write the general header information.  We write the status even if it

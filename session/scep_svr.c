@@ -207,7 +207,7 @@ static int getPkiUserInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int processAdditionalScepRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
-										 const HTTP_URI_INFO *httpUriInfo )
+										 IN_PTR const HTTP_URI_INFO *httpUriInfo )
 	{
 	HTTP_URI_INFO rewrittenHttpUriInfo;
 	MESSAGE_DATA msgData;
@@ -589,8 +589,8 @@ static int checkScepRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* Finally, check the certificate used to sign the SCEP message.  If 
-	   it's an initialisation request then the the key in the PKCS #10 
-	   request has to match the one in the signing certificate */
+	   it's an initialisation request then the key in the PKCS #10 request 
+	   has to match the one in the signing certificate */
 	if( scepInfo->requestType == CRYPT_REQUESTTYPE_INITIALISATION )
 		{
 		setMessageData( &msgData, keyIDbuffer, KEYID_SIZE );
@@ -1149,7 +1149,7 @@ static int serverTransact( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 ****************************************************************************/
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-void initSCEPserverProcessing( SESSION_INFO *sessionInfoPtr )
+void initSCEPserverProcessing( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 

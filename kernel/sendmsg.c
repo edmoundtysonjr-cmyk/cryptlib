@@ -181,6 +181,7 @@ static const OBJECT_NAME_INFO objectNameInfo[] = {
 	{ SUBTYPE_DEV_SYSTEM, "system" },
 	{ SUBTYPE_DEV_PKCS11, "PKCS #11" },
 	{ SUBTYPE_DEV_CRYPTOAPI, "CryptoAPI" },
+	{ SUBTYPE_DEV_TPM, "TPM" },
 	{ SUBTYPE_DEV_HARDWARE, "hardware" },
 	{ SUBTYPE_SESSION_SSH, "SSH" },
 	{ SUBTYPE_SESSION_SSH_SVR, "SSH server" },
@@ -188,6 +189,8 @@ static const OBJECT_NAME_INFO objectNameInfo[] = {
 	{ SUBTYPE_SESSION_TLS_SVR, "TLS server" },
 	{ SUBTYPE_SESSION_RTCS, "RTCS" },
 	{ SUBTYPE_SESSION_RTCS_SVR, "RTCS server" },
+	{ SUBTYPE_SESSION_SCVP, "SCVP" },
+	{ SUBTYPE_SESSION_SCVP_SVR, "SCVP server" },
 	{ SUBTYPE_SESSION_OCSP, "OCSP" },
 	{ SUBTYPE_SESSION_OCSP_SVR, "OCSP server" },
 	{ SUBTYPE_SESSION_TSP, "TSP" },
@@ -213,7 +216,7 @@ static void getObjectDescription( IN_HANDLE const int objectHandle,
 	const OBJECT_INFO *objectTable = \
 							getSystemStorage( SYSTEM_STORAGE_OBJECT_TABLE );
 	const OBJECT_INFO *objectInfoPtr;
-	int offset, length;
+	int offset, length, status;
 
 	assert( isValidObject( objectHandle ) );
 
@@ -222,7 +225,8 @@ static void getObjectDescription( IN_HANDLE const int objectHandle,
 	REQUIRES_V( isShortIntegerRangeNZ( descriptionMaxLength ) );
 
 	/* Clear return value */
-	strlcpy_s( description, descriptionMaxLength, "(Unknown)" );
+	status = strlcpy_s( description, descriptionMaxLength, "(Unknown)" );
+	ENSURES_V( cryptStatusOK( status ) );
 
 	/* Get information on the object */
 	objectInfoPtr = &objectTable[ objectHandle ];
@@ -231,13 +235,16 @@ static void getObjectDescription( IN_HANDLE const int objectHandle,
 
 	if( objectHandle == SYSTEM_OBJECT_HANDLE )
 		{
-		strlcpy_s( description, descriptionMaxLength, "system object" );
+		status = strlcpy_s( description, descriptionMaxLength, 
+							"system object" );
+		ENSURES_V( cryptStatusOK( status ) );
 		return;
 		}
 	if( objectHandle == DEFAULTUSER_OBJECT_HANDLE )
 		{
-		strlcpy_s( description, descriptionMaxLength,
-				   "default user object" );
+		status = strlcpy_s( description, descriptionMaxLength,
+							"default user object" );
+		ENSURES_V( cryptStatusOK( status ) );
 		return;
 		}
 	offset = sprintf_s( description, descriptionMaxLength, 
@@ -453,7 +460,7 @@ int waitForObject( IN_HANDLE const int objectHandle,
 		REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_OBJECT_TABLE ) );
 		}
 	ENSURES( LOOP_BOUND_OK );
-#if defined( USE_ERRMSGS ) && !defined( NDEBUG ) && !defined( __WIN16__ )
+#if defined( USE_ERRMSGS ) && !defined( NDEBUG )
 	if( waitCount > WAITCOUNT_WARN_THRESHOLD )
 		{
 		/* If we waited more than WAITCOUNT_WARN_THRESHOLD iterations for
@@ -462,7 +469,7 @@ int waitForObject( IN_HANDLE const int objectHandle,
 		   the user that there's a potential problem */
 		waitWarn( objectHandle, waitCount );
 		}
-#endif /* NDEBUG on systems with stdio */
+#endif /* Debug mode */
 
 	/* If cryptlib is shutting down, exit */
 	if( krnlData->shutdownLevel >= SHUTDOWN_LEVEL_MESSAGES )
@@ -1034,8 +1041,8 @@ static const MESSAGE_HANDLING_INFO messageHandlingInfo[] = {
 	  PRE_DISPATCH( CheckTrustMgmtAccess ) },
 
 	/* End-of-ACL marker */
-	{ MESSAGE_NONE, ROUTE_NONE, 0, PARAMTYPE_NONE_NONE },
-	{ MESSAGE_NONE, ROUTE_NONE, 0, PARAMTYPE_NONE_NONE }
+	{ MESSAGE_NONE, ROUTE_NONE, 0, 0, 0, PARAMTYPE_NONE_NONE },
+	{ MESSAGE_NONE, ROUTE_NONE, 0, 0, 0, PARAMTYPE_NONE_NONE }
 	};
 
 #ifndef CONFIG_CONSERVE_MEMORY_EXTRA
@@ -1218,7 +1225,7 @@ int initSendMessage( void )
 
 	/* Perform a consistency check on various things that need to be set
 	   up in a certain way for things to work properly */
-	static_assert( ACTION_PERM_COUNT <= 8,
+	static_assert( ACTION_PERM_COUNT * ACTION_PERM_BITS <= 16,
 				   "Action permission bitmap size" );
 	static_assert( MESSAGE_CTX_DECRYPT == MESSAGE_CTX_ENCRYPT + 1, \
 				   "Message value" );
@@ -1242,9 +1249,6 @@ int initSendMessage( void )
 				   "Message value" );
 	static_assert( MESSAGE_DELETEATTRIBUTE == MESSAGE_SETATTRIBUTE_S + 1, \
 				   "Message value" );
-
-	/* Perform a consistency check on various internal values and constants */
-	assert( ACTION_PERM_COUNT == 6 );
 
 	/* Perform a consistency check on the parameter ACL */
 	LOOP_MED( i = 0, 
@@ -1767,7 +1771,9 @@ static int dispatchMessage( IN_HANDLE const int localObjectHandle,
 	/* Mark the object as busy so that we have it available for our
 	   exclusive use and further messages to it will be enqueued, dispatch
 	   the message with the object table unlocked, and mark the object as
-	   non-busy again */
+	   non-busy again.  We know that the object table pointer is still valid
+	   afterwards because it's part of the system memory block, so all that
+	   we need to check is that the object it still valid */
 	REQUIRES( !checkOverflowInc( objectInfoPtr->lockCount ) );
 	objectInfoPtr->lockCount++;
 #ifdef USE_THREADS
@@ -1781,7 +1787,7 @@ static int dispatchMessage( IN_HANDLE const int localObjectHandle,
 	objectTable = getSystemStorage( SYSTEM_STORAGE_OBJECT_TABLE );
 	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_OBJECT_TABLE ) );
 	objectInfoPtr = &objectTable[ localObjectHandle ];
-	if( !isValidType( objectInfoPtr->type ) )
+	if( !sanityCheckObject( objectInfoPtr ) )
 		{
 		/* Something catastrophic happened while unlocked, exit immediately
 		   without trying to perform any further operations on the object */
@@ -1835,7 +1841,7 @@ PARAMCHECK_MESSAGE( MESSAGE_DESTROY, PARAM_NULL, PARAM_IS( 0 ) ) \
 PARAMCHECK_MESSAGE( MESSAGE_INCREFCOUNT, PARAM_NULL, PARAM_IS( 0 ) ) \
 PARAMCHECK_MESSAGE( MESSAGE_DECREFCOUNT, PARAM_NULL, PARAM_IS( 0 ) ) \
 PARAMCHECK_MESSAGE( MESSAGE_GETDEPENDENT, OUT_PTR, IN_ENUM( OBJECT_TYPE ) ) \
-PARAMCHECK_MESSAGE( MESSAGE_SETDEPENDENT, IN_PTR, IN_PTR ) \
+PARAMCHECK_MESSAGE( MESSAGE_SETDEPENDENT, IN_PTR, IN_ENUM( SETDEP_OPTION ) ) \
 PARAMCHECK_MESSAGE( MESSAGE_CLEARDEPENDENT, PARAM_NULL, PARAM_IS( 0 ) ) \
 PARAMCHECK_MESSAGE( MESSAGE_CLONE, PARAM_NULL, IN_HANDLE ) \
 PARAMCHECK_MESSAGE( MESSAGE_GETATTRIBUTE, OUT_PTR, IN_ATTRIBUTE ) \
@@ -2153,13 +2159,13 @@ int krnlSendMessage( IN_HANDLE const int objectHandle,
 		   message sent during shutdown will get here.  See the comment for
 		   the previous krnlData->shutdownLevel check for why we allow 
 		   commit notify messages when using crypto devices */
-#if defined( CONFIG_CRYPTO_HW1 ) || defined( CONFIG_CRYPTO_HW2 )
+#if defined( USE_HARDWARE ) || defined( USE_TPM )
 		if( krnlData->shutdownLevel >= SHUTDOWN_LEVEL_MESSAGES && \
 		    !( localMessage == MESSAGE_SETATTRIBUTE && \
 			   messageValue == CRYPT_IATTRIBUTE_COMMITNOTIFY ) )
 #else
 		if( krnlData->shutdownLevel >= SHUTDOWN_LEVEL_MESSAGES )
-#endif /* CONFIG_CRYPTO_HW1 || CONFIG_CRYPTO_HW2 */
+#endif /* USE_HARDWARE || USE_TPM */
 			{
 			MUTEX_UNLOCK( objectTable );
 			return( CRYPT_ERROR_PERMISSION );
@@ -2366,11 +2372,14 @@ int krnlSendMessage( IN_HANDLE const int objectHandle,
 #endif /* USE_HARDWARE || USE_TPM */
 
 		/* Dispatch the message to the object.  Before we forward it on, if
-		   this is a message that was converted to a destroy message we have 
-		   to reset the special-case message indicator to make it a standard
-		   destroy message */
+		   this is a message that was converted to a destroy message from
+		   something else we have to make it a standard destroy message with
+		   parameters { NULL, 0 } */
 		if( isConvertedDestroy )
+			{
+			DATAPTR_SET( enqueuedMessageData.messageDataPtr, NULL );
 			enqueuedMessageData.messageValue = 0;
+			}
 		status = dispatchMessage( localObjectHandle, &enqueuedMessageData,
 								  objectInfoPtr, aclPtr );
 

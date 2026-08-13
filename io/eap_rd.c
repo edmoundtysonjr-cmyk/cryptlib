@@ -852,7 +852,15 @@ int processRADIUSTLVs( INOUT_PTR STREAM *stream,
 
    Since the EAP message can be fragmented across multiple RADIUS TLVs
    inside a RADIUS packet, we can only read the header at this point but 
-   have to leave payload processing to the calling code */
+   have to leave payload processing to the calling code.
+   
+   Technically an implementation could frament an EAP header across RADIUS 
+   packets but that would mean that we'd have to interrupt the EAP header 
+   read, pop back up to the RADIUS level and read the RADIUS header for the 
+   next fragment, and then resume the EAP header read where we were 
+   interrupted.  In practice all implementations seem to keep the EAP header 
+   intact inside the RADIUS packets, so the read code rejects any EAP
+   headers that would overflow into another RADIUS packet */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int readRADIUSEAP( INOUT_PTR STREAM *stream,
@@ -862,7 +870,8 @@ static int readRADIUSEAP( INOUT_PTR STREAM *stream,
 	{
 	BOOLEAN isReqResp = FALSE;
 	const int startPos = stell( stream );
-	int type, subType = EAP_SUBTYPE_NONE, counter, length, totalLength, status;
+	int type, subType = EAP_SUBTYPE_NONE, counter;
+	int length, totalLength, remainingLength, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( eapInfo, sizeof( EAP_INFO ) ) );
@@ -879,7 +888,11 @@ static int readRADIUSEAP( INOUT_PTR STREAM *stream,
 	   some packet types but we don't know which until we've read the
 	   packet type so we just check for the always-present fields  */
 	if( radiusEncapsLength < 1 + 1 + UINT16_SIZE )
+		{
+		DEBUG_DIAG(( "Possible EAP header fragmentation across RADIUS "
+					 "packets" ));
 		return( CRYPT_ERROR_BADDATA );
+		}
 
 	/* Read the EAP packet header and optional subtype information */
 	type = sgetc( stream );
@@ -891,17 +904,26 @@ static int readRADIUSEAP( INOUT_PTR STREAM *stream,
 		/* There should be a subtype present as well, make sure there's
 		   enough data available to hold it */
 		if( radiusEncapsLength < 1 + 1 + UINT16_SIZE + 1 )
+			{
+			DEBUG_DIAG(( "Possible EAP header fragmentation across RADIUS "
+						 "packets" ));
 			return( CRYPT_ERROR_BADDATA );
+			}
 		isReqResp = TRUE;
 		status = subType = sgetc( stream );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
+	remainingLength = radiusEncapsLength - \
+					  ( 1 + 1 + UINT16_SIZE + ( isReqResp ? 1 : 0 ) );
+					  /* Checked earlier */
 
 	/* Check that the length is OK.  EAP packets can be fragmented inside 
 	   RADIUS TLVs so the EAP length may be greater than the encapsulating 
-	   RADIUS length rather than equal to it.  However, there should be at 
-	   least as much EAP data as there is RADIUS data */
+	   RADIUS length rather than equal to it.  However, there should both be 
+	   at least as much EAP data as there is RADIUS data and we shouldn't be
+	   fragmenting across an EAP header, which is checked for via the
+	   remainingLength checks */
 	if( totalLength < radiusEncapsLength )
 		return( CRYPT_ERROR_BADDATA );
 	REQUIRES( !checkOverflowSub( totalLength, EAP_HEADER_LENGTH + \
@@ -966,21 +988,29 @@ static int readRADIUSEAP( INOUT_PTR STREAM *stream,
 
 			/* Read the EAP-TLS/TTLS/PEAP flags, which tell us what else 
 			   might be present before the payload turns up */
-			if( length < 1 )
+			if( length < 1 || remainingLength < 1 )
+				{
+				DEBUG_DIAG(( "Possible EAP header fragmentation across "
+							 "RADIUS packets" ));
 				return( CRYPT_ERROR_BADDATA );
+				}
 			status = flags = sgetc( stream );
 			if( cryptStatusError( status ) )
 				return( status );
-			REQUIRES( !checkOverflowDec( length ) );
-			length--;
+			length--;			/* Checked above */
+			remainingLength--;	/* Checked above */
 			if( flags & EAPTLS_FLAG_HASLENGTH )
 				{
 				/* There's an explicit EAP-TLS/TTLS/PEAP length field 
 				   present just in case the RADIUS and EAP lengths (as well 
 				   as the encapsulated TLS lengths) aren't convincing 
 				   enough, skip it and continue */
-				if( length < UINT32_SIZE )
+				if( length < UINT32_SIZE || remainingLength < UINT32_SIZE )
+					{
+					DEBUG_DIAG(( "Possible EAP header fragmentation across "
+								 "RADIUS packets" ));
 					return( CRYPT_ERROR_BADDATA );
+					}
 				status = readUint32( stream );
 				if( cryptStatusError( status ) )
 					return( status );

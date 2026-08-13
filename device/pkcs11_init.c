@@ -88,11 +88,14 @@ static int selfTestFunction( void )
 static BOOLEAN pkcs11Initialised = FALSE;
 
 /* Since we can be using multiple PKCS #11 drivers, we define an array of
-   them and access the appropriate one by name */
+   them and access the appropriate one by name.  Note that C_GetInfo() 
+   returns a maximum name length of 32 characters, we use CRYPT_MAX_TEXTSIZE
+   here to avoid having to hardcode the magic value 32 everywhere (apart
+   from where we read it) */
 
 typedef struct {
-	char name[ 32 + 1 + 8 ];		/* Name of device */
-	INSTANCE_HANDLE hPKCS11;		/* Handle to driver */
+	char name[ CRYPT_MAX_TEXTSIZE + 1 + 8 ];/* Name of device */
+	INSTANCE_HANDLE hPKCS11;				/* Handle to driver */
 	CK_FUNCTION_LIST_PTR functionListPtr;	/* Driver access information */
 	} PKCS11_DRIVER_INFO;
 

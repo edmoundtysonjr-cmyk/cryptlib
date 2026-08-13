@@ -37,7 +37,7 @@ BOOLEAN sanityCheckSessionSCEP( IN_PTR const SESSION_INFO *sessionInfoPtr )
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isReadPtr( scepInfo, sizeof( SCEP_INFO ) ) );
 
-	/* Check the general envelope state */
+	/* Check the general session state */
 	if( !sanityCheckSession( sessionInfoPtr ) )
 		{
 		DEBUG_PUTS(( "sanityCheckSessionSCEP: Session check" ));
@@ -204,7 +204,7 @@ BOOLEAN checkSCEPCACert( IN_HANDLE const CRYPT_CERTIFICATE iCaCert,
    user is valid or by auto-generating one if the user has specified
    auto-detection */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int processUserName( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							IN_BUFFER( userNameLength ) const BYTE *userName,
 							IN_LENGTH_SHORT const int userNameLength )
@@ -226,7 +226,7 @@ static int processUserName( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 #ifndef USE_BASE64
 		static const char binToAscii[ 64 + 1 ] = \
 			"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-		int i;
+		LOOP_INDEX i;
 #else
 		int dummy;
 #endif /* !USE_BASE64 */
@@ -415,6 +415,10 @@ int createScepAttributes( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							  &msgData, CRYPT_CERTINFO_SCEP_TRANSACTIONID );
 	if( cryptStatusOK( status ) )
 		{
+		/* The messageType is a one- or two-character ASCII string encoding
+		   a numeric value (see session/scep.h for the definitions), because 
+		   why encode an integer as an integer when you can stringly-type it?
+		   This means that its length will always be a fixed 1 or 2 */
 		setMessageData( &msgData, ( MESSAGE_CAST ) messageType, 
 						strnlen_s( messageType, CRYPT_MAX_TEXTSIZE ) );
 		status = krnlSendMessage( iCmsAttributes, IMESSAGE_SETATTRIBUTE_S,
@@ -433,14 +437,18 @@ int createScepAttributes( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			{
 			/* SCEP provides an extremely limited set of error codes so 
 			   there's not much that we can return in the way of additional 
-			   failure information */
+			   failure information.  The failInfo is an optional and not
+			   very useful value that's almost always 
+			   MESSAGEFAILINFO_BADREQUEST, so we don't react if setting it 
+			   fails for some reason */
 			setMessageData( &msgData, 
 							( scepStatus == CRYPT_ERROR_SIGNATURE ) ? \
 								MESSAGEFAILINFO_BADMESSAGECHECK : \
 								MESSAGEFAILINFO_BADREQUEST,
 							MESSAGEFAILINFO_SIZE );
-			krnlSendMessage( iCmsAttributes, IMESSAGE_SETATTRIBUTE_S,
-							 &msgData, CRYPT_CERTINFO_SCEP_FAILINFO );
+			( void ) krnlSendMessage( iCmsAttributes, 
+									  IMESSAGE_SETATTRIBUTE_S, &msgData, 
+									  CRYPT_CERTINFO_SCEP_FAILINFO );
 			setMessageData( &msgData, MESSAGESTATUS_FAILURE,
 							MESSAGESTATUS_SIZE );
 			}
@@ -521,13 +529,17 @@ int getScepStatusValue( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttributes,
 	   that range as a not-valid value */
 	*value = CRYPT_ERROR;
 
-	/* Get the status string and decode it into an integer */
+	/* Get the stringly-typed value and decode it into an integer.  
+	   MESSAGESTATUS and MESSAGEFAILINFO values are subsets of the 
+	   MESSAGETYPE range so we use that to bracket the acceptable values,
+	   specific checks are done by the caller */
 	setMessageData( &msgData, buffer, CRYPT_MAX_TEXTSIZE );
 	status = krnlSendMessage( iCmsAttributes, IMESSAGE_GETATTRIBUTE_S,
 							  &msgData, attributeType );
 	if( cryptStatusError( status ) )
 		return( status );
-	status = strGetNumeric( buffer, msgData.length, &numericValue, 0, 20 );
+	status = strGetNumeric( buffer, msgData.length, &numericValue, 
+							MESSAGETYPE_VALUE_NONE, MESSAGETYPE_VALUE_MAX );
 	if( cryptStatusError( status ) )
 		return( CRYPT_ERROR_BADDATA );
 	*value = numericValue;
@@ -712,7 +724,7 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   unsigned so that we can add the challengePassword */
 			if( scepInfo->requestType == CRYPT_REQUESTTYPE_INITIALISATION )
 				{
-				if( isInited == TRUE )
+				if( isInited )
 					{
 					retExt( CRYPT_ARGERROR_NUM1,
 							( CRYPT_ARGERROR_NUM1, SESSION_ERRINFO,
@@ -779,7 +791,7 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	return( CRYPT_OK );
 	}
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int checkAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								   IN_PTR const void *data,
 								   IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE type )
@@ -919,7 +931,11 @@ int setAccessMethodSCEP( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 			SESSION_NEEDS_KEYORPASSWORD | \
 			SESSION_NEEDS_PRIVKEYSIGN | \
 			SESSION_NEEDS_REQUEST,
-		SESSION_NEEDS_PRIVATEKEY |	/* Server attributes */
+		SESSION_NEEDS_PRIVATEKEY |	/* Server attributes.  Note the somewhat
+									   odd attributes, the CA key needs to be
+									   signature-capable as well since it 
+									   signs the response message, not just 
+									   the certificate */
 			SESSION_NEEDS_PRIVKEYSIGN | \
 			SESSION_NEEDS_PRIVKEYCERT | \
 			SESSION_NEEDS_PRIVKEYCACERT | \

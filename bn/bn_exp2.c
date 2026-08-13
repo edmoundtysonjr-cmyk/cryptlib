@@ -113,13 +113,16 @@
 
 /* Changes for cryptlib - pcg */
 
+/* This function isn't constant-time but it's only used to verify DSA
+   signatures.  See also the cryptlib threat model documentation */
+
 #if defined( INC_ALL )
   #include "bn_lcl.h"
 #else
   #include "bn/bn_lcl.h"
 #endif /* Compiler-specific includes */
 
-#if defined USE_DSA		/* Only called once from ctx_dsa.c */
+#if defined USE_DSA		/* Only called once from ctx_dsa.c in sigCheck() */
 
 /* End changes for cryptlib - pcg */
 
@@ -152,7 +155,16 @@ int BN_mod_exp2_mont(BIGNUM *rr, const BIGNUM *a1, const BIGNUM *p1,
     }
     bits1 = BN_num_bits(p1);
     bits2 = BN_num_bits(p2);
+#if 0	/* The original incorrectly checked for both exponents being zero but
+		   not one, producing incorrect results.  This can't happen with the
+		   DSA code because the values are group elements which will never be
+		   == 0 mod p, however we check for it anyway for hygiene reasons, or
+		   at least apply a brute-force "fix" that documents that we're 
+		   checking for it - pcg */
     if ((bits1 == 0) && (bits2 == 0)) {
+#else
+    if ((bits1 == 0) || (bits2 == 0)) {
+#endif /* 0 */
         ret = BN_one(rr);
         return ret;
     }

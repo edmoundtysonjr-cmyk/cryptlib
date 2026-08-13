@@ -29,7 +29,7 @@
 
 #ifdef USE_ERRMSGS
 
-/* Get the name of a signature format for use in error messages */
+/* Get the name of a keyex format for use in error messages */
 
 static const char *getKeyexTypeName( IN_ENUM( KEYEX ) \
 										const KEYEX_TYPE keyexType )
@@ -119,6 +119,9 @@ int exportConventionalKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 					  "Couldn't write PGP session key information" ) );
 			}
 		ENSURES( isShortIntegerRangeNZ( *encryptedKeyLength ) );
+		CFI_CHECK_UPDATE( "writeKeyexFunction" );
+
+		ENSURES( CFI_CHECK_SEQUENCE_1( "writeKeyexFunction" ) );
 
 		return( CRYPT_OK );
 		}
@@ -397,10 +400,10 @@ int exportPublicKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 
 	INJECT_FAULT( MECH_CORRUPT_KEY, MECH_CORRUPT_KEY_1 );
 	sMemOpenOpt( &stream, encryptedKey, encryptedKeyMaxLength );
-	status = writeKeytransFunction ( &stream, iExportContext, 
-									 mechanismInfo.wrappedData,
-									 mechanismInfo.wrappedDataLength,
-									 auxInfo, auxInfoLength );
+	status = writeKeytransFunction( &stream, iExportContext, 
+									mechanismInfo.wrappedData,
+									mechanismInfo.wrappedDataLength,
+									auxInfo, auxInfoLength );
 	if( cryptStatusOK( status ) )
 		*encryptedKeyLength = stell( &stream );
 	sMemDisconnect( &stream );
@@ -683,7 +686,7 @@ int importPublicKey( IN_BUFFER( encryptedKeyLength ) const void *encryptedKey,
 			/* See the comment in exportPublicKey() about there being no 
 			   auxInfoParam member in the MECHANISM_WRAP_INFO */
 			mechanismInfo.auxInfo = queryInfo.hashAlgo;
-		/*	mechanismInfo.auxInfoParam = queryInfo.hashParam */;
+		/*	mechanismInfo.auxInfoParam = queryInfo.hashParam; */
 			}
 		status = krnlSendMessage( iImportContext, IMESSAGE_DEV_IMPORT,
 								  &mechanismInfo, isOAEP ? \

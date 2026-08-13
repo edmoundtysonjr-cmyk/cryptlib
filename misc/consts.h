@@ -102,6 +102,12 @@
   #define MIN_HASHSIZE			20
 #endif /* USE_MD5 || USE_POLY1305 */
 
+/* The minimum and maximum ICV sizes, which differ from MAC sizes and range
+   from the IPsec cargo-cult 96 bits up to 128 bits for AES-GCM */
+
+#define MIN_ICV_SIZE			12
+#define MAX_ICV_SIZE			16
+
 /* The size of the largest public-key wrapped value, corresponding to an
    ASN.1-encoded Elgamal-encrypted key.  If we're not using Elgamal it's
    the same as CRYPT_MAX_PKCSIZE */
@@ -406,6 +412,7 @@
 #else
   #define YEARS_TO_SECONDS( years ) ( ( years ) * 365 * 86400UL )
 #endif /* 64- vs. 32-bit systems */
+#define YEARS_TO_SECONDS_LL( years ) ( ( years ) * 365 * 86400LL )
 #define MIN_TIME_VALUE			( CURRENT_TIME_VALUE - YEARS_TO_SECONDS( 2 ) )
 #define MIN_STORED_TIME_VALUE	( YEARS_TO_SECONDS( 1995 - 1970 ) )
 #define MAX_TIME_VALUE_Y2038	( YEARS_TO_SECONDS( 2038 - 1970 ) + 864000 )

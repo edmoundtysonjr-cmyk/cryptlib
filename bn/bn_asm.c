@@ -58,6 +58,13 @@
 
 /* Changes for cryptlib - pcg */
 
+/* Note that some, typically not-used, variants of functions here aren't 
+   entirely constant-time, e.g. the looped bn_div_words() if BN_LLONG isn't
+   available which it virtually always is, bn_sub_words() for the final
+   subtraction in Montgomery reduction, the final reduction in bn_mul_mont()
+   (which is never used in cryptlib).  We defend against this at higher
+   levels, but see also the cryptlib threat model documentation */
+
 #include <stdio.h>
 #include <assert.h>
 #if defined( _WIN32_WCE ) && _WIN32_WCE < 400
@@ -897,6 +904,8 @@ void bn_sqr_comba4(BN_ULONG *r, const BN_ULONG *a)
     r[7] = c2;
 }
 
+#if 0	/* pcg */
+
 # ifdef OPENSSL_NO_ASM
 #  ifdef OPENSSL_BN_ASM_MONT
 #   include <alloca.h>
@@ -1016,6 +1025,8 @@ int bn_mul_mont(BN_ULONG *rp, const BN_ULONG *ap, const BN_ULONG *bp,
 #  endif                        /* OPENSSL_BN_ASM_MONT */
 # endif
 
+#endif	/* pcg */
+
 #else                           /* !BN_MUL_COMBA */
 
 /* hmm... is it faster just to do a multiply? */
@@ -1052,6 +1063,8 @@ void bn_mul_comba8(BN_ULONG *r, const BN_ULONG *a, const BN_ULONG *b)	/* const -
     r[14] = bn_mul_add_words(&(r[6]), a, 8, b[6]);
     r[15] = bn_mul_add_words(&(r[7]), a, 8, b[7]);
 }
+
+#if 0	/* pcg */
 
 # ifdef OPENSSL_NO_ASM
 #  ifdef OPENSSL_BN_ASM_MONT
@@ -1104,6 +1117,8 @@ int bn_mul_mont(BN_ULONG *rp, const BN_ULONG *ap, const BN_ULONG *bp,
 }
 #  endif                        /* OPENSSL_BN_ASM_MONT */
 # endif
+
+#endif	/* pcg */
 
 #endif                          /* !BN_MUL_COMBA */
 

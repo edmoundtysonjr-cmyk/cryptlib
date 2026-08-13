@@ -94,7 +94,16 @@ static int readInteger( INOUT_PTR STREAM *stream,
 	   Before we do the general length check we perform a more specific 
 	   check for the case where the length is below the minimum allowed but 
 	   still looks at least vaguely valid, in which case we report it as a 
-	   too-short key rather than a bad data error. 
+	   too-short key rather than a bad data error.  The initial check here 
+	   is for:
+						   isShortXKey()
+							|<----->|
+		+-------------------+-------+-----------------------+
+		|		BADDATA		| NOSEC	|			OK			|
+		+-------------------+-------+-----------------------+
+									^
+									|
+							  MIN_PKCSIZE_xxx
 	   
 	   Following this we make sure that it's within range, with a 2-byte 
 	   allowance for extra zero-padding (the exact length will be checked 
@@ -255,7 +264,8 @@ int readUint32( INOUT_PTR STREAM *stream )
 	status = sread( stream, buffer, UINT32_SIZE );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( buffer[ 0 ] & 0x80 )
+	if( buffer[ 0 ] & 0x80 || \
+		checkOverflowShift( byteToInt( buffer[ 0 ] ), 24 ) )
 		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 	value = ( byteToInt( buffer[ 0 ] ) << 24 ) | \
 			( byteToInt( buffer[ 1 ] ) << 16 ) | \
@@ -298,7 +308,9 @@ int readUint32Time( INOUT_PTR STREAM *stream,
 			( ( ( time_t ) buffer[ 2 ] ) << 8 ) | \
 				( time_t ) buffer[ 3 ];
 #else
-	if( sizeof( time_t ) <= 4 && ( buffer[ 0 ] & 0x80 ) )
+	if( sizeof( time_t ) <= 4 && \
+		( ( buffer[ 0 ] & 0x80 ) || \
+		  checkOverflowShift( byteToInt( buffer[ 0 ] ), 24 ) ) )
 		{
 		/* High bit set, we can't try and read the value into a time_t */
 		assert( DEBUG_WARN );
@@ -389,6 +401,14 @@ static int readData32( INOUT_PTR STREAM *stream,
 			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 		if( includeLengthField )
 			{
+			/* We currently never get here because the only caller that sets
+			   includeLengthField is readRawObject32() which also sets
+			   zeroLengthOK to FALSE, this code is present only in case of
+			   a future change that requires it so we warn if it's
+			   triggered */
+			DEBUG_DIAG(( "Attempted to read zero-length value including the "
+						 "length field" ));
+			assert( DEBUG_WARN );
 			if( dataMaxLength < UINT32_SIZE )
 				return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 			memset( data, 0, UINT32_SIZE );
@@ -628,15 +648,8 @@ static int readBignumInteger( INOUT_PTR STREAM *stream,
 	   parameter for both readInteger() and importBignum(), since the 
 	   former merely checks the byte count while the latter actually parses 
 	   and processes the bignum */
-#if defined( USE_X25519 ) || defined( USE_ED25519 )
-	if( checkType == BIGNUM_CHECK_VALUE_FIXEDLEN )
-		status = import25519ByteString( bignum, buffer, length );
-	else
-#endif /* USE_X25519 || USE_ED25519 */
-		{
-		status = importBignum( bignum, buffer, length, minLength, maxLength, 
-							   maxRange, checkType );
-		}
+	status = importBignum( bignum, buffer, length, minLength, maxLength, 
+						   maxRange, checkType );
 	if( cryptStatusError( status ) )
 		status = sSetError( stream, status );
 	zeroise( buffer, CRYPT_MAX_PKCSIZE );
@@ -825,8 +838,47 @@ static int writeInteger( INOUT_PTR STREAM *stream,
 			break;
 
 		case LENGTH_16U_BITS:
-			status = writeUint16( stream, bytesToBits( length ) );
+			/* For digital ancestor-worship compatibility with how PGP 1.0 
+			   handled MPIs internally (see init_bitsniffer() from 1986), 
+			   MPI lengths are encoded as bits even though the MPIs 
+			   themselves are represented as byte strings.  This was handled 
+			   as 'bitLength = byteLength * 8', however RFC 9580 added the 
+			   requirement (section 3.2) that "in a version 6 Key, Signature, 
+			   or Public Key Encrypted Session Key (PKESK) packet [...] the 
+			   implementation MUST check that the encoded length matches the 
+			   length starting from the most significant non-zero bit; if it 
+			   doesn't match, reject the packet as malformed".  This was 
+			   added to allow re-encoding of signed data and have the 
+			   signature still verify, which doesn't work but trying to 
+			   canonicalize length encodings makes it less obvious that it 
+			   doesn't work.
+			   
+			   To deal with this, we have to dig down into the encoded data 
+			   and count how many bits are unused and adjust the length by 
+			   that.  When writing bignums, for example for public/private
+			   keys, this isn't a problem since writeBignumInteger16U() has
+			   a seperate special-snowflake code path for this, it's only 
+			   when writing already-encoded values for signatures or PKC-
+			   encrypted session keys that this becomes an issue */
+			{
+			const int topByte = byteToInt( intPtr[ 0 ] );
+			int mask = 0x80, bitPos;
+
+			REQUIRES_S( topByte != 0 );			
+			LOOP_SMALL_REV( bitPos = 8, bitPos > 0, ( mask >>=1, bitPos-- ) )
+				{
+				ENSURES_S( LOOP_INVARIANT_REV( bitPos, 1, 8 ) );
+				
+				if( topByte & mask )
+					break;
+				}
+			ENSURES_S( LOOP_BOUND_SMALL_REV_OK );
+			ENSURES_S( rangeCheck( bitPos, 1, 8 ) );
+
+			status = writeUint16( stream, 
+								  bytesToBits( length ) - ( 8 - bitPos ) );
 			break;
+			}
 
 		case LENGTH_32:
 			{
@@ -909,24 +961,7 @@ static int writeBignumInteger( INOUT_PTR STREAM *stream,
 	status = exportBignum( buffer, CRYPT_MAX_PKCSIZE, &bnLength, bignum );
 	ENSURES_S( cryptStatusOK( status ) );
 	ENSURES_S( bnLength > 0 && bnLength <= CRYPT_MAX_PKCSIZE );
-	if( lengthType == LENGTH_16U_BITS )
-		{
-		int bitCount;
-
-		/* We can't call down to writeInteger() from here because we need to 
-		   write a precise length in bits rather than a value reconstructed 
-		   from the byte count.  This also means that we can't easily 
-		   perform the leading-zero truncation that writeInteger() does 
-		   without a lot of low-level fiddling that duplicates code in
-		   writeInteger() */
-		status = bitCount = BN_num_bits( bignum );
-		if( cryptStatusError( status ) )
-			return( status );
-		writeUint16( stream, bitCount );
-		status = swrite( stream, buffer, bnLength );
-		}
-	else
-		status = writeInteger( stream, buffer, bnLength, lengthType );
+	status = writeInteger( stream, buffer, bnLength, lengthType );
 	zeroise( buffer, CRYPT_MAX_PKCSIZE );
 	return( status );
 	}

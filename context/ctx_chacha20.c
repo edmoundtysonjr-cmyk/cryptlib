@@ -358,7 +358,7 @@ static int selfTest( void )
 /* Return context subtype-specific information */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type, 
+static int getInfo( IN_ENUM( CONTEXT_INFO ) const CONTEXT_INFO_TYPE type, 
 					INOUT_PTR_OPT CONTEXT_INFO *contextInfoPtr,
 					OUT_PTR void *data, 
 					IN_INT_Z const int length )
@@ -370,20 +370,20 @@ static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type,
 	assert( ( length == 0 && isWritePtr( data, sizeof( int ) ) ) || \
 			( length > 0 && isWritePtrDynamic( data, length ) ) );
 
-	REQUIRES( isEnumRange( type, CAPABILITY_INFO ) );
+	REQUIRES( isEnumRange( type, CONTEXT_INFO ) );
 	REQUIRES( ( contextInfoPtr == NULL ) || \
 			  sanityCheckContext( contextInfoPtr ) );
 
 	switch( type )
 		{
-		case CAPABILITY_INFO_STATESIZE:
+		case CONTEXT_INFO_STATESIZE:
 			{
 			*valuePtr = CHACHA20_STATE_SIZE;
 
 			return( CRYPT_OK );
 			}
 
-		case CAPABILITY_INFO_STATEALIGNTYPE:
+		case CONTEXT_INFO_STATEALIGNTYPE:
 			{
 			/* The ChaCha20 code requires alignment to 128-bit boundaries */
 			*valuePtr = bitsToBytes( 128 );
@@ -419,8 +419,8 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					  INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					  IN_LENGTH int noBytes )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
-	CHACHA20_STATE *stateInfo = convInfo->key;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	CHACHA20_STATE *stateInfo;
 	static const BYTE zeroes[ CHACHA20_BLOCK_SIZE ] = { 0 };
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -428,6 +428,11 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRangeNZ( noBytes ) );
+	REQUIRES( convInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	stateInfo = convInfo->key;
 
 	/* We're about to modify the keying data, make sure that it's still 
 	   valid before we start */
@@ -531,13 +536,14 @@ static int initParams( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					   IN_PTR_OPT const void *data, 
 					   IN_INT const int dataLength )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	const BYTE *dataPtr = data;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( contextInfoPtr->type == CONTEXT_CONV );
 	REQUIRES( isEnumRange( paramType, KEYPARAM ) );
+	REQUIRES( convInfo != NULL );
 
 	if( paramType == KEYPARAM_IV )
 		{
@@ -591,14 +597,19 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					IN_BUFFER( keyLength ) const void *key, 
 					IN_LENGTH_SHORT const int keyLength )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
-	CHACHA20_STATE *stateInfo = convInfo->key;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	CHACHA20_STATE *stateInfo;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isReadPtrDynamic( key, keyLength ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( keyLength == CHACHA20_KEY_SIZE );
+	REQUIRES( convInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	stateInfo = convInfo->key;
 
 	/* Copy the key to internal storage */
 	if( convInfo->userKey != key )

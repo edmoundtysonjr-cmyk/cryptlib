@@ -314,10 +314,7 @@ static int checkCertUsage( INOUT_PTR CERT_INFO *certInfoPtr,
 
 		case MESSAGE_CHECK_PKC_SIGCHECK_CA:
 		case MESSAGE_CHECK_PKC_SIGCHECK_CA_AVAIL:
-			/* See comment above for the check of KEYUSAGE_CA.  
-			   MESSAGE_CHECK_CACERT_FINAL is a special-case version of 
-			   MESSAGE_CHECK_PKC_SIGN/SIGCHECK_CA that's used internally by
-			   the kernel */
+			/* See comment above for the check of KEYUSAGE_CA */
 			keyUsageValue = KEYUSAGE_CA;
 			checkKeyFlag = CHECKKEY_FLAG_CA;
 			break;
@@ -419,7 +416,7 @@ static int checkCertUsage( INOUT_PTR CERT_INFO *certInfoPtr,
 
 /* Export the certificate's data contents in ASN.1-encoded form */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 5 ) ) \
 static int exportCertData( CERT_INFO *certInfoPtr, 
 						   IN_ENUM( CRYPT_CERTFORMAT ) \
 							const CRYPT_CERTFORMAT_TYPE certFormat,
@@ -464,11 +461,11 @@ static int exportCertData( CERT_INFO *certInfoPtr,
 		status = writeCertFunction( &stream, certInfoPtr, NULL, 
 									CRYPT_UNUSED );
 		if( cryptStatusOK( status ) )
-			*certDataLength = stell( &stream );
+			status = *certDataLength = stell( &stream );
 		sMemDisconnect( &stream );
 
-		return( status );
-		}
+		return( cryptStatusError( status ) ? status : CRYPT_OK );
+		}		/* Can be a length value from stell() */
 
 	/* Some objects aren't signed or are pseudo-signed or optionally signed 
 	   and have to be handled specially.  RTCS requests and responses are 
@@ -608,6 +605,11 @@ int iCryptVerifyID( IN_HANDLE const CRYPT_CERTIFICATE iCertificate,
 	REQUIRES( isEnumRange( keyIDtype, CRYPT_KEYID ) );
 	REQUIRES( isShortIntegerRangeMin( keyIDlength, 
 						min( MIN_ID_LENGTH, MIN_NAME_LENGTH ) ) );
+			  /* This is just a general validity check rather than a 
+			     keyIDtype-type specific one, the caller will pass us the
+			     appropriate length - there are many call chains that 
+			     eventually lead here so we'd have to check all the way
+			     back up each one if we were checking at this level */
 
 	switch( keyIDtype )
 		{
@@ -769,21 +771,7 @@ static int processCertAttribute( INOUT_PTR CERT_INFO *certInfoPtr,
 	if( message == MESSAGE_SETATTRIBUTE )
 		{
 		const int value = *valuePtr;
-		BOOLEAN validCursorPosition;
 		
-		if( certInfoPtr->type == CRYPT_CERTTYPE_CMS_ATTRIBUTES )
-			{
-			validCursorPosition = \
-				( attribute >= CRYPT_CERTINFO_FIRST_CMS && \
-				  attribute <= CRYPT_CERTINFO_LAST_CMS ) ? TRUE : FALSE;
-			}
-		else
-			{
-			validCursorPosition = \
-				( attribute >= CRYPT_CERTINFO_FIRST_EXTENSION && \
-				  attribute <= CRYPT_CERTINFO_LAST_EXTENSION ) ? TRUE : FALSE;
-			}
-
 		/* If it's a completed certificate we can only add a restricted 
 		   class of component selection control values to the object.  We
 		   don't use continuation characters for the more complex isXYZ()
@@ -811,12 +799,24 @@ static int processCertAttribute( INOUT_PTR CERT_INFO *certInfoPtr,
 		if( attribute == CRYPT_IATTRIBUTE_INITIALISED )
 			return( CRYPT_OK );
 
-		/* If the passed-in value is a cursor-positioning code, make sure 
-		   that it's valid */
-		if( value < 0 && value != CRYPT_UNUSED && \
-			( value > CRYPT_CURSOR_FIRST || value < CRYPT_CURSOR_LAST ) &&
-			!validCursorPosition && attribute != CRYPT_CERTINFO_SELFSIGNED )
-			return( CRYPT_ARGERROR_NUM1 );
+		/* If the passed-in value should be a cursor-positioning code, make 
+		   sure that it's valid.  Most of the checking has already been done
+		   by the kernel (see the long comment in kernel/attr_acl.c for the
+		   allowedCertCursorSubranges[] and allowedCertCursorSubrangesEx[]
+		   tables) but the kernel isn't aware of certificate object subtype-
+		   specific ranges, so for CMS attribute objects we only allow 
+		   positioning to CMS attributes */
+		if( attribute == CRYPT_CERTINFO_CURRENT_CERTIFICATE || \
+			attribute == CRYPT_ATTRIBUTE_CURRENT_GROUP || \
+			attribute == CRYPT_ATTRIBUTE_CURRENT || \
+			attribute == CRYPT_ATTRIBUTE_CURRENT_INSTANCE )
+			{
+			if( certInfoPtr->type == CRYPT_CERTTYPE_CMS_ATTRIBUTES && \
+				value > 0 && \
+				( value < CRYPT_CERTINFO_FIRST_CMS || \
+				  value > CRYPT_CERTINFO_LAST_CMS ) )
+				return( CRYPT_ARGERROR_NUM1 );
+			}
 
 		return( addCertComponent( certInfoPtr, attribute, value ) );
 		}
@@ -989,14 +989,12 @@ static int certificateMessageFunction( INOUT_PTR TYPECAST( CERT_INFO * ) \
 			certInfoPtr->cCertCert->chainEnd > 0 )
 			{
 			LOOP_INDEX i;
+			const int chainEnd = certInfoPtr->cCertCert->chainEnd;
 
-			ENSURES( certInfoPtr->cCertCert->chainEnd >= 0 && \
-					 certInfoPtr->cCertCert->chainEnd < MAX_CHAINLENGTH );
-			LOOP_EXT( i = 0, i < certInfoPtr->cCertCert->chainEnd, i++, 
-					  MAX_CHAINLENGTH )
+			ENSURES( chainEnd >= 0 && chainEnd < MAX_CHAINLENGTH );
+			LOOP_EXT( i = 0, i < chainEnd, i++, MAX_CHAINLENGTH )
 				{
-				ENSURES( LOOP_INVARIANT_EXT( i, 0, \
-											 certInfoPtr->cCertCert->chainEnd - 1,
+				ENSURES( LOOP_INVARIANT_EXT( i, 0, chainEnd - 1,
 											 MAX_CHAINLENGTH ) );
 				krnlSendNotifier( certInfoPtr->cCertCert->chain[ i ],
 								  IMESSAGE_DECREFCOUNT );
@@ -1348,7 +1346,7 @@ int createCertificateInfo( OUT_PTR_PTR_COND CERT_INFO **certInfoPtrPtr,
 			DATAPTR_SET( certInfoPtr->cCertVal->validityInfo, NULL );
 			DATAPTR_SET( certInfoPtr->cCertVal->currentValidity, NULL );
 			break;
-#endif /* USE_CERTREV */
+#endif /* USE_CERTVAL */
 
 #ifdef USE_PKIUSER
 		case CRYPT_CERTTYPE_PKIUSER:
@@ -1506,10 +1504,19 @@ int certManagementFunction( IN_ENUM( MANAGEMENT_ACTION ) \
 #if !defined( CONFIG_CONSERVE_MEMORY_EXTRA ) && !defined( CONFIG_FUZZ )
 			if( !sanityCheckExtensionTables() )
 				{
-				DEBUG_DIAG(( "Certificate class initialisation failed" ));
+				DEBUG_DIAG(( "Certificate class initialisation failed: "
+							 "Extension tables" ));
 				retIntError();
 				}
-#endif /* !( CONFIG_CONSERVE_MEMORY_EXTRA || CONFIG_FUZZ ) */
+  #ifdef USE_CERTLEVEL_PKIX_FULL
+			if( !checkNameMatch() )
+				{
+				DEBUG_DIAG(( "Certificate class initialisation failed: "
+							 "Name matching" ));
+				retIntError();
+				}
+   #endif /* USE_CERTLEVEL_PKIX_FULL */
+#endif /* !CONFIG_CONSERVE_MEMORY_EXTRA && !CONFIG_FUZZ */
 			initAttributes();
 			return( CRYPT_OK );
 		}
@@ -1609,10 +1616,11 @@ C_RET cryptGetCertExtension( C_IN CRYPT_CERTIFICATE certificate,
 		certInfoPtr->cCertCert->chainPos >= 0 )
 		{
 		CERT_INFO *certChainInfoPtr;
+		const int chainPos = certInfoPtr->cCertCert->chainPos;
 
-		ENSURES( certInfoPtr->cCertCert->chainPos >= 0 && \
-				 certInfoPtr->cCertCert->chainPos < MAX_CHAINLENGTH );
-		status = krnlAcquireObject( certInfoPtr->cCertCert->chain[ certInfoPtr->cCertCert->chainPos ], 
+		ENSURES_OBJECT( chainPos >= 0 && chainPos < MAX_CHAINLENGTH,
+						certInfoPtr->objectHandle );
+		status = krnlAcquireObject( certInfoPtr->cCertCert->chain[ chainPos ], 
 									OBJECT_TYPE_CERTIFICATE, 
 									( MESSAGE_PTR_CAST ) &certChainInfoPtr, 
 									CRYPT_ERROR_PARAM1 );
@@ -1675,7 +1683,9 @@ C_RET cryptAddCertExtension( C_IN CRYPT_CERTIFICATE certificate,
 	if( oidLen < MIN_ASCII_OIDSIZE || oidLen > CRYPT_MAX_TEXTSIZE )
 		return( CRYPT_ERROR_PARAM2 );
 #ifdef EBCDIC_CHARS
-	strlcpy_s( asciiOID, CRYPT_MAX_TEXTSIZE, oid );
+	status = strlcpy_s( asciiOID, CRYPT_MAX_TEXTSIZE, oid );
+	if( cryptStatusError( status ) )
+		return( CRYPT_ERROR_PARAM2 );
 	ebcdicToAscii( asciiOID, asciiOID, oidLen );
 	if( cryptStatusError( textToOID( asciiOID, 
 									 strnlen_s( asciiOID, CRYPT_MAX_TEXTSIZE ), 
@@ -1749,6 +1759,7 @@ C_RET cryptDeleteCertExtension( C_IN CRYPT_CERTIFICATE certificate,
 	{
 	CERT_INFO *certInfoPtr;
 	DATAPTR_ATTRIBUTE attributePtr;
+	DATAPTR_DN dnDummy;
 	BYTE binaryOID[ MAX_OID_SIZE + 8 ];
 #ifdef EBCDIC_CHARS
 	char asciiOID[ CRYPT_MAX_TEXTSIZE + 1 + 8 ];
@@ -1764,7 +1775,9 @@ C_RET cryptDeleteCertExtension( C_IN CRYPT_CERTIFICATE certificate,
 	if( oidLen < MIN_ASCII_OIDSIZE || oidLen > CRYPT_MAX_TEXTSIZE )
 		return( CRYPT_ERROR_PARAM2 );
 #ifdef EBCDIC_CHARS
-	strlcpy_s( asciiOID, CRYPT_MAX_TEXTSIZE, oid );
+	status = strlcpy_s( asciiOID, CRYPT_MAX_TEXTSIZE, oid );
+	if( cryptStatusError( status ) )
+		return( CRYPT_ERROR_PARAM2 );
 	ebcdicToAscii( asciiOID, asciiOID, 
 				   strnlen_s( asciiOID, CRYPT_MAX_TEXTSIZE ) );
 	if( cryptStatusError( textToOID( asciiOID, 
@@ -1812,21 +1825,21 @@ C_RET cryptDeleteCertExtension( C_IN CRYPT_CERTIFICATE certificate,
 	attributePtr = findAttributeByOID( certInfoPtr->attributes, 
 									   binaryOID, binaryOidLen );
 	if( DATAPTR_ISNULL( attributePtr ) )
-		status = CRYPT_ERROR_NOTFOUND;
-	else
 		{
-		DATAPTR_DN dnDummy;
-
-		/* Since a blob attribute doesn't have any internal structure,
-		   there's no possibility of a DN being associated with it, so we
-		   pass in a dummy null DN reference */
-		DATAPTR_SET( dnDummy, NULL );
-		( void ) deleteAttribute( &certInfoPtr->attributes, 
-								  &certInfoPtr->attributeCursor, 
-								  attributePtr, &dnDummy );
+		krnlReleaseObject( certInfoPtr->objectHandle );
+		return( CRYPT_ERROR_NOTFOUND );
 		}
+
+	/* Since a blob attribute doesn't have any internal structure, there's 
+	   no possibility of a DN being associated with it, so we pass in a 
+	   dummy null DN reference */
+	DATAPTR_SET( dnDummy, NULL );
+	( void ) deleteAttribute( &certInfoPtr->attributes, 
+							  &certInfoPtr->attributeCursor, 
+							  attributePtr, &dnDummy );
 	krnlReleaseObject( certInfoPtr->objectHandle );
-	return( status );
+
+	return( CRYPT_OK );
 	}
 
 #elif defined( USE_PSEUDOCERTIFICATES )

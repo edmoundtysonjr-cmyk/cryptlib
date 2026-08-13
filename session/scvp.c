@@ -5,6 +5,10 @@
 *																			*
 ****************************************************************************/
 
+/* There are no known public implementations of the SCVP protocol.  Unless
+   you have very good reasons to use it, be aware that this is almost 
+   certainly not something that you should be using */
+
 #if defined( INC_ALL )
   #include "crypt.h"
   #include "asn1.h"

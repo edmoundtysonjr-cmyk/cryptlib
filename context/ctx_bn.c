@@ -34,8 +34,9 @@ static int bnCtxMaxIndex = 28;
 
 /* If we're not using dynamically-allocated bignums then we need to convert 
    the bn_expand() macros that are used throughout the bignum code into 
-   no-ops.  The following value represents a non-null location that can be
-   used in the bn_expand() macros */
+   no-ops.  The following value represents dummy non-null location that can 
+   be used in the bn_expand() macros.  It's not used for anything except to 
+   provide a dummy address for the macro to refer to */
 
 #ifndef BN_ALLOC
 int nonNullAddress;
@@ -96,12 +97,20 @@ BOOLEAN sanityCheckBignum( const BIGNUM *bignum )
 		return( FALSE );
 	if( bignum->flags < BN_FLG_NONE || bignum->flags > BN_FLG_MAX )
 		return( FALSE );
-#ifndef NDEBUG
 	if( !( bignum->flags & BN_FLG_SCRATCH ) )
 		{
 		const int bnMaxSize = getBNMaxSize( bignum );
+#ifndef NDEBUG
 		LOOP_INDEX i;
+#endif /* Debug mode */
 
+		/* Make sure that the bignum is normalised, in other words that it 
+		   ends at the top word, or at least that at least one zero word 
+		   follows the top one since the full check is expensive */
+		if( ( bignum->top >= 1 && bignum->d[ bignum->top - 1 ] == 0 ) || \
+			( bignum->top < bnMaxSize && bignum->d[ bignum->top ] != 0 ) )
+			return( FALSE );
+#ifndef NDEBUG
 		/* The loop bound is set at bnMaxSize + 1 because we may be checking
 		   all-zero bignums for which we iterate through every item in the
 		   array */
@@ -113,8 +122,8 @@ BOOLEAN sanityCheckBignum( const BIGNUM *bignum )
 			assert( bignum->d[ i ] == 0 );
 			}
 		ENSURES_B( LOOP_BOUND_OK );
-		}
 #endif /* Debug mode */
+		}
 
 	return( TRUE );
 	}
@@ -155,7 +164,7 @@ BOOLEAN sanityCheckBNMontCTX( const BN_MONT_CTX *bnMontCTX )
 
 /* Allocate/initialise/clear/free bignums.  The original OpenSSL bignum code 
    allocates storage on-demand, which results in both lots of kludgery to 
-   deal with array bounds and buffer sizes moving around, and huge numbers 
+   deal with array bounds and buffer sizes moving around and huge numbers 
    of memory-allocation/reallocation calls as bignum data sizes creep slowly 
    upwards until some sort of steady state is reached, whereupon the bignum 
    is destroyed and a new one allocated and the whole cycle begins anew.
@@ -175,7 +184,16 @@ void BN_clear( INOUT_PTR BIGNUM *bignum )
 	{
 	assert( isWritePtr( bignum, sizeof( BIGNUM ) ) );
 
-	REQUIRES_V( sanityCheckBignum( bignum ) );
+	/* We can end up here with bignums that don't pass a sanity check, 
+	   either because they're in an error path and in an inconsistent state
+	   or because of data corruption.  This means that we can't rely on
+	   their contents to tell us what to do, but we can still at least 
+	   zeroise them */
+	if( !sanityCheckBignum( bignum ) )
+		{
+		memset( bignum, 0, sizeof( BIGNUM ) );
+		return;
+		}
 
 	if( !( bignum->flags & BN_FLG_STATIC_DATA ) )
 		{
@@ -244,10 +262,93 @@ void BN_free( INOUT_PTR BIGNUM *bignum )
 	
 	assert( isWritePtr( bignum, sizeof( BIGNUM ) ) );
 
+	/* We can end up here with bignums that don't pass a sanity check, 
+	   either because they're in an error path and in an inconsistent state
+	   or because of data corruption.  This means that we can't free them
+	   because they may not be malloc()'d memory (most bignums are 
+	   statically allocated anyway), but we can at least clear them */
+	if( !sanityCheckBignum( bignum ) )
+		{
+		BN_clear( bignum );
+		return;
+		} 
+
 	BN_clear( bignum );
 	if( flags & BN_FLG_MALLOCED )
 		clFree( "BN_free", bignum );
 	}
+
+#if defined( USE_ECDH ) || defined( USE_ECDSA )
+
+STDC_NONNULL_ARG( ( 1, 2 ) ) \
+void EC_POINT_init( INOUT_PTR EC_POINT *ecPoint, 
+					IN_PTR const EC_GROUP *ecGroup )
+	{
+	assert( isWritePtr( ecPoint, sizeof( EC_POINT ) ) );
+	assert( isReadPtr( ecGroup, sizeof( EC_GROUP ) ) );
+
+	memset( ecPoint, 0, sizeof( EC_POINT ) );
+	ecPoint->meth = ecGroup->meth;
+	ENSURES_V( ecPoint->meth != NULL && \
+			   ecPoint->meth->point_init != NULL );
+	ecPoint->meth->point_init( ecPoint ); 
+	}
+
+STDC_NONNULL_ARG( ( 1 ) ) \
+void EC_POINT_clear( EC_POINT *ecPoint )
+	{
+	assert( isWritePtr( ecPoint, sizeof( EC_POINT ) ) );
+
+	if( ecPoint->meth != NULL && \
+		ecPoint->meth->point_finish != NULL )
+		ecPoint->meth->point_finish( ecPoint );
+	memset( ecPoint, 0, sizeof( EC_POINT ) );
+	}
+
+STDC_NONNULL_ARG( ( 1, 2 ) ) \
+void EC_GROUP_init( INOUT_PTR EC_GROUP *ecGroup, 
+					IN_PTR const EC_METHOD *ecMethod )
+	{
+	assert( isWritePtr( ecGroup, sizeof( EC_GROUP ) ) );
+	assert( isReadPtr( ecMethod, sizeof( EC_METHOD ) ) );
+
+	memset( ecGroup, 0, sizeof( EC_GROUP ) );
+	ecGroup->meth = ecMethod;
+	BN_init( &ecGroup->order );
+	BN_init( &ecGroup->cofactor );
+	ENSURES_V( ecMethod->group_init != NULL );
+	ecMethod->group_init( ecGroup );
+	}
+	
+STDC_NONNULL_ARG( ( 1 ) ) \
+void EC_GROUP_clear( INOUT_PTR EC_GROUP *ecGroup )
+	{
+	assert( isWritePtr( ecGroup, sizeof( EC_GROUP ) ) );
+
+	if( ecGroup->meth != NULL && \
+		ecGroup->meth->group_finish != NULL )
+		ecGroup->meth->group_finish( ecGroup );
+	EC_EX_DATA_free_all_data( &ecGroup->extra_data );
+	if( EC_GROUP_VERSION( ecGroup ) && ecGroup->mont_data != NULL )
+		{
+		BN_MONT_CTX_free( ecGroup->mont_data );
+		ecGroup->mont_data = NULL;
+		}
+	if( ecGroup->generator != NULL )
+		{
+		EC_POINT_free( ecGroup->generator );
+		ecGroup->generator = NULL;
+		}
+	BN_free( &ecGroup->order );
+	BN_free( &ecGroup->cofactor );
+	if( ecGroup->seed != NULL )
+		{
+		OPENSSL_free( ecGroup->seed );
+		ecGroup->seed = NULL;
+		}
+	memset( ecGroup, 0, sizeof( EC_GROUP ) );
+	}
+#endif /* USE_ECDH || USE_ECDSA */
 
 /* Duplicate, swap bignums */
 
@@ -281,6 +382,7 @@ BIGNUM *BN_copy( INOUT_PTR BIGNUM *destBignum,
 	REQUIRES_N( destBignum != srcBignum );
 	REQUIRES_N( sanityCheckBignum( destBignum ) );
 	REQUIRES_N( sanityCheckBignum( srcBignum ) );
+	REQUIRES_N( !( destBignum->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_N( getBNMaxSize( destBignum ) >= srcBignum->top );
 
 	/* Clear out the destination bignum, a general sanitation measure in 
@@ -334,6 +436,93 @@ void BN_swap( INOUT_PTR BIGNUM *bignum1, INOUT_PTR BIGNUM *bignum2 )
 	BN_clear( &tmp );
 
 	ENSURES_V( bnStatusOK( bnStatus ) );
+	}
+
+/* A constant-time version of the above.  We can either use an incredibly 
+   complicated Rube-Goldberg kludge or perform a dummy set of operations 
+   that take about the same time as the atual swap.  This isn't absolutely
+   constant-time but the few extra cycles are buried in the noise of the
+   other operations, and it's only called a single time from the even
+   noisier EC multiply code bn/ec_mult.c:ec_mul_consttime().  Timing tests 
+   indicate no measurable difference across the two, and indeed no
+   measurable difference whether it's a const-time swap or not */
+
+#if defined( USE_ECDSA ) || defined( USE_ECDH )
+
+STDC_NONNULL_ARG( ( 1, 2 ) ) \
+void BN_consttime_swap( const BN_ULONG condition, 
+						INOUT_PTR BIGNUM *bignum1, 
+						INOUT_PTR BIGNUM *bignum2, 
+						STDC_UNUSED const int nwords )
+	{
+	BIGNUM tmp;
+	int bnStatus = BN_STATUS;
+
+	assert( isWritePtr( bignum1, sizeof( BIGNUM ) ) );
+	assert( isWritePtr( bignum2, sizeof( BIGNUM ) ) );
+
+	/* If we're doing the swap, pass the call on to the actual function */
+	if( condition )
+		{
+		BN_swap( bignum1, bignum2 );
+		return;
+		}
+
+	/* We're not doing the swap, perform the equivalent dummy operations:
+	   bignum1 copied twice, bignum1 copied once, but in any case since 
+	   they're always of the same size we're down to dealing with things 
+	   like cache latency for the read */
+	REQUIRES_V( bignum1 != bignum2 );
+	REQUIRES_V( !( bignum1->flags & ( BN_FLG_STATIC_DATA | \
+									  BN_FLG_ALLOC_EXT | \
+									  BN_FLG_ALLOC_EXT2 ) ) );
+	REQUIRES_V( !( bignum2->flags & ( BN_FLG_STATIC_DATA | \
+									  BN_FLG_ALLOC_EXT | \
+									  BN_FLG_ALLOC_EXT2 ) ) );
+
+	BN_init( &tmp );
+	CKPTR( BN_copy( &tmp, bignum1 ) );
+	CKPTR( BN_copy( &tmp, bignum2 ) );
+	CKPTR( BN_copy( &tmp, bignum1 ) );
+	BN_clear( &tmp );
+
+	ENSURES_V( bnStatusOK( bnStatus ) );
+	}
+#endif /* USE_ECDSA || USE_ECDH */
+
+/* Get a copy of a bignum with different flags from the original, used for 
+   constant-time ops in BN_mod_inverse_no_branch() to create a read-only 
+   copy of a bignum that's processed using a constant-time algorithm.  This 
+   really shouldn't be called BN_with_flags() but it's necessary for 
+   compatibility with the OpenSSL original.
+   
+   This is only called from two locations in BN_mod_inverse_no_branch() with
+   fixed parameters (destBignum = BN_clear()d, flags = BN_FLG_CONSTTIME) so 
+   we can make certain assumptions about how it'll be used in the checks 
+   below */
+
+CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1, 2 ) ) \
+BIGNUM *BN_with_flags( INOUT_PTR BIGNUM *destBignum, 
+					   IN_PTR const BIGNUM *srcBignum,
+					   const int flags )
+	{
+	assert( isWritePtr( destBignum, sizeof( BIGNUM ) ) );
+	assert( isReadPtr( srcBignum, sizeof( BIGNUM ) ) );
+
+	REQUIRES_N( destBignum != srcBignum );
+	REQUIRES_N( sanityCheckBignum( destBignum ) );
+	REQUIRES_N( sanityCheckBignum( srcBignum ) );
+	REQUIRES_N( destBignum->flags == 0 );
+	REQUIRES_N( getBNMaxSize( destBignum ) == getBNMaxSize( srcBignum ) );
+	REQUIRES_N( flags == BN_FLG_CONSTTIME );
+	
+	if( !BN_copy( destBignum, srcBignum ) )
+		return( NULL );
+	destBignum->flags = flags;
+
+	ENSURES_B( sanityCheckBignum( destBignum ) );
+
+	return( destBignum );
 	}
 
 /* Get a bignum with the value 1 */
@@ -445,7 +634,7 @@ int BN_num_bits( const BIGNUM *bignum )
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN BN_set_bit( INOUT_PTR BIGNUM *bignum, 
-					IN_RANGE( 0, bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
+					IN_RANGE( 0, bytesToBits( CRYPT_MAX_PKCSIZE * 2 ) ) \
 						int bitNo )
 	{
 	const int wordIndex = bitNo / BN_BITS2;
@@ -483,7 +672,8 @@ BOOLEAN BN_set_bit( INOUT_PTR BIGNUM *bignum,
 		bignum->top = wordIndex + 1;
 		}
 
-	/* Set the appropriate bit location */
+	/* Set the appropriate bit location.  Since we're dealing with a 
+	   BN_ULONG here checkOverflowShift() isn't useful */
 	bignum->d[ wordIndex ] |= ( BN_ULONG ) 1 << bitIndex;
 
 	ENSURES_B( sanityCheckBignum( bignum ) );
@@ -514,6 +704,8 @@ BOOLEAN BN_is_bit_set( const BIGNUM *bignum, /* See comment */ int bitNo )
 	if( wordIndex >= bignum->top )
 		return( 0 );
 
+	/* Since we're dealing with a BN_ULONG here checkOverflowShift() isn't 
+	   useful */
 	return( ( bignum->d[ wordIndex ] & ( ( BN_ULONG ) 1 << bitIndex ) ) ? \
 			TRUE : FALSE );
 	}
@@ -545,13 +737,15 @@ BOOLEAN BN_high_bit( const BIGNUM *bignum )
    OpenSSL code, which manipulates the sign value directly */
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-void BN_set_negative( INOUT_PTR BIGNUM *bignum, const int value )
+void BN_set_negative( INOUT_PTR BIGNUM *bignum, const int isNegative )
 	{
 	assert( isWritePtr( bignum, sizeof( BIGNUM ) ) );
 
-	if( BN_is_zero( bignum ) )
-		return;
-	bignum->neg = value ? TRUE : FALSE;
+	REQUIRES_V( sanityCheckBignum( bignum ) );
+	REQUIRES_V( !( bignum->flags & BN_FLG_STATIC_DATA ) );
+	REQUIRES_V( !( BN_is_zero( bignum ) && isNegative ) );
+
+	bignum->neg = isNegative ? TRUE : FALSE;
 	}
 
 /* A bignum operation may have reduced the magnitude of the bignum value,
@@ -566,17 +760,30 @@ BOOLEAN BN_normalise( INOUT_PTR BIGNUM *bignum )
 	const int oldTop = bignum->top;
 	int LOOP_ITERATOR;
 
-	REQUIRES_B( sanityCheckBignum( bignum ) );
+	assert( isWritePtr( bignum, sizeof( BIGNUM ) ) );
 
-	/* If it's a zero-magnitude bignum then there's nothing to do */
-	if( BN_is_zero( bignum ) )
+	/* We can't call the full sanityCheckBignum() at this point because by
+	   definition it won't be normalised and so will fail the check */
+	REQUIRES_B( bignum->top >= 0 && bignum->top <= getBNMaxSize( bignum ) );
+	REQUIRES_B( !( bignum->flags & BN_FLG_STATIC_DATA ) );
+
+	/* If it's a zero-magnitude bignum then there's nothing to do.  Note 
+	   that we can't use BN_is_zero() here because the bignum is 
+	   denormalised, so bignum->top >= 1 with bignum->d all zero would be
+	   reported as a zero bignum */
+	if( bignum->top <= 0 )
+		{
+		ENSURES_B( sanityCheckBignum( bignum ) );
+
 		return( TRUE );
+		}
 
 	/* Note that the use of the unified BIGNUM type to also represent a 
 	   BIGNUM_EXT/BIGNUM_EXT2 can result in false-positive warnings from 
 	   bounds-checking applications that apply the d[] array size from a 
 	   BIGNUM to the much larger array in a BIGNUM_EXT/BIGNUM_EXT2 */
-	LOOP_EXT_REV_CHECKINC( bignum->top > 0, bignum->top--, iterationBound )
+	LOOP_EXT_REV_CHECKINC( bignum->top > 0, bignum->top--, \
+						   iterationBound )
 		{
 		ENSURES_B( LOOP_INVARIANT_REV( bignum->top, 1, oldTop ) );
 
@@ -597,37 +804,65 @@ BOOLEAN BN_normalise( INOUT_PTR BIGNUM *bignum )
    replaced by the operation being performed */
 
 RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN BN_clear_top( INOUT_PTR BIGNUM *bignum, 
-					  IN_RANGE( 0, BIGNUM_ALLOC_WORDS_EXT2 ) const int oldTop )
+static BOOLEAN clear_top( INOUT_PTR BIGNUM *bignum, 
+						  IN_RANGE( 0, BIGNUM_ALLOC_WORDS_EXT2 ) \
+								const int oldTop,
+						  IN_BOOL const BOOLEAN normalise )
 	{
 	const int iterationBound = getBNMaxSize( bignum );
 	LOOP_INDEX i;
 
 	assert( isWritePtr( bignum, sizeof( BIGNUM ) ) );
-
+	
 	/* We can't call the full sanityCheckBignum() at this point because 
 	   there's potentially leftover data beyond bignum->top, which is the 
 	   whole reason why this function is being called in the first place */
 	REQUIRES_B( bignum->top >= 0 && bignum->top <= getBNMaxSize( bignum ) );
 	REQUIRES_B( oldTop >= 0 && oldTop <= getBNMaxSize( bignum ) );
+	REQUIRES_B( !( bignum->flags & BN_FLG_STATIC_DATA ) );
+	REQUIRES_B( isBooleanValue( normalise ) );
 
 	/* If we've overwritten any previous contents, we're done */
 	if( oldTop <= bignum->top )
+		{
+		if( normalise )
+			return( BN_normalise( bignum ) );
 		return( TRUE );
+		}
 
 	/* Clear any previous bignum data content */
 	LOOP_EXT( i = bignum->top, i < oldTop, i++, iterationBound )
 		{
-		ENSURES_B( LOOP_INVARIANT_EXT( i, bignum->top, iterationBound,
+		ENSURES_B( LOOP_INVARIANT_EXT( i, bignum->top, oldTop - 1,
 									   iterationBound ) );
 
 		bignum->d[ i ] = 0;
 		}
 	ENSURES_B( LOOP_BOUND_OK );
 
+	/* If we're also normalising the value, do so now */
+	if( normalise )
+		return( BN_normalise( bignum ) );
+
 	ENSURES_B( sanityCheckBignum( bignum ) );
 
 	return( TRUE );
+	}
+
+RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
+BOOLEAN BN_clear_top( INOUT_PTR BIGNUM *bignum, 
+					  IN_RANGE( 0, BIGNUM_ALLOC_WORDS_EXT2 ) \
+							const int oldTop )
+	{
+	return( clear_top( bignum, oldTop, FALSE ) );
+	}
+
+RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
+BOOLEAN BN_clear_top_normalise( INOUT_PTR BIGNUM *bignum, 
+								IN_RANGE( 0, BIGNUM_ALLOC_WORDS_EXT2 ) \
+									const int oldTop )
+	{
+	return( clear_top( bignum, oldTop, TRUE ) );
 	}
 
 /****************************************************************************
@@ -710,7 +945,11 @@ void BN_CTX_final( INOUT_PTR BN_CTX *bnCTX )
 	{
 	assert( isWritePtr( bnCTX, sizeof( BN_CTX ) ) );
 
-	REQUIRES_V( sanityCheckBNCTX( bnCTX ) );
+	/* We perform the sanity check as an assert() rather than an ENSURES_V() 
+	   because we want to catch programming errors resulting in random 
+	   garbage being left in bignums but don't want to abort the BN_CTX 
+	   cleanup in release code due to a random bit flip */
+	assert( sanityCheckBNCTX( bnCTX ) );
 
 	/* Clear the overall BN_CTX */
 	zeroise( bnCTX, sizeof( BN_CTX ) );
@@ -734,8 +973,10 @@ void BN_CTX_start( INOUT_PTR BN_CTX *bnCTX )
 	REQUIRES_V( sanityCheckBNCTX( bnCTX ) );
 
 	/* Advance one stack frame */
+	REQUIRES_V( bnCTX->stackPos < BN_CTX_ARRAY_SIZE - 1 );
 	REQUIRES_V( !checkOverflowInc( bnCTX->stackPos ) );
 	bnCTX->stackPos++;
+	ENSURES_V( bnCTX->stackPos < BN_CTX_ARRAY_SIZE );
 	bnCTX->stack[ bnCTX->stackPos ] = bnCTX->stack[ bnCTX->stackPos - 1 ];
 
 	ENSURES_V( sanityCheckBNCTX( bnCTX ) );
@@ -750,6 +991,9 @@ void BN_CTX_end( INOUT_PTR BN_CTX *bnCTX )
 	assert( isWritePtr( bnCTX, sizeof( BN_CTX ) ) );
 
 	REQUIRES_V( sanityCheckBNCTX( bnCTX ) );
+	REQUIRES_V( bnCTX->stackPos >= 1 );
+				/* Ensure BN_CTX_start() has been called, sanityCheckBNCTX()
+				   checks for a general >= 0 but we need >= 1 to unstack */
 	REQUIRES_V( bnCTX->stack[ bnCTX->stackPos - 1 ] <= \
 						bnCTX->stack[ bnCTX->stackPos ] );
 
@@ -795,7 +1039,7 @@ CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1 ) ) \
 BIGNUM *BN_CTX_get( INOUT_PTR BN_CTX *bnCTX )
 	{
 	BIGNUM *bignum;
-	int arrayIndex = bnCTX->stack[ bnCTX->stackPos ];
+	int arrayIndex;
 
 	assert( isWritePtr( bnCTX, sizeof( BN_CTX ) ) );
 
@@ -810,7 +1054,8 @@ BIGNUM *BN_CTX_get( INOUT_PTR BN_CTX *bnCTX )
 	REQUIRES_N( sanityCheckBNCTX( bnCTX ) );
 
 	/* Get the element at the previous top-of-stack */
-	REQUIRES_N( rangeCheck( arrayIndex, 0, BN_CTX_ARRAY_SIZE - 1 ) );
+	arrayIndex = bnCTX->stack[ bnCTX->stackPos ];
+	REQUIRES_N( rangeCheck( arrayIndex, 0, BN_CTX_ARRAY_SIZE - 2 ) );
 	bignum = &bnCTX->bnArray[ arrayIndex ];
 	ENSURES_N( sanityCheckBignum( bignum ) && BN_is_zero( bignum ) );
 
@@ -820,6 +1065,8 @@ BIGNUM *BN_CTX_get( INOUT_PTR BN_CTX *bnCTX )
 	bnCTX->stack[ bnCTX->stackPos ] = arrayIndex;
 	if( arrayIndex > bnCTX->bnArrayMax )
 		{
+		/* Note that the following prints the count of entries used 
+		   (1-based), not the position of the last entry (0-based) */
 		DEBUG_PRINT_COND( arrayIndex > bnCtxMaxIndex, \
 						  ( "BN_CTX highest-used now %d of %d.\n", 
 							arrayIndex, BN_CTX_ARRAY_SIZE ) );
@@ -884,11 +1131,17 @@ void BN_CTX_end_ext( INOUT_PTR BN_CTX *bnCTX,
 	{
 	BIGNUM *bignum;
 
+	assert( isWritePtr( bnCTX, sizeof( BN_CTX ) ) );
+
 	/* Perform the standard context cleanup */
 	BN_CTX_end( bnCTX );
 
 	ENSURES_V( bnExtType == BIGNUM_EXT_MUL1 || \
 			   bnExtType == BIGNUM_EXT_MONT );
+			   /* BIGNUM_EXT_MUL1 releases both MUL1 and also MUL2 as 
+			      required - it's only used in one location in BN_mul(),
+			      and is never explicitly released by passing in
+			      BIGNUM_EXT_MUL2 since MUL1 covers both values */
 
 	/* Clear the extended-size bignums, with a check for double-frees.  In 
 	   the case of BIGNUM_EXT_MUL1 we're releasing both _MUL1 and _MUL2, but
@@ -1006,7 +1259,7 @@ BOOLEAN BN_MONT_CTX_set( INOUT_PTR BN_MONT_CTX *bnMontCTX,
 	assert( isWritePtr( bnCTX, sizeof( BN_CTX ) ) );
 
 	REQUIRES_B( sanityCheckBignum( mod ) && !BN_is_zero( mod ) && \
-				!BN_is_negative( mod ) );
+				!BN_is_negative( mod ) && BN_is_odd( mod ) );
 	REQUIRES_B( sanityCheckBNCTX( bnCTX ) );
 	REQUIRES_B( BN_cmp( &bnMontCTX->N, mod ) );	/* Ensure not already set */
 	REQUIRES_B( !cryptStatusError( modBits ) );
@@ -1028,6 +1281,8 @@ BOOLEAN BN_MONT_CTX_set( INOUT_PTR BN_MONT_CTX *bnMontCTX,
 	R = BN_CTX_get_ext( bnCTX, BIGNUM_EXT_MONT );
 	if( R == NULL )
 		{
+		/* The BN_CTX_get_ext() failed, use a standard BN_CTX_end() to clean 
+		   up */
 		BN_CTX_end( bnCTX );
 		return( FALSE );
 		}
@@ -1123,13 +1378,12 @@ BOOLEAN BN_from_montgomery( INOUT_PTR BIGNUM *ret,
 	const BIGNUM *N = &bnMontCTX->N;
 	BIGNUM *aTmpExt = NULL;
 	BN_ULONG *aData, carry = 0;
-	const int oldTop = ret->top, nLen = N->top;
-	const int iterationBound = getBNMaxSize( N );
+	const int nLen = N->top, iterationBound = getBNMaxSize( N );
 	LOOP_INDEX i;
 	int bnStatus = BN_STATUS;
 
 	assert( isWritePtr( ret, sizeof( BIGNUM ) ) );
-	assert( isReadPtr( aTmp, sizeof( BIGNUM ) ) );
+	assert( isWritePtr( aTmp, sizeof( BIGNUM ) ) );
 	assert( isReadPtr( bnMontCTX, sizeof( BN_MONT_CTX ) ) );
 	assert( isWritePtr( bnCTX, sizeof( BN_CTX ) ) );
 
@@ -1137,6 +1391,7 @@ BOOLEAN BN_from_montgomery( INOUT_PTR BIGNUM *ret,
 	REQUIRES_B( sanityCheckBignum( aTmp ) && !BN_is_zero( aTmp ) && \
 				!BN_is_negative( aTmp ) );
 	REQUIRES_B( ret != aTmp );
+	REQUIRES_B( !( ret->flags & BN_FLG_STATIC_DATA ) );
 	REQUIRES_B( sanityCheckBNMontCTX( bnMontCTX ) );
 	REQUIRES_B( sanityCheckBNCTX( bnCTX ) );
 
@@ -1146,7 +1401,14 @@ BOOLEAN BN_from_montgomery( INOUT_PTR BIGNUM *ret,
 		{
 		BN_CTX_start( bnCTX );
 		aTmpExt = BN_CTX_get_ext( bnCTX, BIGNUM_EXT_MONT );
-		if( aTmpExt == NULL || BN_copy( aTmpExt, aTmp ) == NULL )
+		if( aTmpExt == NULL )
+			{
+			/* The BN_CTX_get_ext() failed, use a standard BN_CTX_end() to 
+			   clean up */
+			BN_CTX_end( bnCTX );
+			return( FALSE );
+			}
+		if( BN_copy( aTmpExt, aTmp ) == NULL )
 			{
 			BN_CTX_end_ext( bnCTX, BIGNUM_EXT_MONT );
 			return( FALSE );
@@ -1178,7 +1440,6 @@ BOOLEAN BN_from_montgomery( INOUT_PTR BIGNUM *ret,
 		carry = ( carry | ( tmp != aDataVal ) ) & ( tmp <= aDataVal );
 		}
 	ENSURES_B( LOOP_BOUND_OK );
-	ret->top = nLen;
 
 	/* Perform the final transformation using a constant-time operation in 
 	   which, if there's a borrow due to the subtraction, we copy out the 
@@ -1186,6 +1447,9 @@ BOOLEAN BN_from_montgomery( INOUT_PTR BIGNUM *ret,
 	   into an unused memory location.  In theory there's a one or two-cycle
 	   difference due to the branch but this shouldn't be measurable among
 	   all the other noise */
+	BN_clear( ret );
+	REQUIRES_B( nLen <= getBNMaxSize( ret ) );
+	ret->top = nLen;
 	if( bn_sub_words( ret->d, aData + nLen, N->d, nLen ) - carry != 0 )
 		{
 		/* There was a borrow, perform the actual copy */
@@ -1198,14 +1462,15 @@ BOOLEAN BN_from_montgomery( INOUT_PTR BIGNUM *ret,
 		REQUIRES_B( isShortIntegerRangeNZ( bnWordsToBytes( nLen ) ) );
 		memcpy( aData, aData + nLen, bnWordsToBytes( nLen ) );
 		}
-	CK( BN_clear_top( ret, oldTop ) );
 	CK( BN_normalise( ret ) );
-	if( bnStatusError( bnStatus ) )
-		return( FALSE );
+		/* Error exit after cleanup below */
 
 	BN_clear( aTmp );
 	if( aTmpExt != NULL )
 		BN_CTX_end_ext( bnCTX, BIGNUM_EXT_MONT );
+
+	if( bnStatusError( bnStatus ) )
+		return( FALSE );
 
 	ENSURES_B( sanityCheckBignum( ret ) );
 
@@ -1304,7 +1569,7 @@ BOOLEAN BN_RECP_CTX_set( INOUT_PTR BN_RECP_CTX *bnRecpCTX,
 
 	/* Initialise metadata fields */
 	bnRecpCTX->num_bits = BN_num_bits( d );
-	ENSURES_B( !cryptStatusError( bnRecpCTX->num_bits  ) );
+	ENSURES_B( !cryptStatusError( bnRecpCTX->num_bits ) );
 
 	return( TRUE );
 	}

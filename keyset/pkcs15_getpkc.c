@@ -648,6 +648,7 @@ int readPrivateKeyComponents( IN_PTR const PKCS15_INFO *pkcs15infoPtr,
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		{
+		krnlSendNotifier( iCryptContext, IMESSAGE_DECREFCOUNT );
 		zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 		zeroise( &contentQueryInfo, sizeof( QUERY_INFO ) );
 		retExt( status, 
@@ -688,7 +689,10 @@ int readPrivateKeyComponents( IN_PTR const PKCS15_INFO *pkcs15infoPtr,
 							   errorInfo );
 		zeroise( &contentQueryInfo, sizeof( QUERY_INFO ) );
 		if( cryptStatusError( status ) )
+			{
+			krnlSendNotifier( iCryptContext, IMESSAGE_DECREFCOUNT );
 			return( status );
+			}
 		}
 	else
 		zeroise( &contentQueryInfo, sizeof( QUERY_INFO ) );

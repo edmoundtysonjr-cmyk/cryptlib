@@ -54,7 +54,7 @@ CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 static BOOLEAN pairwiseConsistencyTest( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
 	CONTEXT_INFO checkContextInfo;
-	PKC_INFO *sourcePkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *sourcePkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	PKC_INFO contextData, *pkcInfo = &contextData;
 	KEYAGREE_PARAMS keyAgreeParams1, keyAgreeParams2;
 	const CAPABILITY_INFO *capabilityInfoPtr;
@@ -63,11 +63,13 @@ static BOOLEAN pairwiseConsistencyTest( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES_B( sanityCheckContext( contextInfoPtr ) );
+	REQUIRES_B( sourcePkcInfo != NULL );
 
 	/* The DH pairwise check is a bit more complex than the one for the
 	   other algorithms because there's no matched public/private key pair,
-	   so we have to load a second DH key to use for key agreement with
-	   the first one */
+	   so we have to load a second DH key, or at least the public parameters
+	   since initKey() will generate the public/private values for us, to 
+	   use for key agreement with the first one */
 	status = staticInitContext( &checkContextInfo, CONTEXT_PKC, 
 								getDHCapability(), &contextData, 
 								sizeof( PKC_INFO ), NULL );
@@ -76,8 +78,6 @@ static BOOLEAN pairwiseConsistencyTest( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	CKPTR( BN_copy( &pkcInfo->dlpParam_p, &sourcePkcInfo->dlpParam_p ) );
 	CKPTR( BN_copy( &pkcInfo->dlpParam_g, &sourcePkcInfo->dlpParam_g ) );
 	CKPTR( BN_copy( &pkcInfo->dlpParam_q, &sourcePkcInfo->dlpParam_q ) );
-	CKPTR( BN_copy( &pkcInfo->dlpParam_y, &sourcePkcInfo->dlpParam_y ) );
-	CKPTR( BN_copy( &pkcInfo->dlpParam_x, &sourcePkcInfo->dlpParam_x ) );
 	if( bnStatusError( bnStatus ) )
 		{
 		staticDestroyContext( &checkContextInfo );
@@ -301,7 +301,7 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					  INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					  IN_LENGTH_FIXED( sizeof( KEYAGREE_PARAMS ) ) int noBytes )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	KEYAGREE_PARAMS *keyAgreeParams = ( KEYAGREE_PARAMS * ) buffer;
 	int status;
 
@@ -310,6 +310,7 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( noBytes == sizeof( KEYAGREE_PARAMS ) );
+	REQUIRES( pkcInfo != NULL );
 	REQUIRES( !BN_is_zero( &pkcInfo->dlpParam_y ) );
 
 	/* y is generated either at keygen time for static DH or as a side-effect
@@ -334,11 +335,10 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					  IN_LENGTH_FIXED( sizeof( KEYAGREE_PARAMS ) ) int noBytes )
 	{
 	KEYAGREE_PARAMS *keyAgreeParams = ( KEYAGREE_PARAMS * ) buffer;
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
-	const DH_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
-	const BIGNUM *p = ( domainParams != NULL ) ? \
-					  &domainParams->p : &pkcInfo->dlpParam_p;
-	BIGNUM *yPrime = &pkcInfo->tmp1, *z = &pkcInfo->tmp2;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const DH_DOMAINPARAMS *domainParams;
+	const BIGNUM *p;
+	BIGNUM *yPrime, *z;
 	int offset, bnStatus = BN_STATUS, compareStatus = 0, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -348,8 +348,15 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( noBytes == sizeof( KEYAGREE_PARAMS ) );
+	REQUIRES( pkcInfo != NULL );
 	REQUIRES( isShortIntegerRangeMin( keyAgreeParams->publicValueLen, 
 									  MIN_PKCSIZE ) );
+
+	/* Now that we've checked everything, set up the various values that 
+	   we'll need */
+	domainParams = pkcInfo->domainParams;
+	p = ( domainParams != NULL ) ? &domainParams->p : &pkcInfo->dlpParam_p;
+	yPrime = &pkcInfo->tmp1; z = &pkcInfo->tmp2;
 
 	/* The other party's y value will be stored with the key agreement info
 	   rather than having been read in when we read the DH public key so we
@@ -363,9 +370,9 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	ENSURES( verifyBignumImport( yPrime, keyAgreeParams->publicValue, 
 								 keyAgreeParams->publicValueLen ) );
 
-	/* Export z = y'^x mod p.  We need to use separate y' and z values 
-	   because the bignum code can't handle modexp with the first two 
-	   parameters the same */
+	/* Export z = y'^x mod p.  The Montgomery context has been pre-set to
+	   match either domainParams->p or pkcInfo->dlpParam_p at key-init
+	   time */
 	CK( BN_mod_exp_mont( z, yPrime, &pkcInfo->dlpParam_x, p, 
 						 &pkcInfo->bnCTX, &pkcInfo->dlpParam_mont_p ) );
 	if( bnStatusError( bnStatus ) )
@@ -424,7 +431,7 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					IN_BUFFER_OPT( keyLength ) const void *key,
 					IN_LENGTH_SHORT_OPT const int keyLength )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( ( key == NULL && keyLength == 0 ) || \
@@ -434,6 +441,7 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( ( key == NULL && keyLength == 0 ) || \
 			  ( key != NULL && keyLength == sizeof( CRYPT_PKCINFO_DLP ) ) );
+	REQUIRES( pkcInfo != NULL );
 
 #ifndef USE_FIPS140
 	/* Load the key component from the external representation into the
@@ -461,6 +469,8 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			}
 		if( cryptStatusOK( status ) )
 			{
+			/* We don't get PKCS #3 keys at this level, enforced by 
+			   context/keyload.c, so we always load q */
 			status = importBignum( &pkcInfo->dlpParam_q, dhKey->q, 
 								   bitsToBytes( dhKey->qLen ),
 								   DLPPARAM_MIN_Q, DLPPARAM_MAX_Q,
@@ -504,7 +514,8 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
-						IN_LENGTH_SHORT_MIN( MIN_PKCSIZE * 8 ) \
+						IN_RANGE( bytesToBits( MIN_KEYSIZE ),
+								  bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
 							const int keySizeBits )
 	{
 	int status;

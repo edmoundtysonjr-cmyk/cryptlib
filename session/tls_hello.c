@@ -677,7 +677,7 @@ static int processCipherSuite( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			( cipherSuiteInfoPtr->flags & CIPHERSUITE_FLAG_TLS13 ) )
 			{
 			/* We can't do TLS 1.3 */
-			DEBUG_PRINT(( "  Rejected TLS 1.3 suite %s as we don't to "
+			DEBUG_PRINT(( "  Rejected TLS 1.3 suite %s as we don't do "
 						  "TLS 1.3.\n", cipherSuiteInfoPtr->debugText ));
 			continue;
 			}
@@ -1171,7 +1171,7 @@ int processHelloTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	else
 		{
-		/* The server has sent a single quite in response to our hello */
+		/* The server has sent a single suite in response to our hello */
 		suiteLength = 1;
 		}
 	status = processCipherSuite( sessionInfoPtr, handshakeInfo, stream,
@@ -1203,7 +1203,7 @@ int processHelloTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	else
 		{
-		/* The server has sent a single quite in response to our hello */
+		/* The server has sent a single suite in response to our hello */
 		suiteLength = 1;
 		}
 	status = sSkip( stream, suiteLength, MAX_INTLENGTH_SHORT );

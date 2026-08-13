@@ -35,7 +35,7 @@
 	  #include "bn/ec_lcl.h"
 	#endif /* Compiler-specific includes */
   #endif /* ( USE_ECDH || USE_ECDSA ) && HEADER_EC_H */
-#endif /* Extra eaders needed only for PKC contexts */
+#endif /* Extra headers needed only for PKC contexts */
 #ifndef _CRYPTCAP_DEFINED
   #if defined( INC_ALL )
 	#include "capabil.h"
@@ -88,6 +88,9 @@
 	FLAG_HASH_DONE: The hash operation is complete, no further hashing can 
 			be done 
 
+	FLAG_HWCRYPTO: The context uses hardware crypto, typically /dev/crypto, 
+			rather than the native software implementation.
+	
 	FLAG_ISPUBLICKEY: The key is a public key.
 
 	FLAG_IV_SET: The IV has been set.
@@ -139,7 +142,7 @@
 #define PKCINFO_FLAG_MAX			0x0007	/* Maximum possible flag value */
 
 /* DLP PKCs require a random value k that's then reduced mod p or q, however
-   if we make sizeof( k ) == sizeof( p ) then this introduced a bias into k
+   if we make sizeof( k ) == sizeof( p ) then this introduces a bias into k
    that eventually leaks the private key (see "The Insecurity of the Digital 
    Signature Algorithm with Partially Known Nonces" by Phong Nguyen and Igor 
    Shparlinski, or more recently Serge Vaudenay's "Evaluation Report on DSA").  
@@ -160,9 +163,9 @@
 ****************************************************************************/
 
 /* The internal fields in a context that hold data for a conventional,
-   public-key, hash, or MAC algorithm.  CONTEXT_CONV and CONTEXT_MAC
-   should be allocated in pagelocked memory since they contain the sensitive
-   userKey data */
+   public-key, hash, or MAC algorithm.  CONTEXT_CONV, CONTEXT_MAC, and
+   CONTEXT_GENERIC should be allocated in pagelocked memory since they 
+   contain the sensitive userKey data */
 
 typedef enum { 
 	CONTEXT_NONE,					/* No context type */
@@ -279,8 +282,8 @@ typedef struct {
 	BN_MONT_CTX montCTX3;
 #if defined( USE_ECDH ) || defined( USE_ECDSA ) 
 	CRYPT_ECCCURVE_TYPE curveType;	/* Additional info.needed for ECC ctxs.*/
-	EC_GROUP *ecCTX;
-	EC_POINT *ecPoint;
+	EC_GROUP ecCTX;
+	EC_POINT ecPoint;
 #endif /* USE_ECDH || USE_ECDSA */
 	int checksum;					/* Checksum for key data */
 
@@ -291,7 +294,7 @@ typedef struct {
 	   above, since they're not used for keying material */
 	BIGNUM tmp1, tmp2, tmp3;
 #if defined( USE_ECDH ) || defined( USE_ECDSA ) 
-	EC_POINT *tmpPoint;
+	EC_POINT tmpPoint;
 #endif /* USE_ECDH || USE_ECDSA */
 	BN_CTX bnCTX;
 
@@ -301,6 +304,18 @@ typedef struct {
 
 	/* Domain parameters used by DLP and ECDLP algorithms */
 	const void *domainParams;
+
+	/* If we're working with Bernstein-algorithm keys we need to store them
+	   outside the normal bignum storage since they're stored in de-
+	   normalised form which causes all sorts of problems with the bignum
+	   sanity checks.  To deal with this we override the bnCTX storage and 
+	   overlay a BERNSTEIN_INFO into the space, accessed as 
+	   { bernsteinKey, bernsteinKeySize } */
+#if defined( USE_X25519 ) || defined( USE_ED25519 )
+	BUFFER_OPT_FIXED( bernsteinKeySize ) \
+	struct BK *bernsteinKey;		/* Bernstein-algorithm key info */
+	int bernsteinKeySize;			/* Bernstein-algorithm key info size */
+#endif /* USE_X25519 || USE_ED25519 */
 
 	/* If we're working with PQC keys, which are enormous, we need somewhere
 	   to store them outside of the normal bignum storage which they won't
@@ -330,7 +345,10 @@ typedef struct {
 
 typedef struct {
 	/* The current state of the hashing and the result from the last
-	   completed hash operation */
+	   completed hash operation.  Unlike encryption and MAC contexts we 
+	   don't check the state for hashes since there's not much that can 
+	   be done in terms of an attack, we'll just produce a random hash 
+	   value that can't be verified */
 	void *hashInfo;					/* Current hash state */
 	BUFFER_FIXED( CRYPT_MAX_HASHSIZE ) \
 	BYTE hash[ CRYPT_MAX_HASHSIZE + 8 ];/* Last hash result */
@@ -347,7 +365,8 @@ typedef struct {
 
 	/* The current state of the MAC'ing and the result from the last
 	   completed MAC operation */
-	void *macInfo;					/* Current MAC state */
+	void *macInfo;					/* Internal working MAC state */
+	int macInfoSize, macInfoChecksum;	/* Data size and checksum */
 	BUFFER_FIXED( CRYPT_MAX_HASHSIZE ) \
 	BYTE mac[ CRYPT_MAX_HASHSIZE + 8 ];	/* Last MAC result */
 
@@ -382,11 +401,7 @@ typedef struct {
 
 /* Defines to make access to the union fields less messy */
 
-#define ctxConv		keyingInfo.convInfo
-#define ctxPKC		keyingInfo.pkcInfo
-#define ctxHash		keyingInfo.hashInfo
-#define ctxMAC		keyingInfo.macInfo
-#define ctxGeneric	keyingInfo.genericInfo
+#define ctxPKC		keyingInfo
 
 /* An encryption context */
 
@@ -407,16 +422,9 @@ typedef struct CI {
 	DATAPTR capabilityInfo;			/* Encryption capability info */
 	SAFE_FLAGS flags;				/* Context information flags */
 
-	/* Context type-specific information */
-	union {
-		CONV_INFO *convInfo;
-#ifdef PKC_CONTEXT
-		PKC_INFO *pkcInfo;
-#endif /* PKC_CONTEXT */
-		HASH_INFO *hashInfo;
-		MAC_INFO *macInfo;
-		GENERIC_INFO *genericInfo;
-		} keyingInfo;
+	/* Context type-specific information.  See the long comment in 
+	   cryptctx.c:createContextFromCapability() for how this is laid out */
+	DATAPTR keyingInfo;
 
 #ifdef USE_DEVICES
 	/* If implemented using a crypto device, the object information is
@@ -506,12 +514,15 @@ typedef struct CI {
 #define eccParam_tmp4			param4
 #define eccParam_tmp5			param5
 
-/* 25519 parameters are processed in Bernstein special-snowflake form but 
-   since we store values as standard bignums we convert them before use */
+/* Bernstein-algorithm parameters aren't bignums so we have to store them in 
+   a custom data structure overlaid onto the storage for bnCTX.  Since these
+   are always fixed-length we don't need to provide the usual size fields */
 
-#define curve25519Param_pub		param1
-#define curve25519Param_priv	param2
-#define curve25519Param_s		param3
+typedef struct BK {
+	BYTE pubKey[ MAX_PKCSIZE_BERNSTEIN + 8 ];
+	BYTE privKey[ MAX_PKCSIZE_BERNSTEIN + 8 ];
+	BYTE s[ MAX_PKCSIZE_BERNSTEIN + 8 ];
+	} BERNSTEIN_KEY_INFO;
 
 /* ML-KEM parameters aren't bignums so we have to store them in a custom
    data structure overlaid onto the storage for bnCTX.  The size values
@@ -694,7 +705,7 @@ int testMAC( IN_PTR const CAPABILITY_INFO *capabilityInfo,
 			 IN_LENGTH_HASH_Z const int macSize,
 			 IN_PTR const void *macDataStorage,
 			 IN_BUFFER( keySize ) const void *key, 
-			 IN_LENGTH_SHORT_MIN( MIN_KEYSIZE ) const int keySize, 
+			 IN_LENGTH_SHORT_MIN( 4 ) const int keySize, 
 			 IN_BUFFER( dataLength ) const void *data, 
 			 IN_LENGTH_SHORT_MIN( 8 ) const int dataLength,
 			 IN_PTR const void *hashValue );
@@ -904,18 +915,6 @@ int writePublicKey25519Function( INOUT_PTR STREAM *stream,
 									const char *accessKey, 
 								 IN_LENGTH_FIXED( 10 ) \
 									const int accessKeyLen );
-
-/* Prototype for function in context/ctx_x25519.c.  If use of 25519 is
-   disabled we no-op the check out */
-
-#ifdef USE_X25519 
-CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN is25519SmallOrder( IN_BUFFER( MIN_PKCSIZE_BERNSTEIN ) \
-								const BYTE *pubValue );
-#else
-  #define is25519SmallOrder( pubValue )		FALSE
-#endif /* USE_X25519 */
-
 #endif /* USE_X25519 || USE_ED25519 */
 
 #ifdef USE_MLKEM
@@ -954,9 +953,9 @@ BOOLEAN sanityCheckBNMontCTX( const BN_MONT_CTX *bnMontCTX );
 #else
   /* Dummy functions to allow use in assert() when
 	 CONFIG_CONSERVE_MEMORY_EXTRA is defined */
-  #define sanityCheckBignum( x )	TRUE
-  #define sanityCheckBNCTX( x )		TRUE
-  #define sanityCheckBNMontCTX( x )	TRUE
+  #define sanityCheckBignum( x )			TRUE
+  #define sanityCheckBNCTX( x )				TRUE
+  #define sanityCheckBNMontCTX( x )			TRUE
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int generateBignum( OUT_PTR BIGNUM *bn, 

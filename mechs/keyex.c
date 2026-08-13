@@ -44,7 +44,7 @@ static CRYPT_FORMAT_TYPE getFormatType( IN_BUFFER( dataLength ) const void *data
 #ifdef USE_PGP
 	int ctb, dummy;
 #endif /* USE_PGP */
-	int status;
+	int status, tag;
 
 	assert( isReadPtrDynamic( data, dataLength ) );
 
@@ -66,7 +66,13 @@ static CRYPT_FORMAT_TYPE getFormatType( IN_BUFFER( dataLength ) const void *data
 	   which allows us to determine which type of object we have.  Note that 
 	   we use sPeek() rather than peekTag() because we want to continue
 	   processing (or at least checking for) PGP data if it's not ASN.1 */
-	if( sPeek( &stream ) == BER_SEQUENCE )
+	status = tag = sPeek( &stream );
+	if( cryptStatusError( status ) )
+		{
+		sMemDisconnect( &stream );
+		return( CRYPT_FORMAT_NONE );
+		}
+	if( tag == BER_SEQUENCE )
 		{
 		CRYPT_FORMAT_TYPE formatType;
 
@@ -94,7 +100,7 @@ static CRYPT_FORMAT_TYPE getFormatType( IN_BUFFER( dataLength ) const void *data
 
 		return( formatType );
 		}
-	if( sPeek( &stream ) == MAKE_CTAG( CTAG_RI_PASSWORD ) )
+	if( tag == MAKE_CTAG( CTAG_RI_PASSWORD ) )
 		{
 		readConstructed( &stream, NULL, CTAG_RI_PASSWORD );
 		status = readShortInteger( &stream, &value );
@@ -133,7 +139,7 @@ static CRYPT_FORMAT_TYPE getFormatType( IN_BUFFER( dataLength ) const void *data
 /* Check the key wrap key being used to import/export a session key */
 
 CHECK_RETVAL \
-static int checkWrapKey( IN_HANDLE int importKey, 
+static int checkWrapKey( IN_HANDLE const CRYPT_HANDLE importKey, 
 						 IN_BOOL const BOOLEAN isPKC,
 						 IN_BOOL const BOOLEAN isImport )
 	{
@@ -243,7 +249,7 @@ static int checkContextsEncodable( IN_HANDLE const CRYPT_HANDLE exportKey,
 
 			/* Check that the export algorithm is encodable */
 			if( cryptStatusError( \
-					cryptlibToPgpAlgo( exportAlgo, &dummy ) ) )
+					cryptlibToPgpAlgo( exportAlgo, 0, &dummy ) ) )
 				return( CRYPT_ERROR_PARAM1 );
 
 			/* Check that the session-key algorithm is encodable */
@@ -251,7 +257,7 @@ static int checkContextsEncodable( IN_HANDLE const CRYPT_HANDLE exportKey,
 				{
 				if( sessionKeyMode != CRYPT_MODE_CFB || \
 					cryptStatusError( \
-						cryptlibToPgpAlgo( sessionKeyAlgo, &dummy ) ) )
+						cryptlibToPgpAlgo( sessionKeyAlgo, 0, &dummy ) ) )
 					return( CRYPT_ERROR_PARAM3 );
 				}
 			else
@@ -466,12 +472,15 @@ C_RET cryptUnwrapKey( C_IN void C_PTR encryptedKey,
    deprecated in general we need to disable the warnings for this module */
 
 #if defined( __clang__ ) && ( __clang_major__ >= 8 )
+  #pragma clang diagnostic push
   #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #elif defined( __GNUC__ ) && ( __GNUC__ >= 4 )
+  #pragma GCC diagnostic push
   #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #elif defined( _MSC_VER ) && ( _MSC_VER >= 1300 )
+  #pragma warning( push )
   #pragma warning ( disable : 4995 ) 
-#endif /* VC++ */
+#endif /* Compiler-specific warning suppression */
 
 C_CHECK_RETVAL C_NONNULL_ARG( ( 1 ) ) \
 C_RET cryptImportKeyEx( C_IN void C_PTR encryptedKey,
@@ -493,6 +502,14 @@ C_RET cryptImportKey( C_IN void C_PTR encryptedKey,
 	return( cryptUnwrapKeyEx( encryptedKey, encryptedKeyLength, importKey,
 							  sessionKeyContext, NULL ) );
 	}
+
+#if defined( __clang__ ) && ( __clang_major__ >= 8 )
+  #pragma clang diagnostic pop
+#elif defined( __GNUC__ ) && ( __GNUC__ >= 4 )
+  #pragma GCC diagnostic pop
+#elif defined( _MSC_VER ) && ( _MSC_VER >= 1300 )
+  #pragma warning( pop )
+#endif /* Compiler-specific warning suppression */
 
 /****************************************************************************
 *																			*
@@ -619,7 +636,19 @@ C_RET cryptWrapKey( C_OUT_OPT void C_PTR encryptedKey,
 			( status == CRYPT_ERROR_PARAM6 ) ? CRYPT_ERROR_PARAM5 : status );
 	}
 
-/* Pre-3.4.9 versions of the functions */
+/* Pre-3.4.9 versions of the functions.  Since these are marked as 
+   deprecated in general we need to disable the warnings for this module */
+
+#if defined( __clang__ ) && ( __clang_major__ >= 8 )
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined( __GNUC__ ) && ( __GNUC__ >= 4 )
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined( _MSC_VER ) && ( _MSC_VER >= 1300 )
+  #pragma warning( push )
+  #pragma warning ( disable : 4995 ) 
+#endif /* Compiler-specific warning suppression */
 
 C_CHECK_RETVAL C_NONNULL_ARG( ( 3 ) ) \
 C_RET cryptExportKeyEx( C_OUT_OPT void C_PTR encryptedKey,
@@ -649,6 +678,14 @@ C_RET cryptExportKey( C_OUT_OPT void C_PTR encryptedKey,
 	return( ( status == CRYPT_ERROR_PARAM5 ) ? CRYPT_ERROR_PARAM4 : \
 			( status == CRYPT_ERROR_PARAM6 ) ? CRYPT_ERROR_PARAM5 : status );
 	}
+
+#if defined( __clang__ ) && ( __clang_major__ >= 8 )
+  #pragma clang diagnostic pop
+#elif defined( __GNUC__ ) && ( __GNUC__ >= 4 )
+  #pragma GCC diagnostic pop
+#elif defined( _MSC_VER ) && ( _MSC_VER >= 1300 )
+  #pragma warning( pop )
+#endif /* Compiler-specific warning suppression */
 
 /****************************************************************************
 *																			*
@@ -735,7 +772,8 @@ int iCryptExportKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 					 INOUT_PTR ERROR_INFO *errorInfo )
 	{
 	KEYEX_TYPE keyexType = \
-			( formatType == CRYPT_FORMAT_CRYPTLIB ) ? KEYEX_CRYPTLIB : \
+			( formatType == CRYPT_FORMAT_CRYPTLIB || \
+			  formatType == CRYPT_FORMAT_AUTO ) ? KEYEX_CRYPTLIB : \
 			( formatType == CRYPT_FORMAT_PGP ) ? KEYEX_PGP : KEYEX_CMS;
 	DYNBUF auxDB;
 	const int encKeyMaxLength = ( encryptedKey == NULL ) ? \
@@ -758,6 +796,9 @@ int iCryptExportKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 	REQUIRES( ( formatType == CRYPT_FORMAT_PGP && \
 				iSessionKeyContext == CRYPT_UNUSED ) || \
 			  isHandleRangeValid( iSessionKeyContext ) );
+			  /* PGP derives the session key directly rather than wrapping 
+			     it so for that one case we can have an absent session key 
+			     context */
 	REQUIRES( isHandleRangeValid( iExportKey ) );
 
 	ANALYSER_HINT( encryptedKeyLength != NULL );
@@ -826,7 +867,7 @@ int iCryptExportKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 	status = krnlSendMessage( iExportKey, IMESSAGE_SETATTRIBUTE,
 							  MESSAGE_VALUE_TRUE, CRYPT_IATTRIBUTE_LOCKED );
 	if( cryptStatusError( status ) )
-		return( CRYPT_ERROR_PARAM5 );
+		return( CRYPT_ARGERROR_NUM2 );
 	status = krnlSendMessage( iExportKey, IMESSAGE_SETATTRIBUTE,
 							  MESSAGE_VALUE_CURSORFIRST, 
 							  CRYPT_CERTINFO_CURRENT_CERTIFICATE );
@@ -838,7 +879,7 @@ int iCryptExportKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 		( void ) krnlSendMessage( iExportKey, IMESSAGE_SETATTRIBUTE,
 								  MESSAGE_VALUE_FALSE, 
 								  CRYPT_IATTRIBUTE_LOCKED );
-		return( CRYPT_ERROR_PARAM5 );
+		return( CRYPT_ARGERROR_NUM2 );
 		}
 
 	/* Next we get the recipient information from the certificate into a 
@@ -850,7 +891,7 @@ int iCryptExportKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 		( void ) krnlSendMessage( iExportKey, IMESSAGE_SETATTRIBUTE,
 								  MESSAGE_VALUE_FALSE, 
 								  CRYPT_IATTRIBUTE_LOCKED );
-		return( CRYPT_ERROR_PARAM5 );
+		return( CRYPT_ARGERROR_NUM2 );
 		}
 
 	/* We're ready to export the key alongside the key ID as auxiliary 
@@ -928,12 +969,15 @@ C_RET cryptWrapKey( C_OUT_OPT void C_PTR encryptedKey,
    deprecated in general we need to disable the warnings for this module */
 
 #if defined( __clang__ ) && ( __clang_major__ >= 8 )
+  #pragma clang diagnostic push
   #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #elif defined( __GNUC__ ) && ( __GNUC__ >= 4 )
+  #pragma GCC diagnostic push
   #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #elif defined( _MSC_VER ) && ( _MSC_VER >= 1300 )
+  #pragma warning( push )
   #pragma warning ( disable : 4995 ) 
-#endif /* VC++ */
+#endif /* Compiler-specific warning suppression */
 
 C_CHECK_RETVAL C_NONNULL_ARG( ( 1 ) ) \
 C_RET cryptImportKeyEx( C_IN void C_PTR encryptedKey,
@@ -980,4 +1024,13 @@ C_RET cryptExportKey( C_OUT_OPT void C_PTR encryptedKey,
 
 	return( CRYPT_ERROR_NOTAVAIL );
 	}
+
+#if defined( __clang__ ) && ( __clang_major__ >= 8 )
+  #pragma clang diagnostic pop
+#elif defined( __GNUC__ ) && ( __GNUC__ >= 4 )
+  #pragma GCC diagnostic pop
+#elif defined( _MSC_VER ) && ( _MSC_VER >= 1300 )
+  #pragma warning( pop )
+#endif /* Compiler-specific warning suppression */
+
 #endif /* USE_INT_CMS */

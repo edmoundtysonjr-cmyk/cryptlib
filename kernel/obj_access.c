@@ -105,14 +105,17 @@ static int checkAccessValid( IN_HANDLE const int objectHandle,
 	OBJECT_INFO *objectTable = getSystemStorage( SYSTEM_STORAGE_OBJECT_TABLE );
 	const OBJECT_INFO *objectInfoPtr;
 
-	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_OBJECT_TABLE ) );
-	REQUIRES( isValidObject( objectHandle ) );
+	REQUIRES( objectHandle == SYSTEM_OBJECT_HANDLE || \
+			  objectHandle == DEFAULTUSER_OBJECT_HANDLE || \
+			  isHandleRangeValid( objectHandle ) );
+			  /* This is a weaker check because isValidObject() is 
+			     explicitly checked below */
 	REQUIRES( isEnumRange( checkType, ACCESS_CHECK ) );
 	REQUIRES( cryptStatusError( errorCode ) );
+	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_OBJECT_TABLE ) );
 
 	/* Perform similar access checks to the ones performed in
-	   krnlSendMessage(): It's a valid object (already checked above but 
-	   present here for documentation purposes) owned by the calling 
+	   krnlSendMessage(): It's a valid object owned by the calling 
 	   thread */
 	if( !isValidObject( objectHandle ) || \
 		!checkObjectOwnership( objectTable[ objectHandle ] ) )
@@ -310,7 +313,13 @@ static int getObject( IN_HANDLE const int objectHandle,
 					objectTable );
 #endif /* CONFIG_FUZZ */
 
-	/* If the object is busy, wait for it to become available */
+	/* If the object is busy, wait for it to become available.  
+	   waitForObject() makes sure that we get the same object back that we
+	   waited on, in other words that we didn't get the object swapped out
+	   for something else while the object table was unlocked during the
+	   wait.  In any case this is incredibly unlikely given that we'd have
+	   to cycle through the entire object table to get back to the same
+	   object handle */
 	if( isInUse( objectHandle ) && !isObjectOwner( objectHandle ) )
 		{
 		status = waitForObject( objectHandle, &objectInfoPtr );
@@ -366,7 +375,8 @@ static int getObject( IN_HANDLE const int objectHandle,
    fient fieri quae posse negabam) */
 
 static int releaseObject( IN_HANDLE const int objectHandle,
-						  IN_ENUM( ACCESS_CHECK ) const ACCESS_CHECK_TYPE checkType,
+						  IN_ENUM( ACCESS_CHECK ) \
+								const ACCESS_CHECK_TYPE checkType,
 						  OUT_OPT_INT_Z int *refCount )
 	{
 	KERNEL_DATA *krnlData = getSystemStorage( SYSTEM_STORAGE_KRNLDATA );
@@ -391,6 +401,10 @@ static int releaseObject( IN_HANDLE const int objectHandle,
 				refCount == NULL ) || \
 			  ( checkType == ACCESS_CHECK_SUSPEND && \
 				refCount != NULL ) );
+
+	/* Clear return value */
+	if( refCount != NULL )
+		*refCount = 0;
 
 	THREAD_NOTIFY_PREPARE( objectHandle );
 	MUTEX_LOCK( objectTable );
@@ -580,6 +594,7 @@ int extractKeyData( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 					IN_LENGTH_FIXED( 7 ) const int accessKeyLen )
 	{
 	CONTEXT_INFO *contextInfoPtr;
+	const void *keyingInfo;
 	int status;
 
 	assert( isWritePtrDynamic( keyData, keyDataLen ) );
@@ -594,7 +609,7 @@ int extractKeyData( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 	memset( keyData, 0, keyDataLen );
 
 	/* Make sure that we really intended to call this function */
-	ENSURES( accessKeyLen == 7 && !memcmp( accessKey, "keydata", 7 ) );
+	REQUIRES( accessKeyLen == 7 && !memcmp( accessKey, "keydata", 7 ) );
 
 	/* Make sure that we've been given a conventional encryption, MAC, or
 	   generic-secret context with a key loaded.  This has already been 
@@ -615,6 +630,16 @@ int extractKeyData( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 		return( CRYPT_ARGERROR_OBJECT );
 		}
 
+	/* Get the keying information for the context.  This is an internal 
+	   error that would normally be a REQUIRES(), but we need to unlock the
+	   object before we exit */
+	keyingInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	if( keyingInfo == NULL )
+		{
+		releaseObject( iCryptContext, ACCESS_CHECK_KEYACCESS, NULL );
+		retIntError();
+		}
+
 	/* Export the key data from the context.  The REQUIRES() checks (which if
 	   triggered would exit without releasing the object) are never 
 	   triggered because the preceding checks prevent this, they exist to 
@@ -622,8 +647,11 @@ int extractKeyData( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 	switch( contextInfoPtr->type )
 		{
 		case CONTEXT_CONV:
-			if( contextInfoPtr->ctxConv->userKeyLength < MIN_KEYSIZE || \
-				contextInfoPtr->ctxConv->userKeyLength > keyDataLen )
+			{
+			const CONV_INFO *convInfo = keyingInfo;
+
+			if( convInfo->userKeyLength < MIN_KEYSIZE || \
+				convInfo->userKeyLength > keyDataLen )
 				{
 				DEBUG_DIAG(( "Conventional-encryption key data is too long "
 							 "to export" ));
@@ -632,16 +660,19 @@ int extractKeyData( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 				}
 			else
 				{
-				REQUIRES( rangeCheck( contextInfoPtr->ctxConv->userKeyLength,
+				REQUIRES( rangeCheck( convInfo->userKeyLength,
 									  1, keyDataLen ) );
-				memcpy( keyData, contextInfoPtr->ctxConv->userKey,
-						contextInfoPtr->ctxConv->userKeyLength );
+				memcpy( keyData, convInfo->userKey, convInfo->userKeyLength );
 				}
 			break;
+			}
 
 		case CONTEXT_MAC:
-			if( contextInfoPtr->ctxMAC->userKeyLength < MIN_KEYSIZE || \
-				contextInfoPtr->ctxMAC->userKeyLength > keyDataLen )
+			{
+			const MAC_INFO *macInfo = keyingInfo;
+
+			if( macInfo->userKeyLength < MIN_KEYSIZE || \
+				macInfo->userKeyLength > keyDataLen )
 				{
 				DEBUG_DIAG(( "MAC key data is too long to export" ));
 				assert( DEBUG_WARN );
@@ -649,16 +680,19 @@ int extractKeyData( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 				}
 			else
 				{
-				REQUIRES( rangeCheck( contextInfoPtr->ctxMAC->userKeyLength,
+				REQUIRES( rangeCheck( macInfo->userKeyLength,
 									  1, keyDataLen ) );
-				memcpy( keyData, contextInfoPtr->ctxMAC->userKey,
-						contextInfoPtr->ctxMAC->userKeyLength );
+				memcpy( keyData, macInfo->userKey, macInfo->userKeyLength );
 				}
 			break;
+			}
 
 		case CONTEXT_GENERIC:
-			if( contextInfoPtr->ctxGeneric->genericSecretLength < MIN_KEYSIZE || \
-				contextInfoPtr->ctxGeneric->genericSecretLength > keyDataLen )
+			{
+			const GENERIC_INFO *genericInfo = keyingInfo;
+
+			if( genericInfo->genericSecretLength < MIN_KEYSIZE || \
+				genericInfo->genericSecretLength > keyDataLen )
 				{
 				DEBUG_DIAG(( "Generic key data is too long to export" ));
 				assert( DEBUG_WARN );
@@ -666,15 +700,19 @@ int extractKeyData( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 				}
 			else
 				{
-				REQUIRES( rangeCheck( contextInfoPtr->ctxGeneric->genericSecretLength,
+				REQUIRES( rangeCheck( genericInfo->genericSecretLength,
 									  1, keyDataLen ) );
-				memcpy( keyData, contextInfoPtr->ctxGeneric->genericSecret,
-						contextInfoPtr->ctxGeneric->genericSecretLength );
+				memcpy( keyData, genericInfo->genericSecret,
+						genericInfo->genericSecretLength );
 				}
 			break;
+			}
 
 		default:
-			retIntError();
+			/* We can't retIntError() at this point because we still need to 
+			   unlock the object before we exit */
+			assert( DEBUG_WARN );
+			status = CRYPT_ERROR_INTERNAL;
 		}
 	releaseObject( iCryptContext, ACCESS_CHECK_KEYACCESS, NULL );
 	return( status );
@@ -692,6 +730,7 @@ int exportPrivateKeyData( OUT_BUFFER_OPT( privKeyDataMaxLength, \
 						  IN_BUFFER( accessKeyLen ) const char *accessKey, 
 						  IN_LENGTH_FIXED( 11 ) const int accessKeyLen )
 	{
+	const PKC_INFO *pkcInfo;
 	CONTEXT_INFO *contextInfoPtr;
 	PKC_WRITEKEY_FUNCTION writePrivateKeyFunction;
 	STREAM stream;
@@ -709,11 +748,13 @@ int exportPrivateKeyData( OUT_BUFFER_OPT( privKeyDataMaxLength, \
 	REQUIRES( isEnumRange( formatType, KEYFORMAT ) );
 	REQUIRES( accessKeyLen == 11 );
 
-	/* Clear return value */
+	/* Clear return values */
+	if( privKeyData != NULL )
+		memset( privKeyData, 0, min( 16, privKeyDataMaxLength ) );
 	*privKeyDataLength = 0;
 
 	/* Make sure that we really intended to call this function */
-	ENSURES( accessKeyLen == 11 && !memcmp( accessKey, "private_key", 11 ) );
+	REQUIRES( accessKeyLen == 11 && !memcmp( accessKey, "private_key", 11 ) );
 
 	/* Make sure that we've been given a PKC context with a private key
 	   loaded.  This has already been checked at a higher level, but we
@@ -731,17 +772,20 @@ int exportPrivateKeyData( OUT_BUFFER_OPT( privKeyDataMaxLength, \
 		releaseObject( iCryptContext, ACCESS_CHECK_KEYACCESS, NULL );
 		return( CRYPT_ARGERROR_OBJECT );
 		}
+	pkcInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	if( pkcInfo == NULL )
+		{
+		/* This and the following are internal errors that would normally be 
+		   a REQUIRES(), but we need to unlock the object before we exit */
+		releaseObject( iCryptContext, ACCESS_CHECK_KEYACCESS, NULL );
+		retIntError();
+		}
 	writePrivateKeyFunction = ( PKC_WRITEKEY_FUNCTION ) \
-			FNPTR_GET( contextInfoPtr->ctxPKC->writePrivateKeyFunction );
+					FNPTR_GET( pkcInfo->writePrivateKeyFunction );
 	if( writePrivateKeyFunction == NULL )
 		{
-		/* We have to use a bit of a nonstandard checking process here 
-		   because a standard throw-exception check won't release the
-		   object, so we synthesize a 
-		   REQUIRES( writePrivateKeyFunction != NULL ) that also 
-		   releases the object */
 		releaseObject( iCryptContext, ACCESS_CHECK_KEYACCESS, NULL );
-		REQUIRES( writePrivateKeyFunction != NULL );	/* Force exception */
+		retIntError();
 		}
 
 	/* Export the key data from the context */
@@ -768,6 +812,7 @@ int importPrivateKeyData( IN_BUFFER( privKeyDataLen ) const void *privKeyData,
 						  IN_ENUM( KEYFORMAT ) \
 							const KEYFORMAT_TYPE formatType )
 	{
+	const PKC_INFO *pkcInfo;
 	CONTEXT_INFO *contextInfoPtr;
 	PKC_READKEY_FUNCTION readPrivateKeyFunction;
 	CTX_LOADKEY_FUNCTION loadKeyFunction;
@@ -797,17 +842,23 @@ int importPrivateKeyData( IN_BUFFER( privKeyDataLen ) const void *privKeyData,
 		releaseObject( iCryptContext, ACCESS_CHECK_KEYACCESS, NULL );
 		return( CRYPT_ARGERROR_OBJECT );
 		}
+	pkcInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	if( pkcInfo == NULL )
+		{
+		/* This and the following are internal errors that would normally be 
+		   a REQUIRES(), but we need to unlock the object before we exit */
+		releaseObject( iCryptContext, ACCESS_CHECK_KEYACCESS, NULL );
+		retIntError();
+		}
 	readPrivateKeyFunction = ( PKC_READKEY_FUNCTION ) \
-			FNPTR_GET( contextInfoPtr->ctxPKC->readPrivateKeyFunction );
+					FNPTR_GET( pkcInfo->readPrivateKeyFunction );
 	loadKeyFunction = ( CTX_LOADKEY_FUNCTION ) \
-			FNPTR_GET( contextInfoPtr->loadKeyFunction );
+					FNPTR_GET( contextInfoPtr->loadKeyFunction );
 	calculateKeyIDFunction = ( PKC_CALCULATEKEYID_FUNCTION ) \
-			FNPTR_GET( contextInfoPtr->ctxPKC->calculateKeyIDFunction );
+					FNPTR_GET( pkcInfo->calculateKeyIDFunction );
 	if( readPrivateKeyFunction == NULL || loadKeyFunction == NULL || \
 		calculateKeyIDFunction == NULL )
 		{
-		/* We can't use a standard REQUIRES() here because it won't release 
-		   the object, so we need to manually perform the equivalent */
 		releaseObject( iCryptContext, ACCESS_CHECK_KEYACCESS, NULL );
 		retIntError();
 		}

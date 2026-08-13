@@ -403,7 +403,11 @@ typedef struct {
 	MUTEX_DECLARE_STORAGE( mutex2 );
   #ifdef USE_SESSIONS
 	MUTEX_DECLARE_STORAGE( mutex3 );
+  #endif /* USE_SESSIONS */
+  #ifdef USE_TCP
 	MUTEX_DECLARE_STORAGE( mutex4 );
+  #endif /* USE_TCP */
+  #ifdef USE_SESSIONS
 	MUTEX_DECLARE_STORAGE( mutex5 );
   #endif /* USE_SESSIONS */
 #endif /* USE_THREADS */
@@ -721,7 +725,7 @@ const char *getObjectDescriptionNT( IN_HANDLE const int objectHandle );
 CHECK_RETVAL \
 int destroyObjectData( IN_HANDLE const int objectHandle );
 
-/* Prototypes for functions in semaphore.c.  Depending on the OS type the 
+/* Prototypes for functions in sync.c.  Depending on the OS type the 
    synchronisation object can be a semaphore or thread so we have to pass in 
    both when we initialise the semaphore */
 

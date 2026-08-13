@@ -201,7 +201,8 @@ typedef struct {
 typedef enum {
 	ALGOID_CLASS_NONE,		/* No AlgoID class */
 	ALGOID_CLASS_CRYPT,		/* Encryption algorithms */
-	ALGOID_CLASS_HASH,		/* Hash/MAC algorithm */
+	ALGOID_CLASS_HASH,		/* Hash algorithm */
+	ALGOID_CLASS_MAC,		/* MAC algorithm */
 	ALGOID_CLASS_AUTHENC,	/* Authenticated-encryption algorithm */
 	ALGOID_CLASS_PKC,		/* Generic PKC algorithm */
 	ALGOID_CLASS_PKCSIG,	/* PKC signature algorithm (+ hash algorithm) */
@@ -365,7 +366,8 @@ int sizeofECCOID( IN_ENUM( CRYPT_ECCCURVE ) \
 					const CRYPT_ECCCURVE_TYPE curveType );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 int readECCOID( INOUT_PTR STREAM *stream, 
-				OUT_OPT CRYPT_ECCCURVE_TYPE *curveType,
+				OUT_ENUM_OPT( CRYPT_ECCCURVE ) \
+					CRYPT_ECCCURVE_TYPE *curveType,
 				OUT_INT_Z int *fieldSize );
 RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int writeECCOID( INOUT_PTR STREAM *stream, 

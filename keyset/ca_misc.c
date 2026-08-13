@@ -72,7 +72,7 @@ static int getSuccessorCert( INOUT_PTR DBMS_INFO *dbmsInfo,
 		/* Find the resulting certificate */
 		memcpy( certID, certData,
 				min( certDataLength, ENCODED_DBXKEYID_SIZE + 1 ) );
-		certID[ MAX_ENCODED_DBXKEYID_SIZE ] = '\0';
+		certID[ ENCODED_DBXKEYID_SIZE ] = '\0';
 		status = dbmsQuery(
 			"SELECT certID FROM certLog WHERE reqCertID = ? "
 				"AND action = " TEXT_CERTACTION_CERT_CREATION,
@@ -134,7 +134,7 @@ int updateCertLog( INOUT_PTR DBMS_INFO *dbmsInfo,
 	char encodedCertData[ MAX_ENCODED_CERT_SIZE + 8 ];
 	const time_t boundDate = getTime( GETTIME_NOFAIL );
 	int localCertIDlength = certIDlength, sqlOffset, sqlLength;
-	int boundDataIndex, result;
+	int boundDataIndex, result, status;
 
 	assert( isWritePtr( dbmsInfo, sizeof( DBMS_INFO ) ) );
 	assert( ( certID == NULL && certIDlength == 0 ) || \
@@ -166,15 +166,26 @@ int updateCertLog( INOUT_PTR DBMS_INFO *dbmsInfo,
 	   values may be NULL so we have to insert them by naming the columns
 	   (some databases allow the use of the DEFAULT keyword but this isn't
 	   standardised enough to be safe) */
-	strlcpy_s( sqlBuffer, MAX_SQL_QUERY_SIZE,
-			  "INSERT INTO certLog (action, actionTime, certID" );
+	status = strlcpy_s( sqlBuffer, MAX_SQL_QUERY_SIZE,
+						"INSERT INTO certLog (action, actionTime, certID" );
+	ENSURES( cryptStatusOK( status ) );
 	if( reqCertID != NULL )
-		strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, ", reqCertID" );
+		{
+		status = strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, ", reqCertID" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 	if( subjCertID != NULL )
-		strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, ", subjCertID" );
+		{
+		status = strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, ", subjCertID" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 	if( data != NULL )
-		strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, ", certData" );
-	strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, ") VALUES (" );
+		{
+		status = strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, ", certData" );
+		ENSURES( cryptStatusOK( status ) );
+		}
+	status = strlcat_s( sqlBuffer, MAX_SQL_QUERY_SIZE, ") VALUES (" );
+	ENSURES( cryptStatusOK( status ) );
 	sqlOffset = strnlen_s( sqlBuffer, MAX_SQL_QUERY_SIZE );
 	REQUIRES( !checkOverflowSub( MAX_SQL_QUERY_SIZE, sqlOffset ) );
 	sqlLength = MAX_SQL_QUERY_SIZE - sqlOffset;
@@ -183,12 +194,22 @@ int updateCertLog( INOUT_PTR DBMS_INFO *dbmsInfo,
 						action );
 	ENSURES( rangeCheck( result, 7, sqlLength - 1 ) );
 	if( reqCertID != NULL )
-		strlcat_s( sqlBuffer + sqlOffset, sqlLength, ", ?" );
+		{
+		status = strlcat_s( sqlBuffer + sqlOffset, sqlLength, ", ?" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 	if( subjCertID != NULL )
-		strlcat_s( sqlBuffer + sqlOffset, sqlLength, ", ?" );
+		{
+		status = strlcat_s( sqlBuffer + sqlOffset, sqlLength, ", ?" );
+		ENSURES( cryptStatusOK( status ) );
+		}
 	if( data != NULL )
-		strlcat_s( sqlBuffer + sqlOffset, sqlLength, ", ?" );
-	strlcat_s( sqlBuffer + sqlOffset, sqlLength, ")" );
+		{
+		status = strlcat_s( sqlBuffer + sqlOffset, sqlLength, ", ?" );
+		ENSURES( cryptStatusOK( status ) );
+		}
+	status = strlcat_s( sqlBuffer + sqlOffset, sqlLength, ")" );
+	ENSURES( cryptStatusOK( status ) );
 
 	/* If we're not worried about the certID we just insert a nonce value
 	   which is used to meet the constraints for a unique entry.  In order
@@ -198,7 +219,6 @@ int updateCertLog( INOUT_PTR DBMS_INFO *dbmsInfo,
 		{
 		MESSAGE_DATA msgData;
 		BYTE nonce[ KEYID_SIZE + 8 ];
-		int status;
 
 		setMessageData( &msgData, nonce, KEYID_SIZE );
 		status = krnlSendMessage( SYSTEM_OBJECT_HANDLE, IMESSAGE_GETATTRIBUTE_S,
@@ -248,7 +268,7 @@ int updateCertLog( INOUT_PTR DBMS_INFO *dbmsInfo,
 			}
 		else
 			{
-			int encodedDataLength, status;
+			int encodedDataLength;
 
 			status = base64encode( encodedCertData, MAX_ENCODED_CERT_SIZE,
 								   &encodedDataLength, data, dataLength, 

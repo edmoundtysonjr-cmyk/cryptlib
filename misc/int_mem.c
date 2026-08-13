@@ -6,11 +6,7 @@
 ****************************************************************************/
 
 #include <stdarg.h>
-#if defined( INC_ALL )
-  #include "crypt.h"
-#else
-  #include "crypt.h"
-#endif /* Compiler-specific includes */
+#include "crypt.h"
 
 /****************************************************************************
 *																			*
@@ -39,10 +35,33 @@
 
    To do this we need to convert a request for an allocation of bufSize 
    bytes into one of COOKIE_SIZE + bufSize + COOKIE_SIZE bytes and then 
-   return a pointer to the actual buffer data inside the cookie'd buffer */
+   return a pointer to the actual buffer data inside the cookie'd buffer.
+   
+   This interacts with the standard + 8 overflow space that we always leave
+   at the end of each buffer.  In theory we could assume that any value 
+   passed to us has an implicit + 8 attached so that the memory layout is:
+   
+	+-------+---------------+-------+-----------+
+	|Cookie |	Buffer		| Overfl| Cookie	|
+	+-------+---------------+-------+-----------+
+   
+   However this is very risky because a single inadvertent omission of the 
+   overflow space would cause a memory overrun when we write the cookie.  
+   Instead we place the cookie at the end of the given space, so the layout 
+   is:
+ 
+	+-------+---------------+-------+-----------+
+	|Cookie |	Buffer		| Cookie| Overflow	|
+	+-------+---------------+-------+-----------+
+   
+   This is OK because the overflow space is just that, spare space in case
+   we accidentally overshoot a buffer by a few bytes.  In this case it's
+   still safe because the overshoot goes into the cookie space, and it'll 
+   actually get caught now rather than silently continuing */
 
 /* A buffer cookie, used as a canary to check for overwrites, being the XOR 
-   of the low 64 bits of the address and a random value */
+   of the low 64 bits of the address and either a random value (the user-
+   defined FIXED_SEED) or a fixed bit pattern */
 
 #ifdef FIXED_SEED
 static const BYTE canarySeed[ SAFEBUFFER_COOKIE_SIZE ] = { FIXED_SEED };
@@ -100,6 +119,9 @@ void safeBufferInit( INOUT_BUFFER_FIXED( bufSize ) void *buffer,
 	BYTE *endCookiePtr = ( ( BYTE * ) buffer ) + bufSize;
 	BYTE cookie[ SAFEBUFFER_COOKIE_SIZE + 16 ];
 
+	static_assert( MIN_BUFFER_SIZE >= 256,
+				   "MIN_BUFFER_SIZE is smaller than permitted minimum size" );
+
 	REQUIRES_V( isBufsizeRangeMin( bufSize, 256 ) );
 
 	/* Insert the cookies, which correspond to the address at which they're
@@ -122,7 +144,7 @@ void *safeBufferAlloc( IN_DATALENGTH const int bufSize )
 	   caller only records the buffer size as being the base size without 
 	   the overflow amount, which means that when we perform the cookie 
 	   check on { buffer, bufSize } there's additional overflow space 
-	   between the purported end of the buffer and the cookie */
+	   following the cookie */
 	REQUIRES_N( !checkOverflowAdd( SAFEBUFFER_SIZE( bufSize ), 8 ) );
 	bufPtr = clAlloc( "safeBufferAlloc", SAFEBUFFER_SIZE( bufSize ) + 8 );
 	if( bufPtr == NULL )
@@ -132,6 +154,7 @@ void *safeBufferAlloc( IN_DATALENGTH const int bufSize )
 	return( SAFEBUFFER_PTR( bufPtr ) );
 	}
 
+STDC_NONNULL_ARG( ( 1 ) ) \
 void safeBufferFree( const void *buffer )
 	{
 	void *startCookiePtr = ( ( BYTE * ) buffer ) - SAFEBUFFER_COOKIE_SIZE;
@@ -145,7 +168,7 @@ void safeBufferFree( const void *buffer )
 	makeCanary( cookie, startCookiePtr );
 	if( memcmp( cookie, startCookiePtr, SAFEBUFFER_COOKIE_SIZE ) )
 		{
-		/* BUffer corrupted, don't try and free it */
+		/* Buffer corrupted, don't try and free it */
 		assert( DEBUG_WARN );
 		return;
 		}
@@ -217,15 +240,18 @@ static int getDynData( OUT_PTR DYNBUF *dynBuf,
 
 	/* Get the data from the object */
 	setMessageData( &msgData, NULL, 0 );
-	status = krnlSendMessage( cryptHandle, message, &msgData, messageParam );
+	status = krnlSendMessage( cryptHandle, message, &msgData, 
+							  messageParam );
 	if( cryptStatusError( status ) )
 		return( status );
+	ENSURES( isIntegerRangeNZ( msgData.length ) ); 
 	if( msgData.length > DYNBUF_SIZE )
 		{
 		/* The data is larger than the built-in buffer size, dynamically
 		   allocate a larger buffer */
 		REQUIRES( isIntegerRangeNZ( msgData.length ) );
-		if( ( dataPtr = clDynAlloc( "getDynData", msgData.length ) ) == NULL )
+		if( ( dataPtr = clDynAlloc( "getDynData", 
+									msgData.length ) ) == NULL )
 			return( CRYPT_ERROR_MEMORY );
 		msgData.data = dataPtr;
 		status = krnlSendMessage( cryptHandle, message, &msgData,
@@ -328,6 +354,12 @@ CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 static BOOLEAN sanityCheckMempool( const MEMPOOL_INFO *state )
 	{
 	/* Make sure that the overall pool size information is in order */
+	if( state->storage == NULL || \
+		( ( uintptr_t ) state->storage % sizeof( void * ) ) != 0 )
+		{
+		DEBUG_PUTS(( "sanityCheckMempool: Storage pointer" ));
+		return( FALSE );
+		}
 	if( !isShortIntegerRangeMin( state->storageSize, 64 ) )
 		{
 		DEBUG_PUTS(( "sanityCheckMempool: Storage size" ));
@@ -344,6 +376,8 @@ static BOOLEAN sanityCheckMempool( const MEMPOOL_INFO *state )
 
 	return( TRUE );
 	}
+#else
+#define sanityCheckMempool( x )		TRUE
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
@@ -356,18 +390,22 @@ int initMemPool( OUT_PTR void *statePtr,
 	assert( isWritePtr( state, sizeof( MEMPOOL_INFO ) ) );
 	assert( isWritePtrDynamic( memPool, memPoolSize ) );
 
-#if defined( __WIN32__ ) && defined( _MSC_VER )
-	#pragma warning( disable: 4127 )	/* Needed for sizeof() in check */
-#endif /* VC++ */
-	REQUIRES( sizeof( MEMPOOL_STATE ) >= sizeof( MEMPOOL_INFO ) );
+	static_assert( sizeof( MEMPOOL_STATE ) >= sizeof( MEMPOOL_INFO ),
+				   "Mempool state vs. mempool size mismatch" );
+
+	REQUIRES( ( ( uintptr_t ) memPool % sizeof( void * ) ) == 0 );
+			  /* getMemPool() aligns blocks relative to the base of the 
+			     memory pool, but we also have to make sure that the caller
+			     has aligned the base of the pool itself, which will 
+			     automatically be the case when they use 
+			     DECLARE_VARSTRUCT_VARS which takes care of the alignment */
 	REQUIRES( isShortIntegerRangeMin( memPoolSize, 64 ) );
-#if defined( __WIN32__ ) && defined( _MSC_VER )
-	#pragma warning( 4: 4127 )
-#endif /* VC++ */
 
 	memset( state, 0, sizeof( MEMPOOL_INFO ) );
 	state->storage = memPool;
 	state->storageSize = memPoolSize;
+
+	ENSURES( sanityCheckMempool( state ) );
 
 	return( CRYPT_OK );
 	}
@@ -377,14 +415,14 @@ void *getMemPool( INOUT_PTR void *statePtr, IN_LENGTH_SHORT const int size )
 	{
 	MEMPOOL_INFO *state = ( MEMPOOL_INFO * ) statePtr;
 	BYTE *allocPtr;
-	const int allocSize = roundUp( size, sizeof( int ) );
+	const int allocSize = roundUp( size, sizeof( void * ) );
 
 	assert( isWritePtr( state, sizeof( MEMPOOL_INFO ) ) );
 	assert( isWritePtrDynamic( state->storage, state->storageSize ) );
 
 	REQUIRES_N( isShortIntegerRangeNZ( size ) );
-	REQUIRES_N( !checkOverflowRoundup( size, sizeof( int ) ) );
-	REQUIRES_N( isShortIntegerRangeMin( allocSize, sizeof( int ) ) );
+	REQUIRES_N( !checkOverflowRoundup( size, sizeof( void * ) ) );
+	REQUIRES_N( isShortIntegerRangeMin( allocSize, sizeof( void * ) ) );
 	REQUIRES_N( sanityCheckMempool( state ) );
 
 	/* If we can't satisfy the request from the memory pool we have to
@@ -427,10 +465,29 @@ void freeMemPool( INOUT_PTR void *statePtr,
 	REQUIRES_V( sanityCheckMempool( state ) );
 
 	/* If the memory block to free lies within the pool, there's nothing to 
-	   do */
-	if( memblock >= state->storage && \
-		memblock < ( void * ) ( ( BYTE * ) state->storage + \
-										   state->storageSize ) )
+	   do.  This check is the equivalent of:
+
+		if( memblock >= state->storage && \
+			memblock < state->storage + state->storageSize )
+			
+			memblock
+				v
+		+-------------------------------------------+
+		|											|
+		+-------------------------------------------+
+		|											|
+	state->storage				state->storage + state->storageSize
+
+	   performed using pointerBoundsCheck( outer, outerlen, inner, innerlen ), 
+	   which computes:
+
+		if( inner < outer || \
+			inner + innerLen > outer + outerLen )
+	
+	   We have to pass 1 as the size of memblock because pointerBoundsCheck()
+	   doesn't allow a length of 0, which converts the x + 1 > y to x >= y */
+	if( pointerBoundsCheck( state->storage, state->storageSize,
+							memblock, 1 ) )
 		return;
 
 	/* It's outside the pool and therefore dynamically allocated, free it */
@@ -449,6 +506,12 @@ void freeMemPool( INOUT_PTR void *statePtr,
    rather than returning an error status (the fact that they dump 
    diagnostics to stdout during operation should be a clue as to their
    intended status and usage) */
+
+#if defined( CONFIG_DEBUG_MALLOC ) && defined( CONFIG_FAULT_MALLOC )
+  /* These have different internal memory layouts so calls to the two
+     arent interchangeable */
+  #error CONFIG_DEBUG_MALLOC and CONFIG_FAULT_MALLOC can't both be defined
+#endif /* CONFIG_DEBUG_MALLOC && CONFIG_FAULT_MALLOC */
 
 #ifdef CONFIG_DEBUG_MALLOC
 
@@ -517,9 +580,9 @@ void *clAllocFn( const char *fileName, const char *fnName,
 		}
 	mallocCount++;
 #endif /* CONFIG_MALLOCTEST */
-	if( ( memPtr = malloc( size + sizeof( LONG ) ) ) == NULL )
+	if( ( memPtr = malloc( size + UINT32_SIZE ) ) == NULL )
 		return( NULL );
-	mputLong( memPtr, clAllocIndex );	/* Implicit memPtr += sizeof( LONG ) */
+	mput32( memPtr, clAllocIndex );		/* Implicit memPtr += UINT32_SIZE */
 	clAllocIndex++;
 	return( memPtr );
 	}
@@ -527,15 +590,16 @@ void *clAllocFn( const char *fileName, const char *fnName,
 void clFreeFn( const char *fileName, const char *fnName,
 			   const int lineNo, void *memblock )
 	{
-	BYTE *memPtr = ( BYTE * ) memblock - sizeof( LONG );
+	BYTE *memPtr = ( BYTE * ) memblock - UINT32_SIZE;
 	int index, length;
 
 	assert( fileName != NULL );
 	assert( fnName != NULL );
 	assert( lineNo > 0 );
+	assert( memblock != NULL );
 
 	index = mget32( memPtr );
-	memPtr -= sizeof( LONG );		/* mget32() changes memPtr */
+	memPtr -= UINT32_SIZE;		/* mget32() changes memPtr */
 	length = DEBUG_PRINT(( "FREE : %s:%s:%d", debugGetBasePath( fileName ), 
 						   fnName, lineNo ));
 	while( length < 56 )

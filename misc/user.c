@@ -1138,7 +1138,7 @@ int zeroiseUsers( INOUT_PTR USER_INFO *userInfoPtr )
 	{
 	const USER_INDEX_INFO *userIndexInfo = userInfoPtr->userIndexPtr;
 	const USER_FILE_INFO *userIndex = userIndexInfo->userIndex;
-	char userFilePath[ MAX_PATH_LENGTH + 1 + 8 ];
+	char userFilePath[ MAX_PATH_LENGTH + 8 ];
 	LOOP_INDEX i;
 	int userFilePathLen, status;
 
@@ -1256,10 +1256,9 @@ int setUserPassword( INOUT_PTR USER_INFO *userInfoPtr,
 /*!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!*/
 retIntError();
 {
-USER_FILE_INFO dummyUserInfo = { 0 }, *userFileInfoPtr = &dummyUserInfo;
 USER_INFO userInfo;
 
-( void ) readUserData( userFileInfoPtr, "", 1 );
+( void ) readUserData( userFileInfo, "", 1 );
 #ifdef USE_ENVELOPES
 memset( &userInfo, 0, sizeof( USER_INFO ) );
 clearErrorInfo( &errorInfo );
@@ -1361,7 +1360,7 @@ int initUserIndex( OUT_PTR_PTR_OPT void **userIndexPtrPtr )
 		   can start again */
 		if( status == CRYPT_ERROR_BADDATA )
 			{
-			char userFilePath[ MAX_PATH_LENGTH + 1 + 8 ];
+			char userFilePath[ MAX_PATH_LENGTH + 8 ];
 			int userFilePathLen;
 
 			status = fileBuildCryptlibPath( userFilePath, MAX_PATH_LENGTH, 

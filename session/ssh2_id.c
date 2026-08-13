@@ -48,7 +48,8 @@
 	A free-form text string, including complete gibberish like "SSH-2.0--"
 	and "SSH-2.0-X", but more typically either a vendor name with no version
 	number or some user-selected string that should be in a banner, for 
-	example "SSH-2.0-You are connected Nissan Cleo [...]".
+	example "SSH-2.0-You are connected Nissan Cleo [...]" (that's an actual
+	real string).
 
    We handle all three, except for the extremely broken ones in the third
    class like "SSH-2.0--".
@@ -1238,8 +1239,15 @@ int readSSHID( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* Make sure that we got enough data to work with.  We need at least 
 	   "SSH-" (ID, size SSH_ID_SIZE) + "x.y-" (SSH protocol version, size 4) + 
 	   "xx" (software version/ID, of which the shortest-known is "Go", used 
-	   by "a fork of go's ssh lib", followed by the next-shortest "ConfD", 
-	   size 2) */
+	   by "a fork of go's ssh lib", (size 2).
+	   
+	   Note that this is a pre-filter check before we've parsed anything 
+	   else that allows us to at least get through to the debug-dump
+	   below to let the user know what we're dealing with.  After we've 
+	   picked out the actual version string we perform a second more 
+	   restrictive check for a valid-looking version string, which excludes 
+	   the mutant go sshlib fork mentioned above which seems to be a one-off 
+	   event from 15-odd years ago, https://github.com/evanphx/ssh */
 	if( length < SSH_ID_SIZE + 4 + 2 || length > SSH_ID_MAX_SIZE )
 		{
 		retExt( CRYPT_ERROR_BADDATA,

@@ -1,0 +1,26 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 10.00
+# Visual C++ Express 2008
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Crypt32", "crypt32_2008.vcproj", "{BA8BE9B3-3874-490F-B056-FD405FA357E4}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Crosscompile|Win32 = Crosscompile|Win32
+		Debug|Win32 = Debug|Win32
+		Fuzz|Win32 = Fuzz|Win32
+		Release|Win32 = Release|Win32
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{BA8BE9B3-3874-490F-B056-FD405FA357E4}.Crosscompile|Win32.ActiveCfg = Crosscompile|Win32
+		{BA8BE9B3-3874-490F-B056-FD405FA357E4}.Crosscompile|Win32.Build.0 = Crosscompile|Win32
+		{BA8BE9B3-3874-490F-B056-FD405FA357E4}.Debug|Win32.ActiveCfg = Debug|Win32
+		{BA8BE9B3-3874-490F-B056-FD405FA357E4}.Debug|Win32.Build.0 = Debug|Win32
+		{BA8BE9B3-3874-490F-B056-FD405FA357E4}.Fuzz|Win32.ActiveCfg = Fuzz|Win32
+		{BA8BE9B3-3874-490F-B056-FD405FA357E4}.Fuzz|Win32.Build.0 = Fuzz|Win32
+		{BA8BE9B3-3874-490F-B056-FD405FA357E4}.Release|Win32.ActiveCfg = Release|Win32
+		{BA8BE9B3-3874-490F-B056-FD405FA357E4}.Release|Win32.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

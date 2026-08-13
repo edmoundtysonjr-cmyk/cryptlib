@@ -1657,10 +1657,11 @@ int mqx_select( int socket_range, rtcs_fd_set *read_bits,
   #define AI_NUMERICSERV			0
 #endif /* !AI_NUMERICSERV */
 
-/* Check whether an address family returned from a DNS lookup is allowed 
-   (meaning recognised) */
+/* Check whether an address family returned from a DNS lookup is allowed */
 
-#ifdef USE_IPv6
+#if defined( USE_IPV4_ONLY )
+  #define allowedAddressFamily( family )	( ( family ) == AF_INET )
+#elif defined( USE_IPv6 )
   #define allowedAddressFamily( family ) \
 		  ( ( ( family ) == AF_INET ) || ( ( family ) == AF_INET6 ) )
 #else
@@ -1991,7 +1992,8 @@ int getAddressInfo( INOUT_PTR NET_STREAM_INFO *netStream,
 STDC_NONNULL_ARG( ( 1 ) ) \
 void freeAddressInfo( struct addrinfo *addrInfoPtr );
 STDC_NONNULL_ARG( ( 1, 3, 5, 6 ) ) \
-void getSocketAddress( IN_BUFFER( sockAddrLen ) const void *sockAddr,
+void getSocketAddress( IN_BUFFER( sockAddrLen ) \
+							const struct sockaddr *sockAddr,
 					   IN_LENGTH_SHORT_MIN( 8 ) const int sockAddrLen,
 					   OUT_BUFFER( addressMaxLen, *addressLen ) \
 							char *address, 
@@ -1999,8 +2001,10 @@ void getSocketAddress( IN_BUFFER( sockAddrLen ) const void *sockAddr,
 					   OUT_LENGTH_BOUNDED_Z( addressMaxLen ) \
 							int *addressLen, 
 					   OUT_PORT_Z int *port );
-STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
-void getSocketAddressBinary( const struct sockaddr *sockAddr,
+STDC_NONNULL_ARG( ( 1, 3, 5 ) ) \
+void getSocketAddressBinary( IN_BUFFER( sockAddrLen ) \
+								const struct sockaddr *sockAddr,
+							 IN_LENGTH_SHORT_MIN( 8 ) const int sockAddrLen,
 							 OUT_BUFFER( addressMaxLen, *addressLen ) \
 								char *address, 
 							 IN_LENGTH_SHORT_MIN( IP6_ADDR_SIZE ) \

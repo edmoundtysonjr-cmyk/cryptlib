@@ -43,9 +43,18 @@ BOOLEAN sanityCheckPKCInfo( const PKC_INFO *pkcInfo )
 		}
 	else
 		{
-		if( pkcInfo->keySizeBits < 0 || \
-			pkcInfo->keySizeBits > bytesToBits( CRYPT_MAX_PKCSIZE ) )
-			return( FALSE );
+		if( isBernsteinAlgo( pkcInfo->cryptAlgo ) )
+			{
+			if( pkcInfo->keySizeBits != 0 && \
+				pkcInfo->keySizeBits != bytesToBits( MAX_PKCSIZE_BERNSTEIN ) )
+				return( FALSE );
+			}
+		else
+			{
+			if( pkcInfo->keySizeBits < 0 || \
+				pkcInfo->keySizeBits > bytesToBits( CRYPT_MAX_PKCSIZE ) )
+				return( FALSE );
+			}
 		}
 	if( pkcInfo->publicKeyInfo == NULL )
 		{
@@ -86,7 +95,15 @@ BOOLEAN sanityCheckPKCInfo( const PKC_INFO *pkcInfo )
 	   now */
 #if defined( USE_X25519 ) || defined( USE_ED25519 ) 
 	if( isBernsteinAlgo( pkcInfo->cryptAlgo ) )
+		{
+		/* The Bernstein algorithms use somewhat different key storage than 
+		   the standard PKCs */
+		if( pkcInfo->bernsteinKey != ( BERNSTEIN_KEY_INFO * ) &pkcInfo->bnCTX || \
+			pkcInfo->bernsteinKeySize != sizeof( BERNSTEIN_KEY_INFO ) )
+			return( FALSE );
+			
 		return( TRUE );
+		}
 #endif /* USE_X25519 || USE_ED25519 */
 #ifdef USE_MLKEM 
 	if( isPqcAlgo( pkcInfo->cryptAlgo ) )
@@ -100,6 +117,32 @@ BOOLEAN sanityCheckPKCInfo( const PKC_INFO *pkcInfo )
 		return( TRUE );
 		}
 #endif /* USE_MLKEM */
+#if defined( USE_ECDH ) || defined( USE_ECDSA )
+	if( isEccAlgo( pkcInfo->cryptAlgo ) )
+		{
+		const EC_GROUP *ecGroup = &pkcInfo->ecCTX;
+		
+		/* The ECC group structure, defined as 'struct ec_group_st' in 
+		   bn/ec_lcl.h, is incredibly complicated, with optional nested sub-
+		   structures and other complications.  The best that we can do is 
+		   check the fields that can sensibly be checked, which detects at
+		   least overall corruption problems */
+		if( !sanityCheckBignum( &pkcInfo->ecPoint.X ) || \
+			!sanityCheckBignum( &pkcInfo->ecPoint.Y ) || \
+			!sanityCheckBignum( &pkcInfo->ecPoint.Z ) )
+			return( FALSE );
+		if( !sanityCheckBignum( &pkcInfo->tmpPoint.X ) || \
+			!sanityCheckBignum( &pkcInfo->tmpPoint.Y ) || \
+			!sanityCheckBignum( &pkcInfo->tmpPoint.Z ) )
+			return( FALSE );
+		if( !sanityCheckBignum( &ecGroup->order ) || \
+			!sanityCheckBignum( &ecGroup->cofactor ) || \
+			!sanityCheckBignum( &ecGroup->field ) || \
+			!sanityCheckBignum( &ecGroup->a ) || \
+			!sanityCheckBignum( &ecGroup->b ) )
+			return( FALSE );
+		}
+#endif /* USE_ECDH || USE_ECDSA */
 
 	/* Check the remaining bignums */
 	if( !sanityCheckBNCTX( &pkcInfo->bnCTX ) )
@@ -127,7 +170,7 @@ void clearTempBignums( INOUT_PTR PKC_INFO *pkcInfo )
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
 
 	/* Some algorithms don't use the bignums but store their own data in the
-	   space so we don't want to touch them */
+	   bignum space so we don't want to touch them */
 #if defined( USE_X25519 ) || defined( USE_ED25519 ) || defined( USE_MLKEM )
 	if( isBernsteinAlgo( pkcInfo->cryptAlgo ) || \
 		isPqcAlgo( pkcInfo->cryptAlgo ) )
@@ -136,9 +179,17 @@ void clearTempBignums( INOUT_PTR PKC_INFO *pkcInfo )
 
 	BN_clear( &pkcInfo->tmp1 ); BN_clear( &pkcInfo->tmp2 );
 	BN_clear( &pkcInfo->tmp3 );
+	if( isDlpAlgo( pkcInfo->cryptAlgo ) )
+		{
+		/* These are actually standard paramX values, but the DLP code uses 
+		   some of them as temporary variables since they're not used for 
+		   DLP keys */
+		BN_clear( &pkcInfo->dlpTmp1 );
+		BN_clear( &pkcInfo->dlpTmp2 );
+		BN_clear( &pkcInfo->dlpTmp3 );
+		}
 #if defined( USE_ECDH ) || defined( USE_ECDSA )
-	if( isEccAlgo( pkcInfo->cryptAlgo ) && \
-		!isBernsteinAlgo( pkcInfo->cryptAlgo ) )
+	if( isEccAlgo( pkcInfo->cryptAlgo ) )
 		{
 		BN_clear( &pkcInfo->eccParam_tmp4 ); 
 		BN_clear( &pkcInfo->eccParam_tmp5 );
@@ -147,7 +198,7 @@ void clearTempBignums( INOUT_PTR PKC_INFO *pkcInfo )
 	BN_CTX_final( &pkcInfo->bnCTX );
 	}
 
-/* Initialise and free the bignum information in a context */
+/* Initialise and clear the bignum information in a context */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int initContextBignums( INOUT_PTR PKC_INFO *pkcInfo, 
@@ -155,12 +206,14 @@ int initContextBignums( INOUT_PTR PKC_INFO *pkcInfo,
 	{
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
 
-	REQUIRES( isEnumRange( cryptAlgo, CRYPT_ALGO ) );
+	REQUIRES( isEnumRange( cryptAlgo, CRYPT_ALGO ) && \
+			  isPkcAlgo( cryptAlgo ) );
 
 	/* Initialise the overall PKC information */
 	memset( pkcInfo, 0, sizeof( PKC_INFO ) );
 	pkcInfo->cryptAlgo = cryptAlgo;
 	INIT_FLAGS( pkcInfo->flags, PKCINFO_FLAG_NONE );
+	pkcInfo->checksum = CRYPT_ERROR;
 
 	/* Initialise the bignum information.  The values aren't used for all
 	   algorithm types but we clear everything in any case to keep things
@@ -177,20 +230,9 @@ int initContextBignums( INOUT_PTR PKC_INFO *pkcInfo,
 #if defined( USE_ECDH ) || defined( USE_ECDSA )
 		case CRYPT_ALGO_ECDSA:
 		case CRYPT_ALGO_ECDH:
-			pkcInfo->ecCTX = EC_GROUP_new( EC_GFp_simple_method() );
-			if( pkcInfo->ecCTX == NULL )
-				return( CRYPT_ERROR_MEMORY );
-			pkcInfo->ecPoint = EC_POINT_new( pkcInfo->ecCTX );
-			pkcInfo->tmpPoint = EC_POINT_new( pkcInfo->ecCTX );
-			if( pkcInfo->ecPoint == NULL || pkcInfo->tmpPoint == NULL )
-				{
-				if( pkcInfo->tmpPoint != NULL )
-					EC_POINT_free( pkcInfo->tmpPoint );
-				if( pkcInfo->ecPoint != NULL )
-					EC_POINT_free( pkcInfo->ecPoint );
-				EC_GROUP_free( pkcInfo->ecCTX );
-				return( CRYPT_ERROR_MEMORY );
-				}
+			EC_GROUP_init( &pkcInfo->ecCTX, EC_GFp_simple_method() );
+			EC_POINT_init( &pkcInfo->ecPoint, &pkcInfo->ecCTX );
+			EC_POINT_init( &pkcInfo->tmpPoint, &pkcInfo->ecCTX );
 			STDC_FALLTHROUGH;
 #endif /* USE_ECDH || USE_ECDSA */
 
@@ -207,18 +249,27 @@ int initContextBignums( INOUT_PTR PKC_INFO *pkcInfo,
 #if defined( USE_X25519 ) || defined( USE_ED25519 )
 		case CRYPT_ALGO_25519:
 		case CRYPT_ALGO_ED25519:
-			/* The 25519 parameters are just a block of memory that was 
-			   cleared as part of the overall PKC_INFO clearing and don't 
-			   need any initialisation */
+			{
+			static_assert( sizeof( BERNSTEIN_KEY_INFO ) <= sizeof( BN_CTX ),
+						   "BERNSTEIN_KEY_INFO won't fit inside BN_CTX storage space" );
+
+			/* Bernstein-algorithm keys aren't standard bignums but are 
+			   stored in the otherwise unused bnCTX storage */
+			pkcInfo->bernsteinKey = ( BERNSTEIN_KEY_INFO * ) &pkcInfo->bnCTX;
+			pkcInfo->bernsteinKeySize = sizeof( BERNSTEIN_KEY_INFO );
+			memset( pkcInfo->bernsteinKey, 0, sizeof( BERNSTEIN_KEY_INFO ) );
 			break;
-#endif /* USE_X25519 || defined( USE_ED25519 */
+			}
+#endif /* USE_X25519 || USE_ED25519 */
 
 #ifdef USE_MLKEM
 		case CRYPT_ALGO_MLKEM:
 			{
+			static_assert( sizeof( MLKEM_KEY_INFO ) <= sizeof( BN_CTX ),
+						   "MLKEM_KEY_INFO won't fit inside BN_CTX storage space" );
+
 			/* PQC keys, which are enormous, are stored in the otherwise 
-			   unused bnCTX storage.  This is just an unstructured block of
-			   memory, the actual size used will be set by the caller */
+			   unused bnCTX storage */
 			pkcInfo->mlkemKey = ( MLKEM_KEY_INFO * ) &pkcInfo->bnCTX;
 			pkcInfo->mlkemKeySize = sizeof( MLKEM_KEY_INFO );
 			memset( pkcInfo->mlkemKey, 0, sizeof( MLKEM_KEY_INFO ) );
@@ -251,8 +302,9 @@ void endContextBignums( INOUT_PTR PKC_INFO *pkcInfo,
 
 	REQUIRES_V( isBooleanValue( isDummyContext ) );
 
-	/* If it's a dummy context then there's nothing to do except optionally
-	   free the encoded publicKeyInfo */
+	/* If it's a dummy context then initContextBignums() hasn't been called 
+	   so there's nothing to do except optionally free the encoded 
+	   publicKeyInfo */
 	if( isDummyContext )
 		{
 		if( pkcInfo->publicKeyInfo != NULL )
@@ -278,9 +330,9 @@ void endContextBignums( INOUT_PTR PKC_INFO *pkcInfo,
 #if defined( USE_ECDH ) || defined( USE_ECDSA )
 		case CRYPT_ALGO_ECDSA:
 		case CRYPT_ALGO_ECDH:
-			EC_POINT_free( pkcInfo->tmpPoint );
-			EC_POINT_free( pkcInfo->ecPoint );
-			EC_GROUP_free( pkcInfo->ecCTX );
+			EC_POINT_clear( &pkcInfo->tmpPoint );
+			EC_POINT_clear( &pkcInfo->ecPoint );
+			EC_GROUP_clear( &pkcInfo->ecCTX );
 			STDC_FALLTHROUGH;
 #endif /* USE_ECDH || USE_ECDSA */
 
@@ -297,19 +349,23 @@ void endContextBignums( INOUT_PTR PKC_INFO *pkcInfo,
 #if defined( USE_X25519 ) || defined( USE_ED25519 )
 		case CRYPT_ALGO_25519:
 		case CRYPT_ALGO_ED25519:
-			/* The 25519 parameters are just a block of memory that's
-			   cleared as part of the overall PKC_INFO clearing and don't 
-			   need any cleanup */
+			zeroise( pkcInfo->bernsteinKey, sizeof( BERNSTEIN_KEY_INFO ) );
+			pkcInfo->bernsteinKey = NULL;
+			pkcInfo->bernsteinKeySize = 0;
 			break;
-#endif /* USE_X25519 || defined( USE_ED25519 */
+#endif /* USE_X25519 || USE_ED25519 */
 
 #ifdef USE_MLKEM
 		case CRYPT_ALGO_MLKEM:
-			zeroise( pkcInfo->mlkemKey, pkcInfo->mlkemKeySize );
+			zeroise( pkcInfo->mlkemKey, sizeof( MLKEM_KEY_INFO ) );
+			pkcInfo->mlkemKey = NULL;
+			pkcInfo->mlkemKeySize = 0;
 			break;
 #endif /* USE_MLKEM */
 
 		default:
+			/* The pkcInfo is most likely corrupted, exit now before we try
+			   freeing a possibly-invalid pointer below */
 			retIntError_Void();
 		}
 	if( pkcInfo->publicKeyInfo != NULL )
@@ -325,42 +381,14 @@ void endContextBignums( INOUT_PTR PKC_INFO *pkcInfo,
 *																			*
 ****************************************************************************/
 
-/* Checksum a bignum's metadata and its data payload.  We can't use the 
-   standard checksumData() here both because we need to keep a running total 
-   of the existing checksum value and because we don't want to truncate the 
-   checksum value to 16 bits at the end of each calculation because it's fed 
-   to the next round of checksumming */
-
-CHECK_RETVAL_RANGE_NOERROR( 0, INT_MAX ) STDC_NONNULL_ARG( ( 1 ) ) \
-static int checksumBignumData( IN_BUFFER( length ) const void *data, 
-							   IN_LENGTH_SHORT const int length,
-							   const int initialSum )
-	{
-	const unsigned char *dataPtr = data;
-	LOOP_INDEX i;
-	int sum1 = 0, sum2 = initialSum;
-
-	assert( isReadPtrDynamic( data, length ) );
-
-	REQUIRES_EXT( isShortIntegerRangeNZ( length ), 0 );
-
-	LOOP_MAX( i = 0, i < length, i++ )
-		{
-		ENSURES_EXT( LOOP_INVARIANT_MAX( i, 0, length - 1 ), 0 );
-
-		sum1 += dataPtr[ i ];
-		sum2 += sum1;
-		}
-	ENSURES_EXT( LOOP_BOUND_OK, 0 );
-	return( sum2 );
-	}
+/* Checksum a bignum's metadata and its data payload */
 
 #define BN_checksum( bignum, checksum ) \
-	*( checksum ) = checksumBignumData( bignum, sizeof( BIGNUM ), *( checksum ) )
+	*( checksum ) = checksumDataExt( bignum, sizeof( BIGNUM ), *( checksum ) )
 #define BN_checksum_montgomery( montCTX, checksum ) \
-	*( checksum ) = checksumBignumData( montCTX, sizeof( BN_MONT_CTX ), *( checksum ) )
+	*( checksum ) = checksumDataExt( montCTX, sizeof( BN_MONT_CTX ), *( checksum ) )
 #define Keydata_checksum( data, length, checksum ) \
-	*( checksum ) = checksumBignumData( data, length, *( checksum ) )
+	*( checksum ) = checksumDataExt( data, length, *( checksum ) )
 
 #if defined( USE_ECDH ) || defined( USE_ECDSA )
 
@@ -370,13 +398,13 @@ STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static void BN_checksum_ec_group( IN_PTR const EC_GROUP *group, 
 								  INOUT_PTR int *checksum )
 	{
-	int value = *checksum;
+	int value;
 
 	assert( isReadPtr( group, sizeof( EC_GROUP ) ) );
 	assert( isWritePtr( checksum, sizeof( int ) ) );
 
 	/* Checksum the EC_GROUP metadata */
-	value = checksumBignumData( group, sizeof( EC_GROUP ), value );
+	value = checksumDataExt( group, sizeof( EC_GROUP ), *checksum );
 
 	/* EC_GROUPs have an incredibly complex inner structure (see 
 	   bn/ec_lcl.h), the following checksums the common data without getting 
@@ -394,13 +422,13 @@ STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static void BN_checksum_ec_point( IN_PTR const EC_POINT *point, 
 								  INOUT_PTR int *checksum )
 	{
-	int value = *checksum;
+	int value;
 
 	assert( isReadPtr( point, sizeof( EC_POINT ) ) );
 	assert( isWritePtr( checksum, sizeof( int ) ) );
 
 	/* Checksum the EC_POINT metadata */
-	value = checksumBignumData( point, sizeof( EC_POINT ), value );
+	value = checksumDataExt( point, sizeof( EC_POINT ), *checksum );
 
 	/* Checksum the EC_POINT data */
 	BN_checksum( &point->X, &value );
@@ -414,13 +442,13 @@ static void BN_checksum_ec_point( IN_PTR const EC_POINT *point,
 /* Calculate a bignum checksum */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
-static int bignumChecksum( INOUT_PTR PKC_INFO *pkcInfo, 
+static int bignumChecksum( IN_PTR const PKC_INFO *pkcInfo, 
 						   IN_BOOL const BOOLEAN isPrivateKey,
 						   OUT_PTR int *checksum )
 	{
-	int value = 0;
+	int value = CHECKSUMDATA_INIT_VALUE;
 
-	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
+	assert( isReadPtr( pkcInfo, sizeof( PKC_INFO ) ) );
 	assert( isWritePtr( checksum, sizeof( int ) ) );
 
 	REQUIRES( isBooleanValue( isPrivateKey ) );
@@ -472,22 +500,18 @@ static int bignumChecksum( INOUT_PTR PKC_INFO *pkcInfo,
 			BN_checksum( &pkcInfo->eccParam_qy, &value );
 			if( isPrivateKey )
 				BN_checksum( &pkcInfo->eccParam_d, &value );
-			BN_checksum_ec_group( pkcInfo->ecCTX, &value );
-			BN_checksum_ec_point( pkcInfo->ecPoint, &value );
+			BN_checksum_ec_group( &pkcInfo->ecCTX, &value );
+			BN_checksum_ec_point( &pkcInfo->ecPoint, &value );
 			break;
 #endif /* USE_ECDH || USE_ECDSA */
 		
 #if defined( USE_X25519 ) || defined( USE_ED25519 )
 		case CRYPT_ALGO_25519:
 		case CRYPT_ALGO_ED25519:
-			BN_checksum( &pkcInfo->curve25519Param_pub, &value );
-			if( isPrivateKey )
-				{
-				BN_checksum( &pkcInfo->curve25519Param_priv, &value );
-				BN_checksum( &pkcInfo->curve25519Param_s, &value );
-				}
+			Keydata_checksum( pkcInfo->bernsteinKey, 
+							  pkcInfo->bernsteinKeySize, &value );
 			break;
-#endif /* USE_X25519 || defined( USE_ED25519 */
+#endif /* USE_X25519 || USE_ED25519 */
 
 #ifdef USE_MLKEM
 		case CRYPT_ALGO_MLKEM:
@@ -512,12 +536,13 @@ int checksumContextData( INOUT_PTR PKC_INFO *pkcInfo,
 
 	assert( isWritePtr( pkcInfo, sizeof( PKC_INFO ) ) );
 
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 	REQUIRES( isBooleanValue( isPrivateKey ) );
 
 	/* Set or update the data checksum */
 	status = bignumChecksum( pkcInfo, isPrivateKey, &checksum );
 	ENSURES( cryptStatusOK( status ) );
-	if( pkcInfo->checksum == 0L )
+	if( pkcInfo->checksum == CRYPT_ERROR )
 		pkcInfo->checksum = checksum;
 	else
 		{
@@ -541,17 +566,16 @@ int checksumContextData( INOUT_PTR PKC_INFO *pkcInfo,
    parameters, for which there's no need to parse and process them into 
    dynamically-allocated RAM space.
 
-   We can't use the standard Fletcher checksum for this because it performs
-   poorly on data with long strings of repeated bits, particularly all-zero
-   and all-one words, which occur in both the DLP and ECDLP domain 
-   parameters.  What we need is a function with good avalanche, of which
-   MurmurHash seems to be the best tradeoff between effectiveness in
-   defeating bit flips and the like and speed.
-
-   The principal alternative is CityHash (and its follow-on FarmHash), but 
-   that's incredibly complex (FarmHash is 12K LOC, do have a cow), and in 
-   any case CityHash only exists as 64- and 128-bit variants, there's no 
-   32-bit version of the hash.
+   We use MurMurHash3, a function that's distinct from the standard 
+   checksumData(), because it checksums an entire BN_ULONG at a time.  This 
+   is done for historic reasons because the checksums for the static bignums 
+   were calculated using this function and switching to checksumData() would
+   require recalculating all of the values.  Although this BN_ULONG-at-a-time
+   process is much quicker than the byte-at-a-time checksumData(), it only
+   checksums the BN_ULONG values themselves and not the entire bignum, which
+   we check separately since we always know what's supposed to be in the 
+   other static fields, but this doesn't hold for the overall bignums so we
+   can't use it on them.
 
    The following code is based on the MurmurHash3 implementation by Austin 
    Appleby, who placed it in the public domain.  It's built around a core
@@ -604,13 +628,15 @@ static BN_ULONG MurmurHash3( const BN_ULONG *data, const int len, BN_ULONG seed 
 	const int endOffset = ( len & 1 ) ? len - 1 : INT_MAX;
 	LOOP_INDEX i;
 
+	assert( len > 0 && len <= BIGNUM_ALLOC_WORDS_EXT2 );	
+			/* Required for isReadPtr() below */
 	assert( isReadPtr( data, len * sizeof( BN_ULONG ) ) );
 
-	ENSURES_EXT( len > 0 && len <= BIGNUM_ALLOC_WORDS_EXT2, 0 );
+	REQUIRES_EXT( len > 0 && len <= BIGNUM_ALLOC_WORDS_EXT2, 0 );
 
 	/* Process each input word, two words at a time.  Since we're reading two 
 	   words at a time the length has to be an even value which is always the 
-	   case for standard-sized bignums, however we need to be able do deal with 
+	   case for standard-sized bignums, however we need to be able to deal with 
 	   odd-sized ones in case we ever encounter them at some point, and the 
 	   bignum self-tests do use very short values for testing.  To deal with 
 	   this we use a zero value as the last value if the bignum has an odd 
@@ -669,17 +695,19 @@ static BN_ULONG MurmurHash3( const BN_ULONG *data, const int len, BN_ULONG seed 
 	BN_ULONG h1 = seed;
 	LOOP_INDEX i;
 
+	assert( len > 0 && len <= BIGNUM_ALLOC_WORDS_EXT2 );	
+			/* Required for isReadPtr() below */
 	assert( isReadPtr( data, len * sizeof( BN_ULONG ) ) );
 
-	ENSURES_EXT( len > 0 && len <= BIGNUM_ALLOC_WORDS_EXT2, 0 );
+	REQUIRES_EXT( len > 0 && len <= BIGNUM_ALLOC_WORDS_EXT2, 0 );
 
 	/* Process each input word */
-	LOOP_EXT( i = 0, i < len, i++, BIGNUM_ALLOC_WORDS_EXT2 )
+	LOOP_EXT( i = 0, i < len, i++, BIGNUM_ALLOC_WORDS_EXT2 + 1 )
 		{
 		BN_ULONG k1;
 
 		ENSURES_EXT( LOOP_INVARIANT_EXT( i, 0, len - 1, 
-										 BIGNUM_ALLOC_WORDS_EXT2 ), 0 );
+										 BIGNUM_ALLOC_WORDS_EXT2 + 1 ), 0 );
 
 		k1 = data[ i ];
 
@@ -827,6 +855,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int initContextBignums( INOUT_PTR PKC_INFO *pkcInfo, 
 						IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
+	return( CRYPT_ERROR );
 	}
 STDC_NONNULL_ARG( ( 1 ) ) \
 void endContextBignums( INOUT_PTR PKC_INFO *pkcInfo, 

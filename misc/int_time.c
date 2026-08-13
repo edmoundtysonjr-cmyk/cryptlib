@@ -5,18 +5,26 @@
 *																			*
 ****************************************************************************/
 
-#if defined( INC_ALL )
-  #include "crypt.h"
-#else
-  #include "crypt.h"
-#endif /* Compiler-specific includes */
+#include "crypt.h"
 
 /* Expressions involving time_t and integer constant values get a bit hairy 
    if time_t is 64-bit but the integer constant is treated as 32-bit, 
    leading to warnings from some compilers.  To deal with this we cast the
-   integer constant value to a time_t */
+   integer constant value to a time_t.  We also have to create a custom
+   equivalent of a 64-bit MAX_INTLENGTH, which is required for LLP64 systems 
+   and 32-bit systems with a 64-bit time_t */
 
-#define MAX_INTLENGTH_TIME	( ( time_t ) MAX_INTLENGTH )
+#define MAX_INTLENGTH_TIME_DURATION		( ( time_t ) MAX_INTLENGTH )
+#ifdef TIMET_64BIT
+  #define MAX_INTLENGTH_TIME_ABSOLUTE	( ( time_t ) LLONG_MAX - MAX_INTLENGTH_DELTA )
+#else
+  #define MAX_INTLENGTH_TIME_ABSOLUTE	MAX_INTLENGTH_TIME_DURATION
+#endif /* TIMET_64BIT */
+
+/* Value for the bad-system-time count variable */
+
+#define BADTIME_COUNT_MAX				1000
+#define BADTIME_COUNT_SENTINEL			( -1234 )
 
 /****************************************************************************
 *																			*
@@ -62,7 +70,9 @@ static time_t returnTime( const time_t theTime,
 			getTimeType == GETTIME_NOFAIL_MINUTES )
 			{
 			/* It's a non-critical time value, return an approximation */
-			return( CURRENT_TIME_VALUE );
+			return( ( getTimeType == GETTIME_NOFAIL ) ? \
+					CURRENT_TIME_VALUE : \
+					CURRENT_TIME_VALUE - ( CURRENT_TIME_VALUE % 60 ) );
 			}
 
 		return( 0 );
@@ -112,11 +122,20 @@ time_t getTime( IN_ENUM_OPT( GETTIME ) const GETTIME_TYPE getTimeType )
 	REQUIRES_EXT( isEnumRangeOpt( getTimeType, GETTIME ), 0 );
 
 	/* If we're running a self-test with externally-controlled time, return
-	   the pre-set time value */
+	   the pre-set time value.  This is only exercised from testIntTime() 
+	   and uses TMR storage and occasional scrubbing to make sure that we
+	   don't false-trigger due to memory corruption */
 #ifndef CONFIG_CONSERVE_MEMORY_EXTRA
 	testTime = TMR_GET( testTimeValue );
 	if( testTime != 0 )
+		{
+		/* We return the raw time, not sanitised through returnTime(), so
+		   the caller can check the actual result rather than a modified 
+		   one */
 		return( testTime );
+		}
+	if( ( theTime & 0x0F ) == 0 )
+		TMR_SCRUB( testTimeValue );
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 	return( returnTime( theTime, getTimeType ) );
@@ -133,8 +152,9 @@ time_t getReliableTime( IN_HANDLE const CRYPT_HANDLE cryptHandle,
 	REQUIRES_EXT( ( cryptHandle == SYSTEM_OBJECT_HANDLE || \
 					isHandleRangeValid( cryptHandle ) ), 0 );
 	REQUIRES_EXT( getTimeType == GETTIME_MINUTES, 0 );
-				  /* This function is only ever used for generating 
-					 timestamps so it's always called with GETTIME_MINUTES */
+				  /* This function is currently only ever used for 
+				     generating timestamps so it's always called with 
+				     GETTIME_MINUTES */
 
 	/* Get the dependent device for the object that needs the time.  This
 	   is typically a private key being used for signing something that 
@@ -201,7 +221,7 @@ time_t getReliableTime( IN_HANDLE const CRYPT_HANDLE cryptHandle,
    adjust by changing the clock) without yielding false positives */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-static BOOLEAN checkMonotimer( const MONOTIMER_INFO *timerInfo )
+static BOOLEAN sanityCheckMonotimer( const MONOTIMER_INFO *timerInfo )
 	{
 	assert( isReadPtr( timerInfo, sizeof( MONOTIMER_INFO ) ) );
 
@@ -224,6 +244,14 @@ static BOOLEAN checkMonotimer( const MONOTIMER_INFO *timerInfo )
 		return( FALSE );
 		}
 
+	/* Make sure the bad system time counter is within range */
+	if( timerInfo->badTimeCount != BADTIME_COUNT_SENTINEL && \
+		!( rangeCheck( timerInfo->badTimeCount, 0, BADTIME_COUNT_MAX ) ) )
+		{
+		DEBUG_PUTS(( "sanityCheckMonotimer: Bad system time counter" ));
+		return( FALSE );
+		}
+	
 	return( TRUE );
 	}
 
@@ -241,7 +269,8 @@ static void handleTimeOutOfBounds( INOUT_PTR MONOTIMER_INFO *timerInfo )
 	   can't reliably set a timeout.  The best that we can do is warn in 
 	   debug mode and set a zero timeout so that at least one lot of I/O 
 	   will still take place */
-	timerInfo->origTimeout = timerInfo->timeRemaining = 0;
+	timerInfo->origTimeout = timerInfo->timeRemaining = \
+		timerInfo->endTime = 0;
 	}
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
@@ -254,7 +283,7 @@ static BOOLEAN correctMonoTimer( INOUT_PTR MONOTIMER_INFO *timerInfo,
 
 	/* If a time_t over/underflow has occurred, make a best-effort attempt 
 	   to recover */
-	if( !checkMonotimer( timerInfo ) )
+	if( !sanityCheckMonotimer( timerInfo ) )
 		{
 		handleTimeOutOfBounds( timerInfo );
 		return( FALSE );
@@ -309,7 +338,8 @@ static BOOLEAN correctMonoTimer( INOUT_PTR MONOTIMER_INFO *timerInfo,
 	   braindamaged compiler, so we leave the code there for sane compilers
 	   under the acknowledgement that there's no way to address this with 
 	   gcc */
-	if( currentTime >= ( MAX_INTLENGTH_TIME - timerInfo->timeRemaining ) )
+	if( currentTime >= ( MAX_INTLENGTH_TIME_ABSOLUTE - \
+										timerInfo->timeRemaining ) )
 		{
 		DEBUG_DIAG(( "Invalid monoTimer time correction period" ));
 		assert( DEBUG_WARN );
@@ -341,7 +371,7 @@ int setMonoTimer( OUT_PTR MONOTIMER_INFO *timerInfo,
 	REQUIRES( isIntegerRange( duration ) );
 
 	memset( timerInfo, 0, sizeof( MONOTIMER_INFO ) );
-	if( currentTime >= ( MAX_INTLENGTH_TIME - duration ) )
+	if( currentTime >= ( MAX_INTLENGTH_TIME_ABSOLUTE - duration ) )
 		{
 		DEBUG_DIAG(( "Invalid monoTimer time period" ));
 		assert( DEBUG_WARN );
@@ -352,12 +382,12 @@ int setMonoTimer( OUT_PTR MONOTIMER_INFO *timerInfo,
 	timerInfo->timeRemaining = timerInfo->origTimeout = duration;
 	if( getTime( GETTIME_NONE ) <= MIN_TIME_VALUE )
 		{
-		/* There's no usable system time available, just run for 1000
-		   iterations.  This isn't a major problem since timers are only
-		   used to break out of loops that have other exit conditions,
-		   so either one of those will be triggered forcing a loop exit
-		   or the loop will iterate for quite some time but eventually
-		   terminate anyway.
+		/* There's no usable system time available, just run for 
+		   BADTIME_COUNT_MAX iterations.  This isn't a major problem since 
+		   timers are only used to break out of loops that have other exit 
+		   conditions, so either one of those will be triggered forcing a 
+		   loop exit or the loop will iterate for quite some time but 
+		   eventually terminate anyway.
 		   
 		   There's an even more obscure condition under which we could run 
 		   into problems and that's the case of a frozen clock that keeps 
@@ -365,13 +395,13 @@ int setMonoTimer( OUT_PTR MONOTIMER_INFO *timerInfo,
 		   obscure enough that we just rely on the other loop-termination
 		   conditions for an exit */
 		assert( DEBUG_WARN );
-		timerInfo->badTimeCount = 1000;
+		timerInfo->badTimeCount = BADTIME_COUNT_MAX;
 		}
 	else
 		{
 		/* Set the bad-system-time count variable to an invalid value to 
 		   make sure that it's not used */
-		timerInfo->badTimeCount = -1234;
+		timerInfo->badTimeCount = BADTIME_COUNT_SENTINEL;
 		}
 	initOK = correctMonoTimer( timerInfo, currentTime );
 	ENSURES( initOK );
@@ -387,7 +417,7 @@ void extendMonoTimer( INOUT_PTR MONOTIMER_INFO *timerInfo,
 
 	assert( isWritePtr( timerInfo, sizeof( MONOTIMER_INFO ) ) );
 	
-	REQUIRES_V( isIntegerRange( duration ) );
+	REQUIRES_V( isIntegerRangeNZ( duration ) );
 
 	/* Correct the timer for clock skew if required */
 	if( !correctMonoTimer( timerInfo, currentTime ) )
@@ -395,8 +425,8 @@ void extendMonoTimer( INOUT_PTR MONOTIMER_INFO *timerInfo,
 
 	/* Extend the monotonic timer's timeout interval to allow for further
 	   data to be processed */
-	if( timerInfo->origTimeout >= ( MAX_INTLENGTH_TIME - duration ) || \
-		timerInfo->endTime >= ( MAX_INTLENGTH_TIME - duration ) || \
+	if( timerInfo->origTimeout >= ( MAX_INTLENGTH_TIME_DURATION - duration ) || \
+		timerInfo->endTime >= ( MAX_INTLENGTH_TIME_ABSOLUTE - duration ) || \
 		timerInfo->endTime < currentTime )
 		{
 		DEBUG_DIAG(( "Invalid monoTimer time period extension" ));
@@ -437,7 +467,7 @@ BOOLEAN checkMonoTimerExpiryImminent( INOUT_PTR MONOTIMER_INFO *timerInfo,
 		{
 		if( timerInfo->badTimeCount <= 0 )
 			return( TRUE );
-		REQUIRES( !checkOverflowDec( timerInfo->badTimeCount ) );
+		REQUIRES_B( !checkOverflowDec( timerInfo->badTimeCount ) );
 		timerInfo->badTimeCount--;
 		return( FALSE );
 		}
@@ -595,15 +625,24 @@ BOOLEAN checkMonoTimerExpired( INOUT_PTR MONOTIMER_INFO *timerInfo )
   #define ROTL( x, r )		( ( ( x ) << ( r ) ) | ( ( x ) >> ( WORD_SIZE - ( r ) ) ) )
 #endif /* _MSC_VER */
 
-static int merdeMerdeHash( const int value1, const int value2 )
+static int merdeMerdeHash( IN_INT const int value1, 
+						   IN_INT_Z const int value2 )
 	{
 	MACHINE_WORD l = value1, r = value2;
-	int fineDelay, i;
+	LOOP_INDEX i;
+	int fineDelay;
+
+	REQUIRES_EXT( isIntegerRangeNZ( value1 ), 0 );
+	REQUIRES_EXT( isIntegerRange( value2 ), 0 );
 
 	/* Create the initial coarse-grained delay via the world's worst hash 
 	   function, full of data dependencies and pipeline stalls */
-	for( i = 0; i < value1; i++ )
+	LOOP_MAX( i = 0, i < value1, i++ )
 		{
+		int LOOP_ITERATOR_ALT;
+		
+		ENSURES_EXT( LOOP_INVARIANT_MAX( i, 0, value1 - 1 ), 0 );
+		
 		/* Fill up both l and r with bits */
 		l *= r + CONST1;
 		r *= l + CONST2;
@@ -611,8 +650,9 @@ static int merdeMerdeHash( const int value1, const int value2 )
 		/* Since we're about to divide by r, make sure that it's not zero, 
 		   as well as adding a number of unpredictable branches to the code 
 		   flow */
-		while( !( r & 0x800 ) )
+		LOOP_LARGE_WHILE_ALT( !( r & 0x800 ) )
 			r += CONST3;
+		ENSURES_EXT( LOOP_BOUND_OK_ALT, 0 );
 
 		/* Perform a slow divide.  We actually apply it as a mod operation 
 		   (still done via a divide instruction, only the remainder is 
@@ -622,24 +662,36 @@ static int merdeMerdeHash( const int value1, const int value2 )
 		   the problem with divides, at least half the time it'll be a 
 		   no-op, so we shift it four bits to increase the chances of it 
 		   doing something.  Finally, once we've done the divide, we refill 
-		   l since the mod by a smaller amount has decreased its magnitude */
-		l %= r >> 4;
+		   l since the mod by a smaller amount has decreased its magnitude.
+		   We also apply the usual divide-overflow safety check, which isn't
+		   actually necessary since the divisor is a random bit pattern and
+		   in particular bit 12 is always one and won't ever be cleared by
+		   the shift, but is present to match the divide checks used 
+		   everywhere else */
+		if( !checkOverflowDiv( l, r >> 4 ) )
+			l %= r >> 4;
 		l += ROTL( r, 13 );
 
 		/* As before, this time with r and l */
-		while( !( l & 0x800 ) )
+		LOOP_LARGE_WHILE_ALT( !( l & 0x800 ) )
 			l += CONST4;
-		r %= l >> 4;
+		ENSURES_EXT( LOOP_BOUND_OK_ALT, 0 );
+		if( !checkOverflowDiv( r, l >> 4 ) )
+			r %= l >> 4;
 		r += ROTL( l, 13 );
 		}
+	ENSURES_EXT( LOOP_BOUND_OK, 0 );
 
 	/* Finish off with a fine-grained delay */
 	fineDelay = ( int ) ( l & 0x7FFF );
-	for( i = 0; i < fineDelay; i++ )
+	LOOP_MAX( i = 0, i < fineDelay, i++ )
 		{
+		ENSURES_EXT( LOOP_INVARIANT_MAX( i, 0, fineDelay - 1 ), 0 );
+		
 		l += ROTL( r, 23 );
 		r += ROTL( l, 23 );
 		}
+	ENSURES_EXT( LOOP_BOUND_OK, 0 );
 
 	return( ( r + l ) & 0x7FFF );
 	}
@@ -667,6 +719,7 @@ static int merdeMerdeHash( const int value1, const int value2 )
 int insertCryptoDelay( void )
 	{
 	static int seed = 1;
+	int delay;
 
 	/* Insert a short delay.  Since getRandomInteger() returns a short-
 	   integer value (which we make explicit here, although the operation
@@ -680,9 +733,17 @@ int insertCryptoDelay( void )
 	   The first value is the iteration count, the second is a a seed value
 	   that's fed back to the input to ensure that a compiler can't inline/
 	   optimise away the expression if it detects that the result isn't 
-	   being used */ 
-	seed = merdeMerdeHash( getRandomInteger() % 32768, seed );
-	return( merdeMerdeHash( getRandomInteger() % 32768, seed ) );
+	   being used.
+
+	   getRandomInteger() can return zero for a shouldn't-occur error 
+	   condition, this is converted into a small nonzero wait alongside.
+	   The return value from the second call isn't used except to try and
+	   make sure a compiler doesn't optimise the call away so it doesn't
+	   matter if that one is zero */
+	delay = getRandomInteger() % 32768;
+	seed = merdeMerdeHash( max( 5, delay ), seed );
+	delay = getRandomInteger() % 32768;
+	return( merdeMerdeHash( max( 5, delay ), seed ) );
 	}
 
 /* Delay by a large amount by suspending the current thread for a preset 
@@ -742,7 +803,7 @@ int registerCryptoFailure( void )
 									  /* Dummy value, updated on each call */
 	static int failures = 0;
 	const time_t currentTime = getTime( GETTIME_NONE );
-	int status;
+	int failuresLocalCopy, status;
 
 	/* When fuzzing, make sure that we don't insert delays once we bail out 
 	   at the end of the fuzzed data */
@@ -776,10 +837,15 @@ int registerCryptoFailure( void )
 		const int intervals = ( int ) \
 						( ( currentTime - intervalStartTime ) / ( 5 * 60 ) );
 
-		if( intervals < 20 )
-			failures >>= intervals;
-		else
+		if( intervals >= 20 )
 			failures = 0;
+		else
+			{
+			/* Intervals should be positive but could in theory go to zero or 
+			   below if we're getting bad data from the time functions */
+			if( intervals > 0 )
+				failures >>= intervals;
+			}
 		intervalStartTime = currentTime;
 		}
 	else
@@ -794,9 +860,14 @@ int registerCryptoFailure( void )
 	   value */ 
 	if( failures < 50000 )
 		{
-		REQUIRES( !checkOverflowInc( failures ) );
+		REQUIRES_KRNLMUTEX( !checkOverflowInc( failures ),
+							MUTEX_CRYPTODELAY );
 		failures++;
 		}
+
+	/* Get out own copy of the failures value so that we can work with it
+	   undisturbed once we exit the mutex */
+	failuresLocalCopy = failures;
 
 	krnlExitMutex( MUTEX_CRYPTODELAY );
 
@@ -808,20 +879,23 @@ int registerCryptoFailure( void )
 	   triggered the attack rate will be severely throttled unless the code 
 	   is being run with a large number of threads, each of which can be 
 	   parked in randomDelay() while the next thread is attacked */
-	if( failures < 10 )
+	if( failuresLocalCopy < 10 )
 		randomDelay( 0, 500 );		/* 0..0.5s */
 	else
-	if( failures < 50 )
+	if( failuresLocalCopy < 50 )
 		randomDelay( 0, 1000 );		/* 0..1s */
 	else
-	if( failures < 100 )
+	if( failuresLocalCopy < 100 )
 		randomDelay( 1, 2000 );		/* 1..3s */
 	else
-	if( failures < 500 )
+	if( failuresLocalCopy < 500 )
 		randomDelay( 3, 2000 );		/* 3..5s */
 	else
 		randomDelay( 5, 5000 );		/* 5...10s */
 	
+	/* Pseudo-return a value to try and prevent a compiler from optimising
+	   away the call.  The caller never checks these values so it's OK to
+	   return whatever insertCryptoDelay() gives us */
 	return( insertCryptoDelay() );
 	}
 #endif /* USE_SESSIONS */

@@ -63,6 +63,8 @@ static int readOpenPGPLength( INOUT_PTR STREAM *stream,
 		status = value = sgetc( stream );
 		if( cryptStatusError( status ) )
 			return( status );
+		if( checkOverflowShift( localLength - 192, 8 ) )
+			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 		localLength = ( ( localLength - 192 ) << 8 ) + value + 192;
 		if( localLength < 192 || localLength > 8383 )
 			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
@@ -101,7 +103,8 @@ static int readOpenPGPLength( INOUT_PTR STREAM *stream,
 		   
 		   Fortunately the standard also specifies an upper bound, 2^30, 
 		   which keeps us away from problems with 32-bit integers */
-		if( shiftAmount < 2 || shiftAmount > 30 )
+		if( shiftAmount < 2 || shiftAmount > 30 || \
+			checkOverflowShift( 1, shiftAmount ) )
 			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 		localLength = 1 << shiftAmount;
 		if( !isIntegerRangeNZ( localLength ) )
@@ -172,7 +175,7 @@ static int readPGP2Length( INOUT_PTR STREAM *stream,
 /* Read PGP variable-length length values and packet headers (CTB + length).  
    We also have a short-length version which is used to read small packets 
    such as keyrings and sigs and which ensures that the length is in the 
-   range 1...16K */
+   range 0...MAX_INTLENGTH_SHORT */
 
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int pgpReadLength( INOUT_PTR STREAM *stream, 
@@ -323,6 +326,7 @@ int pgpReadShortLength( INOUT_PTR STREAM *stream,
 	int localLength, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
+	assert( isWritePtr( length, sizeof( int ) ) );
 
 	/* Clear return value */
 	*length = 0;
@@ -341,7 +345,7 @@ int pgpReadShortLength( INOUT_PTR STREAM *stream,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int pgpReadPacketHeader( INOUT_PTR STREAM *stream, OUT_OPT_BYTE int *ctb, 
 						 OUT_OPT_LENGTH_Z int *length, 
-						 IN_LENGTH_SHORT const int minLength,
+						 IN_LENGTH_SHORT_Z const int minLength,
 						 IN_LENGTH const int maxLength )
 	{
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );

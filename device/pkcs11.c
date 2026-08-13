@@ -791,6 +791,7 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
 	CK_OBJECT_HANDLE hObject;
 	CK_RV status;
+	void *keyingInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	BYTE *contextKeyPtr;
 	int *contextKeyLenPtr;
 	CRYPT_ALGO_TYPE cryptAlgo;
@@ -804,6 +805,7 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( templateCount >= 8 && templateCount <= 10 );
 	REQUIRES( isShortIntegerRangeNZ( keyLength ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( keyingInfo != NULL );
 
 	cryptAlgo = capabilityInfoPtr->cryptAlgo;
 	keySize = ( cryptAlgo == CRYPT_ALGO_DES || \
@@ -819,15 +821,19 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	/* Set up pointers to the appropriate object sub-type data */
 	if( contextInfoPtr->type == CONTEXT_CONV )
 		{
-		contextKeyPtr = contextInfoPtr->ctxConv->userKey;
-		contextKeyLenPtr = &contextInfoPtr->ctxConv->userKeyLength;
+		CONV_INFO *convInfo = ( CONV_INFO * ) keyingInfo;
+
+		contextKeyPtr = convInfo->userKey;
+		contextKeyLenPtr = &convInfo->userKeyLength;
 		}
 	else
 		{
+		MAC_INFO *macInfo = ( MAC_INFO * ) keyingInfo;
+
 		REQUIRES( contextInfoPtr->type == CONTEXT_MAC );
 
-		contextKeyPtr = contextInfoPtr->ctxMAC->userKey;
-		contextKeyLenPtr = &contextInfoPtr->ctxMAC->userKeyLength;
+		contextKeyPtr = macInfo->userKey;
+		contextKeyLenPtr = &macInfo->userKeyLength;
 		}
 
 	/* Copy the key to internal storage */
@@ -1157,6 +1163,7 @@ static int cipherEncrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	PKCS11_INFO *pkcs11Info;
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	int ivSize, cryptStatus;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -1164,14 +1171,15 @@ static int cipherEncrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( isIntegerRangeNZ( length ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( convInfo != NULL );
 
 	ivSize = capabilityInfoPtr->blockSize;
 
 	/* Set up mode-specific IV parameters if required */
-	if( needsIV( contextInfoPtr->ctxConv->mode ) && \
+	if( needsIV( convInfo->mode ) && \
 		!isStreamCipher( capabilityInfoPtr->cryptAlgo ) )
 		{
-		mechanism.pParameter = contextInfoPtr->ctxConv->currentIV;
+		mechanism.pParameter = convInfo->currentIV;
 		mechanism.ulParameterLen = ivSize;
 		}
 
@@ -1185,7 +1193,7 @@ static int cipherEncrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 								  length, length );
 	if( cryptStatusOK( cryptStatus ) )
 		{
-		if( needsIV( contextInfoPtr->ctxConv->mode ) && \
+		if( needsIV( convInfo->mode ) && \
 			!isStreamCipher( capabilityInfoPtr->cryptAlgo ) )
 			{
 			/* Since PKCS #11 assumes that either all data is encrypted at 
@@ -1196,8 +1204,8 @@ static int cipherEncrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 			REQUIRES( !checkOverflowSub( length, ivSize ) );
 			REQUIRES( rangeCheck( ivSize, 1, CRYPT_MAX_IVSIZE ) );
-			memcpy( contextInfoPtr->ctxConv->currentIV, \
-					( BYTE * ) buffer + length - ivSize, ivSize );
+			memcpy( convInfo->currentIV, ( BYTE * ) buffer + length - ivSize, 
+					ivSize );
 			}
 		}
 	krnlReleaseObject( iCryptDevice );
@@ -1216,6 +1224,7 @@ static int cipherDecrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	PKCS11_INFO *pkcs11Info;
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	BYTE ivBuffer[ CRYPT_MAX_IVSIZE + 8 ];
 	int ivSize, cryptStatus;
 
@@ -1224,17 +1233,18 @@ static int cipherDecrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( isIntegerRangeNZ( length ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( convInfo != NULL );
 
 	ivSize = capabilityInfoPtr->blockSize;
 
 	/* Set up mode-specific IV parameters if required.  In addition we have 
 	   to save the end of the ciphertext as the IV for the next block */
-	if( needsIV( contextInfoPtr->ctxConv->mode ) && \
+	if( needsIV( convInfo->mode ) && \
 		!isStreamCipher( capabilityInfoPtr->cryptAlgo ) )
 		{
 		REQUIRES( length >= ivSize );
 
-		mechanism.pParameter = contextInfoPtr->ctxConv->currentIV;
+		mechanism.pParameter = convInfo->currentIV;
 		mechanism.ulParameterLen = ivSize;
 
 		REQUIRES( !checkOverflowSub( length, ivSize ) );
@@ -1252,7 +1262,7 @@ static int cipherDecrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 								  length );
 	if( cryptStatusOK( cryptStatus ) )
 		{
-		if( needsIV( contextInfoPtr->ctxConv->mode ) && \
+		if( needsIV( convInfo->mode ) && \
 			!isStreamCipher( capabilityInfoPtr->cryptAlgo ) )
 			{
 			/* Since PKCS #11 assumes that either all data is encrypted at 
@@ -1260,7 +1270,7 @@ static int cipherDecrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			   operation, we have to preserve the state (the IV) across 
 			   calls */
 			REQUIRES( rangeCheck( ivSize, 1, CRYPT_MAX_IVSIZE ) );
-			memcpy( contextInfoPtr->ctxConv->currentIV, ivBuffer, ivSize );
+			memcpy( convInfo->currentIV, ivBuffer, ivSize );
 			}
 		}
 	krnlReleaseObject( iCryptDevice );
@@ -1418,6 +1428,7 @@ static int hmac( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	PKCS11_INFO *pkcs11Info;
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
+	MAC_INFO *macInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	CK_MECHANISM mechanism = { 0, NULL_PTR, 0 };
 	CK_RV status;
 	int cryptStatus;
@@ -1427,6 +1438,7 @@ static int hmac( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( isIntegerRange( length ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( macInfo != NULL );
 
 	mechanism.mechanism = capabilityInfoPtr->paramDefaultMech;
 
@@ -1466,8 +1478,8 @@ static int hmac( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		{
 		CK_ULONG ulSigLen = CRYPT_MAX_HASHSIZE;
 
-		status = C_SignFinal( pkcs11Info->hSession, 
-							  contextInfoPtr->ctxMAC->mac, &ulSigLen );
+		status = C_SignFinal( pkcs11Info->hSession, macInfo->mac, 
+							  &ulSigLen );
 		pkcs11Info->hActiveSignObject = CK_OBJECT_NONE;
 		}
 	if( status != CKR_OK )

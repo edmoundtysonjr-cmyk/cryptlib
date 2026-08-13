@@ -109,6 +109,7 @@ static int importCACertificate( OUT_HANDLE_OPT CRYPT_CERTIFICATE *iCryptCert,
    at the end of a certificate chain, we have to jump through extra hoops to
    compare them */
 
+CHECK_RETVAL_BOOL \
 static BOOLEAN isSameCertificate( IN_HANDLE const CRYPT_CERTIFICATE iCryptCert1,
 								  IN_HANDLE const CRYPT_CERTIFICATE iCryptCert2 )
 	{
@@ -401,7 +402,8 @@ typedef enum { GETREQUEST_NONE, GETREQUEST_GETCACAPS, GETREQUEST_GETCACERT,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int sendGetRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
-						   const GETREQUEST_TYPE requestType )
+						   IN_ENUM( GETREQUEST ) \
+								const GETREQUEST_TYPE requestType )
 	{
 	HTTP_DATA_INFO httpDataInfo;
 #if 0	/* 23/3/18 Older versions of the SCEP draft specified the GetCACaps
@@ -452,6 +454,8 @@ static int sendGetRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	if( cryptStatusError( status ) )
 		{
 		sNetGetErrorInfo( &sessionInfoPtr->stream, SESSION_ERRINFO );
+		sioctlSet( &sessionInfoPtr->stream, STREAM_IOCTL_HTTPREQTYPES, 
+				   STREAM_HTTPREQTYPE_POST );
 		retExtErr( status, 
 				   ( status, SESSION_ERRINFO, SESSION_ERRINFO,
 					 "'%s' request write failed", httpReqInfo->value ) );
@@ -512,8 +516,7 @@ static int getCACapabilities( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 		   anyway, and the response is hardcoded to use single DES (!!!) no 
 		   matter what algorithm is used for the request 
 		   (see 
-		   http://serverfault.com/questions/458643/can-i-configure-wndows-ndes-server-to-use-triple-des-3des-algorithm-for-pkcs7
-		   ).
+		   http://serverfault.com/questions/458643/can-i-configure-wndows-ndes-server-to-use-triple-des-3des-algorithm-for-pkcs7).
 		
 		   We still need to support these old versions, probably more or 
 		   less indefinitely, because, particularly in the SCADA world they
@@ -879,8 +882,9 @@ static int createScepCert( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   
 		   We delete the attribute before we try and set it in case there 
 		   was already one present in the request */
-		krnlSendMessage( createInfo.cryptHandle, IMESSAGE_DELETEATTRIBUTE, 
-						 NULL, CRYPT_CERTINFO_KEYUSAGE );
+		( void ) krnlSendMessage( createInfo.cryptHandle, 
+								  IMESSAGE_DELETEATTRIBUTE, NULL, 
+								  CRYPT_CERTINFO_KEYUSAGE );
 		if( protocolInfo->clientSignOnlyKey )
 			{
 			static const int keyUsage = CRYPT_KEYUSAGE_DIGITALSIGNATURE;
@@ -978,6 +982,12 @@ static int createScepCert( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		status = krnlSendMessage( sessionInfoPtr->privateKey, 
 								  IMESSAGE_SETDEPENDENT, &iNewCert, 
 								  SETDEP_OPTION_NOINCREF );
+		if( cryptStatusError( status ) )
+			{
+			/* The attach of the new certificate failed, clean it up before 
+			   we exit */
+			krnlSendNotifier( iNewCert, IMESSAGE_DECREFCOUNT );
+			}
 		}
 	krnlSendNotifier( createInfo.cryptHandle, IMESSAGE_DECREFCOUNT );
 
@@ -1065,6 +1075,8 @@ static int createScepPendingRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( dataLength, sizeof( int ) ) );
 
+	REQUIRES( sanityCheckSessionSCEP( sessionInfoPtr ) );
+
 	/* Clear return value */
 	*dataLength = 0;
 
@@ -1127,6 +1139,7 @@ static int createScepRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	const BOOLEAN isPendingRequest = TEST_FLAG( sessionInfoPtr->protocolFlags, 
 												SCEP_PFLAG_PENDING ) ? \
 									 TRUE : FALSE;
+	const char *messageType;
 	int dataLength, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -1229,13 +1242,44 @@ static int createScepRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	DEBUG_DUMP_FILE( isPendingRequest ? "scep_req1pend" : "scep_req1", 
 					 sessionInfoPtr->receiveBuffer, dataLength );
 
-	/* Create the SCEP signing attributes */
-	status = createScepAttributes( sessionInfoPtr, protocolInfo,  
-					&iCmsAttributes, isPendingRequest ? \
-						MESSAGETYPE_GETCERTINITIAL : \
-					( scepInfo->requestType == CRYPT_REQUESTTYPE_INITIALISATION ) ? \
-						MESSAGETYPE_PKCSREQ : MESSAGETYPE_RENEWAL, 
-					CRYPT_OK );
+	/* Create the SCEP signing attributes.  The exact request-type to use
+	   gets a bit complicated because 15-20-year-old SCEP versions didn't 
+	   support renewal messages (see the long comment in 
+	   getCACapabilities()) so in theory we would have to fall back to
+	   MESSAGETYPE_PKCSREQ if SCEP_PFLAG_SCEPSTANDARD isn't defined.
+	   
+	   However this leads to a second problem, implementations, and we're
+	   talking specifically Microsoft here, are highly unreliable about 
+	   what capabilities they report, which means that we could be talking
+	   to a standards-compliant SCEP server that doesn't advertise itself
+	   as such and so send a pre-standard request type instead of the 
+	   correct standards-compliant one.
+	   
+	   To deal with this we allow legacy SCEP behaviour to be forced with
+	   the USE_SCEP_LEGACY define, which only sends a standards-compliant
+	   renewal request if the server advertises itself as being compliant
+	   via GetCACaps */
+	if( isPendingRequest )
+		messageType = MESSAGETYPE_GETCERTINITIAL;
+	else
+		{
+#ifdef USE_SCEP_LEGACY
+		if( !TEST_FLAG( sessionInfoPtr->protocolFlags, \
+						SCEP_PFLAG_SCEPSTANDARD ) )
+			{
+			/* It's (probably) not a SCEP standards-compliant server, use
+			   PKCSReq for everything */
+			messageType = MESSAGETYPE_PKCSREQ;
+			}
+		else
+#endif /* USE_SCEP_LEGACY */
+		messageType = \
+			( scepInfo->requestType == CRYPT_REQUESTTYPE_INITIALISATION ) ? \
+			  MESSAGETYPE_PKCSREQ : MESSAGETYPE_RENEWAL;
+		}
+	status = createScepAttributes( sessionInfoPtr, protocolInfo,
+								   &iCmsAttributes, messageType, 
+								   CRYPT_OK );
 	if( cryptStatusError( status ) )
 		{
 		retExt( status,
@@ -1534,7 +1578,11 @@ static int checkScepResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   get here with no message body to unwrap, which will be rejected by the
 	   sanity check in envelopeUnwrap() */
 	if( dataLength < 16 )
-		return( CRYPT_ERROR_BADDATA );
+		{
+		retExt( CRYPT_ERROR_BADDATA,
+				( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
+				  "SCEP server response is missing a message body" ) );
+		}
 
 	/* Phase 2: Decrypt the data using either our self-signed key or our
 	   password */
@@ -1686,6 +1734,10 @@ static int clientTransact( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 				   GetCACaps that would indicate that they don't support 
 				   HTTP POST either */
 				sendPostAsGet = TRUE;
+#ifndef USE_BASE64
+				DEBUG_DIAG(( "NDES server requires base64-encoded data but "
+							 "USE_BASE64 isn't enabled" ));
+#endif /* !USE_BASE64 */
 				break;
 
 			case STREAM_PEER_MICROSOFT_2012:
@@ -1844,7 +1896,7 @@ static int clientTransactWrapper( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 ****************************************************************************/
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-void initSCEPclientProcessing( SESSION_INFO *sessionInfoPtr )
+void initSCEPclientProcessing( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 

@@ -330,14 +330,17 @@ static int recoverCertData( INOUT_PTR CERT_INFO *certInfoPtr,
 	if( checkStatusPeekTag( &stream, status, tag ) && \
 		tag == MAKE_CTAG( 0 ) )
 		readUniversal( &stream );			/* Version */
-	readUniversal( &stream );				/* Serial number */
-	status = readUniversal( &stream );		/* Signature algo */
-	if( cryptStatusOK( status ) )
+	if( !cryptStatusError( status ) )
+		{
+		readUniversal( &stream );			/* Serial number */
+		status = readUniversal( &stream );	/* Signature algo */
+		}
+	if( !cryptStatusError( status ) )
 		{
 		status = getObjectDataPtr( &stream, &certInfoPtr->issuerDNptr, 
 								   &certInfoPtr->issuerDNsize );
 		}
-	ENSURES( cryptStatusOK( status ) );
+	ENSURES( !cryptStatusError( status ) );
 	readUniversal( &stream );				/* Issuer DN */
 	status = readUniversal( &stream );		/* Validity */
 	if( cryptStatusOK( status ) )

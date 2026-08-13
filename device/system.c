@@ -162,20 +162,26 @@ static int getRandomFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 							  INOUT_PTR_OPT \
 								MESSAGE_FUNCTION_EXTINFO *messageExtInfo )
 	{
-	void *randomInfoPtr = DATAPTR_GET( deviceInfo->deviceSystem->randomInfo );
+	void *randomInfoPtr;
 	int refCount, status;
 
 	assert( isWritePtr( deviceInfo, sizeof( DEVICE_INFO ) ) );
 	assert( isWritePtrDynamic( buffer, length ) );
 
 	REQUIRES( sanityCheckDevice( deviceInfo ) );
+	REQUIRES( deviceInfo->type == CRYPT_DEVICE_NONE );
+			  /* Used to denote the system device */
 	REQUIRES( isShortIntegerRangeNZ( length ) );
-	REQUIRES( randomInfoPtr != NULL );
 
 	/* Clear the return value and make sure that we fail the FIPS 140 tests
 	   on the output if there's a problem */
 	REQUIRES( isShortIntegerRangeNZ( length ) ); 
 	zeroise( buffer, length );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	randomInfoPtr = DATAPTR_GET( deviceInfo->deviceSystem->randomInfo );
+	REQUIRES( randomInfoPtr != NULL );
 
 	/* If the system device is already unlocked (which can happen if this 
 	   function is called in a loop, for example if multiple chunks of 
@@ -197,7 +203,9 @@ static int getRandomFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 		int resumeStatus;
 
 		/* The object isn't unlockable or it's been locked recursively, 
-		   re-lock it */
+		   re-lock it.  Note that we refer to it by SYSTEM_OBJECT_HANDLE
+		   rather than deviceInfo->objectHandle because we've released
+		   it at this point */
 		resumeStatus = krnlResumeObject( SYSTEM_OBJECT_HANDLE, refCount );
 		if( cryptStatusError( resumeStatus ) )
 			{
@@ -264,6 +272,9 @@ static int getNonce( INOUT_PTR DEVICE_INFO *deviceInfo,
 	assert( isWritePtr( deviceInfo, sizeof( DEVICE_INFO ) ) );
 	assert( isWritePtrDynamic( data, dataLength ) );
 
+	REQUIRES( sanityCheckDevice( deviceInfo ) );
+	REQUIRES( deviceInfo->type == CRYPT_DEVICE_NONE );
+			  /* Used to denote the system device */
 	REQUIRES( isShortIntegerRangeNZ( dataLength ) );
 
 	/* Handling of CRYPT_IATTRIBUTE_RANDOM_NONCE gets complicated because 
@@ -366,6 +377,9 @@ static int getNonce( INOUT_PTR DEVICE_INFO *deviceInfo,
 			{
 			const time_t theTime = getTime( GETTIME_NOFAIL );
 
+			static_assert( sizeof( time_t ) <= NONCERNG_PRIVATE_STATESIZE,
+						   "Nonce private state size" );
+						   
 			/* The second fetch failed as well, fall back on a last-resort
 			   nonce seed value */
 			memcpy( systemInfo->nonceData + hashSize, 
@@ -385,40 +399,48 @@ static int getNonce( INOUT_PTR DEVICE_INFO *deviceInfo,
 										 systemInfo->nonceHashSize, 0 ),
 						   MUTEX_RANDOMNONCE );
 		}
-	ENSURES( checksumNonceData( systemInfo ) );
+	ENSURES_KRNLMUTEX( checksumNonceData( systemInfo ), 
+					   MUTEX_RANDOMNONCE );
 
 	/* Shuffle the public state and copy it to the output buffer until it's
 	   full */
 	nonceHashFunction = ( HASH_FUNCTION_ATOMIC ) \
 						FNPTR_GET( systemInfo->nonceHashFunction );
-	ENSURES( nonceHashFunction != NULL );
+	ENSURES_KRNLMUTEX( nonceHashFunction != NULL,
+					   MUTEX_RANDOMNONCE );
 	LOOP_LARGE_REV_INITCHECK( nonceLength = dataLength, nonceLength > 0 )
 		{
 		const int bytesToCopy = min( nonceLength, systemInfo->nonceHashSize );
 
-		ENSURES( LOOP_INVARIANT_LARGE_REV_XXX( nonceLength, 1, dataLength ) );
-				 /* nonceLength changes by number of bytes copied */
+		ENSURES_KRNLMUTEX( LOOP_INVARIANT_LARGE_REV_XXX( nonceLength, 1, 
+														 dataLength ),
+						   MUTEX_RANDOMNONCE );
+						   /* nonceLength changes by number of bytes copied */
 
 		/* Hash the state and copy the appropriate amount of data to the
 		   output buffer.  Note that the input and output buffers for the 
 		   hash function overlap, this is fine because the hash operation 
 		   reads its input before writing any output */
-		REQUIRES( !checkOverflowAdd( systemInfo->nonceHashSize,
-									 NONCERNG_PRIVATE_STATESIZE ) );
+		ENSURES_KRNLMUTEX( !checkOverflowAdd( systemInfo->nonceHashSize,
+											  NONCERNG_PRIVATE_STATESIZE ),
+							MUTEX_RANDOMNONCE );
 		nonceHashFunction( systemInfo->nonceData, CRYPT_MAX_HASHSIZE, 
 						   systemInfo->nonceData,
 						   systemInfo->nonceHashSize + \
 								NONCERNG_PRIVATE_STATESIZE );
-		REQUIRES( boundsCheckZ( dataLength - nonceLength, bytesToCopy, 
-								dataLength ) );
+		ENSURES_KRNLMUTEX( boundsCheckZ( dataLength - nonceLength, 
+										 bytesToCopy, dataLength ),
+						   MUTEX_RANDOMNONCE );
 		memcpy( noncePtr, systemInfo->nonceData, bytesToCopy );
 
 		/* Move on to the next block of the output buffer */
 		noncePtr += bytesToCopy;
-		REQUIRES( !checkOverflowSub( nonceLength, bytesToCopy ) );
+		ENSURES_KRNLMUTEX( !checkOverflowSub( nonceLength, bytesToCopy ),
+						   MUTEX_RANDOMNONCE );
 		nonceLength -= bytesToCopy;
 		}
-	ENSURES( LOOP_BOUND_LARGE_REV_OK );
+	ENSURES_KRNLMUTEX( LOOP_BOUND_LARGE_REV_OK,
+					   MUTEX_RANDOMNONCE );
 	( void ) checksumNonceData( systemInfo );
 
 	krnlExitMutex( MUTEX_RANDOMNONCE );
@@ -542,6 +564,7 @@ static int controlFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 							INOUT_PTR_OPT \
 								MESSAGE_FUNCTION_EXTINFO *messageExtInfo )
 	{
+	void *randomInfoPtr;
 	int refCount, status;
 
 	assert( isWritePtr( deviceInfo, sizeof( DEVICE_INFO ) ) );
@@ -566,11 +589,21 @@ static int controlFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 				isBooleanValue( dataLength ) ) || \
 			  ( type == CRYPT_IATTRIBUTE_ENTROPY_QUALITY && \
 				( data == NULL && isShortIntegerRange( dataLength ) ) ) );
+	REQUIRES( type == CRYPT_IATTRIBUTE_TIME || messageExtInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need.  Note that we have to get the random info pointer now
+	   rather than further down where it's used because the system object
+	   is unlocked at that point */
+	randomInfoPtr = DATAPTR_GET( deviceInfo->deviceSystem->randomInfo );
+	REQUIRES( randomInfoPtr != NULL );
 
 	/* Handle high-reliability time */
 	if( type == CRYPT_IATTRIBUTE_TIME )
 		{
 		time_t *timePtr = ( time_t * ) data;
+
+		REQUIRES( dataLength == sizeof( time_t ) );
 
 		*timePtr = getTime( GETTIME_NONE );
 		return( CRYPT_OK );
@@ -604,23 +637,9 @@ static int controlFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 	/* Handle entropy addition.  Since this can take awhile, we do it with
 	   the system object unlocked.  */
 	if( type == CRYPT_IATTRIBUTE_ENTROPY )
-		{
-		void *randomInfoPtr = \
-					DATAPTR_GET( deviceInfo->deviceSystem->randomInfo );
-
-		REQUIRES( randomInfoPtr != NULL );
-
 		return( addEntropyData( randomInfoPtr, data, dataLength ) );
-		}
 	if( type == CRYPT_IATTRIBUTE_ENTROPY_QUALITY )
-		{
-		void *randomInfoPtr = \
-					DATAPTR_GET( deviceInfo->deviceSystem->randomInfo );
-
-		REQUIRES( randomInfoPtr != NULL );
-
 		return( addEntropyQuality( randomInfoPtr, dataLength ) );
-		}
 	if( type == CRYPT_IATTRIBUTE_RANDOM_POLL )
 		{
 		/* Perform a slow or fast poll as required */
@@ -641,7 +660,9 @@ static int controlFunction( INOUT_PTR DEVICE_INFO *deviceInfo,
 		   from within the system object.  If we were to leave the system object
 		   unlocked then the self-test code, which also unlocks it, would attempt
 		   to double-unlock it.  To deal with this we re-lock it after we've
-		   retrieved the nonce */
+		   retrieved the nonce.  Note that we refer to it by SYSTEM_OBJECT_HANDLE
+		   rather than deviceInfo->objectHandle because we've released it at this 
+		   point */
 		status = getNonce( deviceInfo, data, dataLength );
 		resumeStatus = krnlResumeObject( SYSTEM_OBJECT_HANDLE, refCount );
 		if( cryptStatusError( resumeStatus ) )
@@ -780,7 +801,8 @@ static int initCapabilities( void )
 
 		capabilityInfoPtr = getCapabilityTable[ i ]();
 #ifndef CONFIG_FUZZ
-		REQUIRES( sanityCheckCapability( capabilityInfoPtr ) );
+		REQUIRES( capabilityInfoPtr != NULL && \
+				  sanityCheckCapability( capabilityInfoPtr ) );
 #endif /* !CONFIG_FUZZ */
 
 		DATAPTR_SET( capabilityInfoList[ i ].info, 

@@ -342,7 +342,10 @@ void setAccessMethodTransportVirtual( INOUT_PTR NET_STREAM_INFO *netStream )
 	+-----------+---------------+
 	|///////////|				|
 	+-----------+---------------+
-				 -- Write --> */
+				 -- Write --> 
+
+   Since these are being called from the stream-layer sread()/swrite(), we
+   sSetError() on an error condition */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
 int bufferedTransportRead( INOUT_PTR STREAM *stream, 

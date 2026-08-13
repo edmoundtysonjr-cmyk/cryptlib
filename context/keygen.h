@@ -23,7 +23,8 @@
 
 /* The size of the prime sieve array, 1 memory page (on most CPUs) = 4K 
    candidate values.  When changing this value the LFSR parameters need to 
-   be adjusted to match */
+   be adjusted to match, and it shouldn't be larger than the return value
+   of getRandomInteger() */
 
 #define SIEVE_SIZE				4096
 

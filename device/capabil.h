@@ -53,15 +53,15 @@ typedef enum {
   #define CI_STRUCT		void
 #endif /* _CRYPTCTX_DEFINED */
 
-/* The information returned by the capability get-info function */
+/* The information returned by the get-info function for a context */
 
 typedef enum {
-	CAPABILITY_INFO_NONE,			/* No info */
-	CAPABILITY_INFO_STATESIZE,		/* Size of algorithm state info */
-	CAPABILITY_INFO_STATEALIGNTYPE,	/* Alignment requirements for state info */
-	CAPABILITY_INFO_ICV,			/* ICV for authenticated-encr.modes */
-	CAPABILITY_INFO_LAST			/* Last possible capability info type */
-	} CAPABILITY_INFO_TYPE;
+	CONTEXT_INFO_NONE,		/* No info */
+	CONTEXT_INFO_STATESIZE,	/* Size of algorithm state info */
+	CONTEXT_INFO_STATEALIGNTYPE,/* Alignment requirements for state info */
+	CONTEXT_INFO_ICV,		/* ICV for authenticated-encr.modes */
+	CONTEXT_INFO_LAST		/* Last possible capability info type */
+	} CONTEXT_INFO_TYPE;
 
 /****************************************************************************
 *																			*
@@ -74,8 +74,8 @@ typedef enum {
 typedef CHECK_RETVAL \
 		int ( *CAP_SELFTEST_FUNCTION )( void );
 typedef CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-		int ( *CAP_GETINFO_FUNCTION )( IN_ENUM( CAPABILITY_INFO ) \
-										const CAPABILITY_INFO_TYPE type, 
+		int ( *CAP_GETINFO_FUNCTION )( IN_ENUM( CONTEXT_INFO ) \
+											const CONTEXT_INFO_TYPE type, 
 									   INOUT_PTR_OPT CI_STRUCT *contextInfoPtr, 
 									   OUT_PTR void *data, 
 									   IN_INT_Z const int length );
@@ -351,9 +351,9 @@ CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1 ) ) \
 const CAPABILITY_INFO *findCapabilityInfo(
 						const CAPABILITY_INFO_LIST *capabilityInfoList,
 						IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo );
-STDC_NONNULL_ARG( ( 1, 2 ) ) \
-void getCapabilityInfo( OUT_PTR CRYPT_QUERY_INFO *cryptQueryInfo,
-						IN_PTR const CAPABILITY_INFO *capabilityInfoPtr );
+RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+int getCapabilityInfo( OUT_PTR CRYPT_QUERY_INFO *cryptQueryInfo,
+					   IN_PTR const CAPABILITY_INFO *capabilityInfoPtr );
 #ifndef CONFIG_CONSERVE_MEMORY_EXTRA
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN sanityCheckCapability( const CAPABILITY_INFO *capabilityInfoPtr );
@@ -365,7 +365,7 @@ BOOLEAN sanityCheckCapability( const CAPABILITY_INFO *capabilityInfoPtr );
    handler */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-int getDefaultInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type, 
+int getDefaultInfo( IN_ENUM( CONTEXT_INFO ) const CONTEXT_INFO_TYPE type, 
 					INOUT_PTR_OPT CI_STRUCT *contextInfoPtr,
 					OUT_PTR void *data, 
 					IN_INT_Z const int length );

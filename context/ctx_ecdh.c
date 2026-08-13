@@ -54,35 +54,33 @@
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 static BOOLEAN pairwiseConsistencyTest( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
+	const PKC_INFO *sourcePkcInfo;
 	CONTEXT_INFO checkContextInfo;
 	PKC_INFO contextData, *pkcInfo = &contextData;
-	PKC_INFO *sourcePkcInfo = contextInfoPtr->ctxPKC;
 	KEYAGREE_PARAMS keyAgreeParams1, keyAgreeParams2;
 	const CAPABILITY_INFO *capabilityInfoPtr;
-	int bnStatus = BN_STATUS, status;
+	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES_B( sanityCheckContext( contextInfoPtr ) );
 
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	sourcePkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	REQUIRES_B( sourcePkcInfo != NULL );
+
 	/* The ECDH pairwise check is a bit more complex than the one for the 
 	   other algorithms because there's no matched public/private key pair, 
-	   so we have to load a second ECDH key to use for key agreement with 
-	   the first one */
+	   so we have to load a second ECDH key, or at least the public 
+	   parameters since initKey() will generate the public/private values 
+	   for us, to use for key agreement with the first one */
 	status = staticInitContext( &checkContextInfo, CONTEXT_PKC, 
 								getECDHCapability(), &contextData, 
 								sizeof( PKC_INFO ), NULL );
 	if( cryptStatusError( status ) )
 		return( FALSE );
-	pkcInfo->curveType = CRYPT_ECCCURVE_P256;
-	CKPTR( BN_copy( &pkcInfo->eccParam_qx, &sourcePkcInfo->eccParam_qx ) );
-	CKPTR( BN_copy( &pkcInfo->eccParam_qy, &sourcePkcInfo->eccParam_qy ) );
-	CKPTR( BN_copy( &pkcInfo->eccParam_d, &sourcePkcInfo->eccParam_d ) );
-	if( bnStatusError( bnStatus ) )
-		{
-		staticDestroyContext( &checkContextInfo );
-		return( getBnStatusBool( bnStatus ) );
-		}
+	pkcInfo->curveType = sourcePkcInfo->curveType;
 
 	/* Perform the pairwise test using the check key */
 	capabilityInfoPtr = DATAPTR_GET( checkContextInfo.capabilityInfo );
@@ -145,14 +143,14 @@ static const ECC_KEY ecdhTestKey = {
 	  0x02, 0x94, 0xFC, 0x46, 0xBD, 0xFC, 0xFD, 0x19, 
 	  0xA3, 0x9F, 0x81, 0x61, 0xB5, 0x86, 0x95, 0xB3, 
 	  0xEC, 0x5B, 0x3D, 0x16, 0x42, 0x7C, 0x27, 0x4D },
-	32,
 	/* qy */
+	32,
 	{ 0x42, 0x75, 0x4D, 0xFD, 0x25, 0xC5, 0x6F, 0x93, 
 	  0x9A, 0x79, 0xF2, 0xB2, 0x04, 0x87, 0x6B, 0x3A, 
 	  0x3A, 0xB1, 0xCE, 0xB2, 0xE4, 0xFF, 0x57, 0x1A, 
 	  0xBF, 0x4F, 0xBF, 0x36, 0x32, 0x6C, 0x8B, 0x27 },
-	32,
 	/* d */
+	32,
 	{ 0x2C, 0xA1, 0x41, 0x1A, 0x41, 0xB1, 0x7B, 0x24,
 	  0xCC, 0x8C, 0x3B, 0x08, 0x9C, 0xFD, 0x03, 0x3F,
 	  0x19, 0x20, 0x20, 0x2A, 0x6C, 0x0D, 0xE8, 0xAB,
@@ -203,7 +201,7 @@ static int selfTest( void )
 	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	/* Perform the test key exchange on a block of data */
-	status = capabilityInfoPtr->initKeyFunction( &contextInfo,  NULL, 0 );
+	status = capabilityInfoPtr->initKeyFunction( &contextInfo, NULL, 0 );
 	if( cryptStatusError( status ) || \
 		!pairwiseConsistencyTest( &contextInfo ) )
 		{
@@ -235,7 +233,7 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					  INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					  IN_LENGTH_FIXED( sizeof( KEYAGREE_PARAMS ) ) int noBytes )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	KEYAGREE_PARAMS *keyAgreeParams = ( KEYAGREE_PARAMS * ) buffer;
 	int status;
 
@@ -243,8 +241,8 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	assert( isWritePtr( keyAgreeParams, sizeof( KEYAGREE_PARAMS ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( pkcInfo->domainParams != NULL );
 	REQUIRES( noBytes == sizeof( KEYAGREE_PARAMS ) );
+	REQUIRES( pkcInfo != NULL );
 	REQUIRES( !BN_is_zero( &pkcInfo->eccParam_qx ) && \
 			  !BN_is_zero( &pkcInfo->eccParam_qy ) );
 
@@ -273,14 +271,12 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					  IN_LENGTH_FIXED( sizeof( KEYAGREE_PARAMS ) ) int noBytes )
 	{
 	KEYAGREE_PARAMS *keyAgreeParams = ( KEYAGREE_PARAMS * ) buffer;
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
-	const ECC_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
-	const EC_GROUP *ecCTX = pkcInfo->ecCTX;
-	EC_POINT *q = pkcInfo->tmpPoint;
-	BIGNUM *x = &pkcInfo->tmp1, *y = &pkcInfo->tmp2;
-	BIGNUM *peer_qx = &pkcInfo->tmp3, *peer_qy = &pkcInfo->eccParam_tmp4;
-	const int keySize = bitsToBytes( pkcInfo->keySizeBits );
-	int bnStatus = BN_STATUS, status;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const ECC_DOMAINPARAMS *domainParams;
+	const EC_GROUP *ecCTX;
+	EC_POINT *q;
+	BIGNUM *x, *y, *peer_qx, *peer_qy;
+	int keySize, bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( keyAgreeParams, sizeof( KEYAGREE_PARAMS ) ) );
@@ -288,10 +284,19 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 							  keyAgreeParams->publicValueLen ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( pkcInfo->domainParams != NULL );
 	REQUIRES( noBytes == sizeof( KEYAGREE_PARAMS ) );
 	REQUIRES( isShortIntegerRangeMin( keyAgreeParams->publicValueLen, 
 									  MIN_PKCSIZE_ECCPOINT ) );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	domainParams = pkcInfo->domainParams;
+	REQUIRES( domainParams != NULL );
+	ecCTX = &pkcInfo->ecCTX;
+	q = &pkcInfo->tmpPoint; x = &pkcInfo->tmp1, y = &pkcInfo->tmp2;
+	peer_qx = &pkcInfo->tmp3; peer_qy = &pkcInfo->eccParam_tmp4;;
+	keySize = bitsToBytes( pkcInfo->keySizeBits );
 
 	/* The other party's Q value will be stored with the key agreement info 
 	   in X9.62 point form rather than having been read in when we read the 
@@ -339,8 +344,8 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	/* If the resulting values have more than 128 bits of leading zeroes 
 	   then there's something wrong */
-	if( BN_num_bytes( x ) < keySize  - 16 || \
-		BN_num_bytes( y ) < keySize  - 16 )
+	if( BN_num_bytes( x ) < keySize - 16 || \
+		BN_num_bytes( y ) < keySize - 16 )
 		return( CRYPT_ERROR_BADDATA );
 
 	/* Encode the point.  This gets rather ugly because the only two 
@@ -398,9 +403,11 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   internal bignums unless we're doing an internal load */
 	if( key != NULL )
 		{
-		PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
 		const CRYPT_PKCINFO_ECC *eccKey = ( CRYPT_PKCINFO_ECC * ) key;
+		PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 		int status;
+
+		REQUIRES( pkcInfo != NULL );
 
 		if( eccKey->isPublicKey )
 			SET_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_ISPUBLICKEY );
@@ -492,7 +499,8 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
-						IN_LENGTH_SHORT_MIN( MIN_PKCSIZE_ECC * 8 ) \
+						IN_RANGE( bytesToBits( MIN_PKCSIZE_ECC ),
+								  bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) ) \
 							const int keySizeBits )
 	{
 	int status;
@@ -504,11 +512,7 @@ static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			  keySizeBits <= bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
 
 	status = generateECCkey( contextInfoPtr, keySizeBits );
-	if( cryptStatusOK( status ) &&
-#ifndef USE_FIPS140
-		TEST_FLAG( contextInfoPtr->flags, 
-				   CONTEXT_FLAG_SIDECHANNELPROTECTION ) &&
-#endif /* USE_FIPS140 */
+	if( cryptStatusOK( status ) && \
 		!pairwiseConsistencyTest( contextInfoPtr ) )
 		{
 		DEBUG_DIAG(( "Consistency check of freshly-generated ECDH key "

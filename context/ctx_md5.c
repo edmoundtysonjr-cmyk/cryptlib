@@ -106,7 +106,7 @@ static int selfTest( void )
 /* Return context subtype-specific information */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type, 
+static int getInfo( IN_ENUM( CONTEXT_INFO ) const CONTEXT_INFO_TYPE type, 
 					INOUT_PTR_OPT CONTEXT_INFO *contextInfoPtr,
 					OUT_PTR void *data, 
 					IN_INT_Z const int length )
@@ -116,11 +116,11 @@ static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type,
 	assert( ( length == 0 && isWritePtr( data, sizeof( int ) ) ) || \
 			( length > 0 && isWritePtrDynamic( data, length ) ) );
 
-	REQUIRES( isEnumRange( type, CAPABILITY_INFO ) );
+	REQUIRES( isEnumRange( type, CONTEXT_INFO ) );
 	REQUIRES( ( contextInfoPtr == NULL ) || \
 			  sanityCheckContext( contextInfoPtr ) );
 
-	if( type == CAPABILITY_INFO_STATESIZE )
+	if( type == CONTEXT_INFO_STATESIZE )
 		{
 		int *valuePtr = ( int * ) data;
 
@@ -145,13 +145,19 @@ static int hash( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				 IN_BUFFER( noBytes ) BYTE *buffer, 
 				 IN_LENGTH_Z int noBytes )
 	{
-	MD5_CTX *md5Info = ( MD5_CTX * ) contextInfoPtr->ctxHash->hashInfo;
+	HASH_INFO *hashInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	MD5_CTX *md5Info;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( noBytes == 0 || isReadPtrDynamic( buffer, noBytes ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRange( noBytes ) );
+	REQUIRES( hashInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	md5Info = ( MD5_CTX * ) hashInfo->hashInfo;
 
 	/* If the hash state was reset to allow another round of hashing,
 	   reinitialise things */
@@ -164,7 +170,7 @@ static int hash( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		}
 	else
 		{
-		MD5_Final( contextInfoPtr->ctxHash->hash, md5Info );
+		MD5_Final( hashInfo->hash, md5Info );
 		}
 
 	return( CRYPT_OK );

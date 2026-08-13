@@ -5,6 +5,10 @@
 *																			*
 ****************************************************************************/
 
+/* There are no known public implementations of the SCVP protocol.  Unless
+   you have very good reasons to use it, be aware that this is almost 
+   certainly not something that you should be using */
+
 #if defined( INC_ALL )
   #include "crypt.h"
   #include "asn1.h"
@@ -411,7 +415,14 @@ static int readResponseStatus( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
 
 	/* Read the response status value.  A value of SCVP_STATUS_OKAY...9 is 
-	   an OK status, anything else is an error */
+	   an OK status, anything else is an error.  Or at least it's an OK-ish
+	   status, for no known reason the values go SCVP_STATUS_OKAY = 0, 
+	   SCVP_STATUS_SKIPUNRECOGNIZEDITEMS = 1, 2-9 undefined, and then the 
+	   error values start at SCVP_STATUS_TOOBUSY = 10, with the RFC (section 
+	   4.4) saying that "Status codes 0-9 are reserved for codes that 
+	   indicate the request was processed by the server and therefore MUST 
+	   be sent in a success response", so for example code 3 means success
+	   even though it's not defined */
 	readSequence( stream, NULL );
 	status = readEnumerated( stream, &value );
 	if( cryptStatusError( status ) )
@@ -520,7 +531,8 @@ static int readRequestRef( INOUT_PTR STREAM *stream,
 	CRYPT_ALGO_TYPE hashAlgo = CRYPT_ALGO_SHA1;
 	ALGOID_PARAMS algoIDparams;
 	BYTE hashValue[ CRYPT_MAX_HASHSIZE + 8 ];
-	int tag, hashValueSize DUMMY_INIT, status;
+	int tag, hashValueSize = 20;	/* Default SHA-1 */
+	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( protocolInfo, sizeof( SCVP_PROTOCOL_INFO ) ) );
@@ -539,7 +551,7 @@ static int readRequestRef( INOUT_PTR STREAM *stream,
 	if( !cryptStatusError( status ) )
 		{
 		status = readOctetString( stream, hashValue, &hashValueSize, 
-								  16, CRYPT_MAX_HASHSIZE );
+								  20, CRYPT_MAX_HASHSIZE );
 		}
 	if( cryptStatusError( status ) )
 		{
@@ -667,7 +679,7 @@ static int readScvpResponse( INOUT_PTR STREAM *stream,
 							 INOUT_PTR SCVP_PROTOCOL_INFO *protocolInfo )
 	{
 	long value;
-	int tag, length, status;
+	int tag, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -714,8 +726,11 @@ static int readScvpResponse( INOUT_PTR STREAM *stream,
 		}
 
 	/* Check the requestRef if it's present.  This is used to detect 
-	   manipulation of the client's request, which goes out 
-	   unauthenticated */
+	   manipulation of the client's request, which goes out unauthenticated, 
+	   but is also optional (RFC 5055 section 4) with the RFC (section 4.6) 
+	   offering no guidance on what to do if it's not present.  So it's sort
+	   of like the canonical seat belt that's been engineered to break if 
+	   you crash while wearing it */
 	status = tag = peekTag( stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -741,7 +756,7 @@ static int readScvpResponse( INOUT_PTR STREAM *stream,
 		}
 
 	/* Read the reply objects, another optional-but-mandatory field */	
-	readConstructed( stream, &length, CTAG_RP_REPLYOBJECTS );
+	readConstructed( stream, NULL, CTAG_RP_REPLYOBJECTS );
 	status = readSequence( stream, NULL );
 	if( cryptStatusError( status ) )
 		{

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						 cryptlib Crypto Device Routines					*
-*						Copyright Peter Gutmann 1997-2022					*
+*						Copyright Peter Gutmann 1997-2025					*
 *																			*
 ****************************************************************************/
 
@@ -44,14 +44,10 @@ BOOLEAN sanityCheckDevice( IN_PTR const DEVICE_INFO *deviceInfoPtr )
 		DEBUG_PUTS(( "sanityCheckDevice: Flags" ));
 		return( FALSE );
 		}
-	if( !isEmptyData( deviceInfoPtr->label, deviceInfoPtr->labelLen ) )
+	if( !rangeCheck( deviceInfoPtr->labelLen, 0, CRYPT_MAX_TEXTSIZE ) )
 		{
-		if( deviceInfoPtr->labelLen <= 0 || \
-			deviceInfoPtr->labelLen > CRYPT_MAX_TEXTSIZE )
-			{
-			DEBUG_PUTS(( "sanityCheckDevice: Label" ));
-			return( FALSE );
-			}
+		DEBUG_PUTS(( "sanityCheckDevice: Label" ));
+		return( FALSE );
 		}
 	if( !checkVarStruct( deviceInfoPtr ) )
 		{
@@ -130,7 +126,8 @@ BOOLEAN sanityCheckDevice( IN_PTR const DEVICE_INFO *deviceInfoPtr )
 			/* Check the nonce RNG data */
 			if( systemInfo->nonceDataInitialised == FALSE )
 				{
-				if( !isEmptyData( systemInfo->nonceData, 
+				if( systemInfo->nonceHashSize != 0 || \
+					!isEmptyData( systemInfo->nonceData, 
 								  systemInfo->nonceHashSize ) )
 					{
 					DEBUG_PUTS(( "sanityCheckDevice: Spurious nonce RNG data" ));
@@ -141,9 +138,7 @@ BOOLEAN sanityCheckDevice( IN_PTR const DEVICE_INFO *deviceInfoPtr )
 				{
 				if( systemInfo->nonceDataInitialised != TRUE || \
 					!rangeCheck( systemInfo->nonceHashSize,
-								 MIN_HASHSIZE, CRYPT_MAX_HASHSIZE ) || \
-					isEmptyData( systemInfo->nonceData, 
-								 systemInfo->nonceHashSize ) )
+								 MIN_HASHSIZE, CRYPT_MAX_HASHSIZE ) )
 					{
 					DEBUG_PUTS(( "sanityCheckDevice: Nonce RNG data" ));
 					return( FALSE );
@@ -172,22 +167,21 @@ BOOLEAN sanityCheckDevice( IN_PTR const DEVICE_INFO *deviceInfoPtr )
 					}
 				}
 
- 			/* Check device type-specific information */
-			if( pkcs11Info->deviceNo < 0 || \
-				pkcs11Info->deviceNo > 16 )
+ 			/* Check device type-specific information.  The hardcoded value
+ 			   corresponds to MAX_PKCS11_SLOTS but we can't pull in the PKCS 
+ 			   #11 headers to get this value because they mess with struct
+ 			   packing and do other odd things required by the PKCS #11 
+ 			   API */
+			if( !rangeCheck( pkcs11Info->deviceNo, 0, 16 ) )
 				{
 				DEBUG_PUTS(( "sanityCheckDevice: Device number" ));
 				return( FALSE );
 				}
-			if( !isEmptyData( pkcs11Info->defaultSSOPin, \
-							  pkcs11Info->defaultSSOPinLen ) )
+			if( !rangeCheck( pkcs11Info->defaultSSOPinLen, 
+							 0, CRYPT_MAX_TEXTSIZE ) )
 				{
-				if( !rangeCheck( pkcs11Info->defaultSSOPinLen, 
-								 0, CRYPT_MAX_TEXTSIZE ) )
-					{
-					DEBUG_PUTS(( "sanityCheckDevice: SSO PIN size" ));
-					return( FALSE );
-					}
+				DEBUG_PUTS(( "sanityCheckDevice: SSO PIN size" ));
+				return( FALSE );
 				}
 
 			break;
@@ -359,6 +353,8 @@ static BOOLEAN checkDeviceFunctions( IN_PTR const DEVICE_INFO *deviceInfoPtr )
 
 	return( TRUE );
 	}
+#else
+  #define checkDeviceFunctions( x )			TRUE
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 /* Process a crypto mechanism message */
@@ -424,9 +420,9 @@ static int processMechanismMessage( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 		   execution then the krnlAcquireObject() will since it will refuse 
 		   to allow access to the system object */
 		assert( INTERNAL_ERROR );
-		setMessageObjectUnlocked( messageExtInfo );
 		status = krnlSuspendObject( deviceInfoPtr->objectHandle, &refCount );
 		ENSURES( cryptStatusOK( status ) );
+		setMessageObjectUnlocked( messageExtInfo );
 		localCryptDevice = SYSTEM_OBJECT_HANDLE;
 		status = krnlAcquireObject( SYSTEM_OBJECT_HANDLE, /* Will always fail */
 									OBJECT_TYPE_DEVICE,
@@ -469,9 +465,9 @@ static int processMechanismMessage( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 	   segment and persists even if the system device is destroyed */
 	if( localCryptDevice == SYSTEM_OBJECT_HANDLE )
 		{
-		setMessageObjectUnlocked( messageExtInfo );
 		status = krnlSuspendObject( SYSTEM_OBJECT_HANDLE, &refCount );
 		ENSURES( cryptStatusOK( status ) );
+		setMessageObjectUnlocked( messageExtInfo );
 		assert( ( mechanism >= MECHANISM_SELFTEST_ENC && \
 				  mechanism <= MECHANISM_SELFTEST_KDF && \
 				  refCount <= 2 ) || \
@@ -710,6 +706,7 @@ static int createObject( DEVICE_INFO *deviceInfoPtr,
 	assert( isWritePtr( messageExtInfo, \
 						sizeof( MESSAGE_FUNCTION_EXTINFO ) ) );
 
+	REQUIRES( sanityCheckDevice( deviceInfoPtr ) );
 	REQUIRES( isEnumRange( objectType, OBJECT_TYPE ) );
 
 	/* Find the function to handle this object */
@@ -727,14 +724,14 @@ static int createObject( DEVICE_INFO *deviceInfoPtr,
 									     deviceInfoPtr->createObjectFunctionCount - 1 ) );
 			if( createObjectFunctions[ i ].type == objectType )
 				{
-				createObjectFunction  = createObjectFunctions[ i ].function;
+				createObjectFunction = createObjectFunctions[ i ].function;
 				break;
 				}
 			}
 		ENSURES( LOOP_BOUND_OK );
 		ENSURES( i < deviceInfoPtr->createObjectFunctionCount );
 		}
-	if( createObjectFunction  == NULL )
+	if( createObjectFunction == NULL )
 		return( CRYPT_ERROR_NOTAVAIL );
 
 	/* Get any auxiliary information that we may need to create the object */
@@ -742,7 +739,7 @@ static int createObject( DEVICE_INFO *deviceInfoPtr,
 		{
 		auxInfo = DATAPTR_GET( deviceInfoPtr->capabilityInfoList );
 
-		ENSURES( DATAPTR_ISVALID( deviceInfoPtr->capabilityInfoList ) );
+		ENSURES( auxInfo != NULL );
 		}
 
 	/* If the message has been sent to the system object, unlock it to allow 
@@ -753,9 +750,9 @@ static int createObject( DEVICE_INFO *deviceInfoPtr,
 		{
 		int refCount;
 
-		setMessageObjectUnlocked( messageExtInfo );
 		status = krnlSuspendObject( SYSTEM_OBJECT_HANDLE, &refCount );
 		ENSURES( cryptStatusOK( status ) );
+		setMessageObjectUnlocked( messageExtInfo );
 		assert( refCount == 1 );
 		status = createObjectFunction( createInfo, auxInfo,
 									   CREATEOBJECT_FLAG_NONE );
@@ -804,7 +801,7 @@ static int createObjectIndirect( DEVICE_INFO *deviceInfoPtr,
 #ifdef USE_CERTIFICATES
 	int refCount;
 #endif /* USE_CERTIFICATES */
-	int value, status;
+	int value, status = CRYPT_OK;
 
 	assert( isWritePtr( deviceInfoPtr, sizeof( DEVICE_INFO ) ) );
 	assert( isWritePtr( createInfo, sizeof( MESSAGE_CREATEOBJECT_INFO ) ) );
@@ -823,9 +820,9 @@ static int createObjectIndirect( DEVICE_INFO *deviceInfoPtr,
 			   static, read-only segment and persists even if the system 
 			   device is destroyed */
 			ENSURES( iCryptDevice == SYSTEM_OBJECT_HANDLE );
-			setMessageObjectUnlocked( messageExtInfo );
 			status = krnlSuspendObject( SYSTEM_OBJECT_HANDLE, &refCount );
 			ENSURES( cryptStatusOK( status ) );
+			setMessageObjectUnlocked( messageExtInfo );
 			assert( refCount == 1 );
 			status = createCertificateIndirect( createInfo, NULL, 0 );
 			break;
@@ -915,6 +912,25 @@ static int deviceMessageFunction( INOUT_PTR TYPECAST( MESSAGE_FUNCTION_EXTINFO *
 
 			if( shutdownFunction != NULL )
 				shutdownFunction( deviceInfoPtr );
+			}
+		else
+			{
+#if defined( USE_HARDWARE ) || defined( USE_TPM ) 
+			if( ( deviceInfoPtr->type == CRYPT_DEVICE_TPM || \
+				  deviceInfoPtr->type == CRYPT_DEVICE_HARDWARE ) && \
+				deviceInfoPtr->iCryptKeyset != CRYPT_ERROR )
+				{
+				/* Hardware devices are user-defined and -coded so it's 
+				   possible that a failed init will have left the device 
+				   keyset open, in which case we close it even if the 
+				   device wasn't recorded as activated.  The TPM code 
+				   takes care to always close the keyset on any error exits 
+				   but we may as well include it here too */
+				krnlSendNotifier( deviceInfoPtr->iCryptKeyset, 
+								  IMESSAGE_DECREFCOUNT );
+				deviceInfoPtr->iCryptKeyset = CRYPT_ERROR;
+				}
+#endif /* USE_HARDWARE || USE_TPM */
 			}
 
 		return( CRYPT_OK );
@@ -1053,6 +1069,10 @@ static int deviceMessageFunction( INOUT_PTR TYPECAST( MESSAGE_FUNCTION_EXTINFO *
 
 		REQUIRES( deleteItemFunction != NULL );
 
+		/* If the device can't have objects deleted from it, complain */
+		if( TEST_FLAG( deviceInfoPtr->flags, DEVICE_FLAG_READONLY ) )
+			return( CRYPT_ERROR_PERMISSION );
+
 		/* Delete an object in the device */
 		return( deleteItemFunction( deviceInfoPtr, messageValue, 
 									deletekeyInfo->keyIDtype, 
@@ -1109,9 +1129,7 @@ static int deviceMessageFunction( INOUT_PTR TYPECAST( MESSAGE_FUNCTION_EXTINFO *
 												messageValue );
 		if( capabilityInfoPtr == NULL )
 			return( CRYPT_ERROR_NOTAVAIL );
-		getCapabilityInfo( queryInfo, capabilityInfoPtr );
-
-		return( CRYPT_OK );
+		return( getCapabilityInfo( queryInfo, capabilityInfoPtr ) );
 		}
 #if defined( CONFIG_CRYPTO_HW1 ) || defined( CONFIG_CRYPTO_HW2 )
 	if( message == MESSAGE_DEV_CATALOGQUERY )
@@ -1207,7 +1225,7 @@ static int openDevice( OUT_HANDLE_OPT CRYPT_DEVICE *iCryptDevice,
 	status = mapValue( deviceType, &value, subtypeMapTbl, 
 					   FAILSAFE_ARRAYSIZE( subtypeMapTbl, MAP_TABLE ) );
 	if( cryptStatusError( status ) )
-		return( CRYPT_ERROR_NOTAVAIL );
+		return( CRYPT_ARGERROR_NUM1 );
 	subType = value;
 	switch( deviceType )
 		{
@@ -1370,9 +1388,13 @@ static int openDevice( OUT_HANDLE_OPT CRYPT_DEVICE *iCryptDevice,
 		   and mechanisms but use the system ones.  To get access to these 
 		   we set up a dummy DEVICE_INFO object and then initialise it with 
 		   system-device values, which we copy them across to the current 
-		   device */
+		   device.
+		   
+		   Note that the following are DATAPTR assignments even though it 
+		   looks like they're standard pointers */
 		memset( &systemDeviceInfo, 0, sizeof( DEVICE_INFO ) );
-		( void ) setDeviceSystem( &systemDeviceInfo );
+		status = setDeviceSystem( &systemDeviceInfo );
+		ENSURES( cryptStatusOK( status ) );
 		deviceInfoPtr->capabilityInfoList = \
 				systemDeviceInfo.capabilityInfoList;
 		deviceInfoPtr->mechanismFunctions = \
@@ -1524,7 +1546,9 @@ static int createSystemDeviceObject( void )
 	   even created (deviceInfoPtr == NULL, nothing to clean up) in which 
 	   case we bail out immediately, or the object is created but wasn't set 
 	   up properly (deviceInfoPtr is allocated, but the object can't be 
-	   used) in which case we bail out after we update its status.
+	   used) in which case we bail out after we update its status.  Because
+	   of the dual return options we have to pre-set deviceInfoPtr to NULL 
+	   in case openDevice() bails out before it can clear the value itself.
 
 	   A failure at this point is a bit problematic because it's not 
 	   possible to inform the caller that the system object was successfully 
@@ -1544,9 +1568,10 @@ static int createSystemDeviceObject( void )
 	   At the moment we just exit.  This is somewhat ugly, but it's not 
 	   really clear what other action we can take in the error handler for a 
 	   can-never-occur error */
+	deviceInfoPtr = NULL;		/* Pre-clear deviceInfoPtr */
 	initStatus = openDevice( &iSystemObject, CRYPT_UNUSED, CRYPT_DEVICE_NONE,
 							 NULL, 0, &deviceInfoPtr );
-	if( deviceInfoPtr == NULL )
+	if( cryptStatusError( initStatus ) && deviceInfoPtr == NULL )
 		return( initStatus );	/* Create object failed, return immediately */
 	ENSURES( iSystemObject == SYSTEM_OBJECT_HANDLE );
 
@@ -1576,10 +1601,11 @@ static int createCryptoDeviceObject( void )
 
 	/* Pass the call on to the lower-level function.  See the comments for 
 	   createSystemDeviceObject() for error handling */
+	deviceInfoPtr = NULL;	/* Pre-clear deviceInfoPtr */
 	initStatus = openDevice( &iCryptoDeviceObject, 
 							 DEFAULTUSER_OBJECT_HANDLE, CRYPT_DEVICE_HARDWARE, 
 							 NULL, 0, &deviceInfoPtr );
-	if( deviceInfoPtr == NULL )
+	if( cryptStatusError( initStatus ) && deviceInfoPtr == NULL )
 		return( initStatus );	/* Create object failed, return immediately */
 	ENSURES( iCryptoDeviceObject == CRYPTO_OBJECT_HANDLE );
 
@@ -1747,15 +1773,15 @@ int deviceManagementFunction( IN_ENUM( MANAGEMENT_ACTION ) \
 			return( CRYPT_OK );
 
 		case MANAGEMENT_ACTION_SHUTDOWN:
-			LOOP_MED( i = 0,
-					  i < FAILSAFE_ARRAYSIZE( deviceInitTbl, \
+			LOOP_SMALL( i = 0,
+						i < FAILSAFE_ARRAYSIZE( deviceInitTbl, \
 											  DEVICEINIT_INFO ) && \
-						  deviceInitTbl[ i ].initFlag != DEV_NONE_INITED,
-					  i++ )
+						deviceInitTbl[ i ].initFlag != DEV_NONE_INITED,
+						i++ )
 				{
-				ENSURES( LOOP_INVARIANT_MED( i, 0, \
-											 FAILSAFE_ARRAYSIZE( deviceInitTbl, \
-																 DEVICEINIT_INFO ) - 1 ) );
+				ENSURES( LOOP_INVARIANT_SMALL( i, 0, \
+											   FAILSAFE_ARRAYSIZE( deviceInitTbl, \
+																   DEVICEINIT_INFO ) - 1 ) );
 				if( initFlags & deviceInitTbl[ i ].initFlag )
 					deviceInitTbl[ i ].deviceEndFunction();
 				}

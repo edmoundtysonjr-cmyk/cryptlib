@@ -28,17 +28,21 @@
    
 	For BIGNUM_BASE_ALLOCSIZE = 1024, BIGNUM_ALLOC_WORDS = 260 32-bit words,
 									  BIGNUM_ALLOC_BITS = 8320.
-	For BIGNUM_BASE_ALLOCSIZE = 512,  BIGNUM_ALLOC_WORDS = 130 32-bit words,
-									  BIGNUM_ALLOC_BITS = 4115 */
+	For BIGNUM_BASE_ALLOCSIZE = 512,  BIGNUM_ALLOC_WORDS = 132 32-bit words,
+									  BIGNUM_ALLOC_BITS = 4224.
+
+   Note that the +4 in the BIGNUM_ALLOC_WORDS calculation is to handle 
+   (valid) size excursions during bignum computations.  The standard safety-
+   margin over-allocation is done when the bignum structs are defined */
 
 #if defined( CONFIG_PKC_ALLOCSIZE )
   #define BIGNUM_BASE_ALLOCSIZE		CONFIG_PKC_ALLOCSIZE
 #else
   #define BIGNUM_BASE_ALLOCSIZE		512
-  #if defined( CRYPT_MAX_PKCSIZE ) && CRYPT_MAX_PKCSIZE != BIGNUM_BASE_ALLOCSIZE
-	#error CRYPT_MAX_PKCSIZE doesnt match BIGNUM_BASE_ALLOCSIZE
-  #endif /* CRYPT_MAX_PKCSIZE != 512 */
 #endif /* CONFIG_PKC_ALLOCSIZE */
+#if defined( CRYPT_MAX_PKCSIZE ) && CRYPT_MAX_PKCSIZE != BIGNUM_BASE_ALLOCSIZE
+  #error CRYPT_MAX_PKCSIZE doesnt match BIGNUM_BASE_ALLOCSIZE
+#endif /* CRYPT_MAX_PKCSIZE != 512 */
 #define BIGNUM_ALLOC_WORDS			( ( BIGNUM_BASE_ALLOCSIZE / BN_BYTES ) + 4 )
 #define bnWordsToBytes( bnWords )	( ( bnWords ) * BN_BYTES )
 #define bnWordsToBits( bnWords )	( ( bnWords ) * BN_BITS2 )
@@ -285,7 +289,10 @@ typedef enum {
 #define OPENSSL_free( a )			clFree( "Dummy", a )
 #define OPENSSL_cleanse( a, b )		zeroise( a, b )
 
+#ifndef BN_ALLOC
 extern int nonNullAddress;
+#endif /* BN_ALLOC */
+
 #if ( defined( __MQXRTOS__ ) || defined( __ICCARM__ ) ) && !defined( _MSC_VER )
   #define bn_expand( bignum, bits ) \
 		  ( ( ( bits ) > BIGNUM_ALLOC_BITS ) ? assert( 0 ), NULL : NULL + 1 )	/* See comment above */
@@ -312,7 +319,8 @@ extern int nonNullAddress;
 #endif /* Situation-specific override macros */
 
 /* Overrides of OpenSSL functions that are rendered unnecessary by our 
-   versions */
+   versions.  BN_MONT_CTX_copy() is only called from ec_lib.c:EC_GROUP_copy()
+   on an EC_GROUP so we don't have to worry about BN_FLG_MALLOCED issues */
 
 #define BN_clear_free			BN_free
 #define BN_cmp					BN_ucmp
@@ -342,16 +350,6 @@ extern int nonNullAddress;
 #define bn_correct_top			BN_normalise
 #define BNerr( a, b )
 #define bn_check_top( a )
-
-/* Get a copy of a bignum with different flags from the original, used for 
-   constant-time ops in bn_gcd() to create a read-only copy of a bignum 
-   that's processed using a constant-time algorithm.  This really shouldn't
-   be called BN_with_flags() but it's necessary for compatibility with the
-   OpenSSL original */
-
-#define BN_with_flags( dest, src, flagValue ) \
-		memcpy( dest, src, sizeof( BIGNUM ) ); \
-		( dest )->flags = ( ( src )->flags & ~BN_FLG_MALLOCED ) | BN_FLG_STATIC_DATA | ( flagValue )
 
 /* Bignum structures.  The storage array d must be at the end since the 
    basic BIGNUM can be overlaid with the _EXT/_EXT2 forms where larger 
@@ -460,10 +458,22 @@ BIGNUM *BN_copy( INOUT_PTR BIGNUM *destBignum,
 				 IN_PTR const BIGNUM *srcBignum );
 STDC_NONNULL_ARG( ( 1, 2 ) ) \
 void BN_swap( INOUT_PTR BIGNUM *bignum1, INOUT_PTR BIGNUM *bignum2 );
+#if defined( USE_ECDSA ) || defined( USE_ECDH )
+STDC_NONNULL_ARG( ( 1, 2 ) ) \
+void BN_consttime_swap( const BN_ULONG condition, 
+						INOUT_PTR BIGNUM *bignum1, 
+						INOUT_PTR BIGNUM *bignum2, 
+						STDC_UNUSED const int nwords );
+#endif /* USE_ECDSA || USE_ECDH */
+CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1, 2 ) ) \
+BIGNUM *BN_with_flags( INOUT_PTR BIGNUM *destBignum, 
+					   IN_PTR const BIGNUM *srcBignum,
+					   const int flags );	/* See comment in ctx_bn.c */
 CHECK_RETVAL_PTR \
 const BIGNUM *BN_value_one( void );
 
-/* Bignum bit/word functions */
+/* Bignum bit/word functions.  The apparent over-sized bit range in 
+   BN_set_bit() is to handle BIGNUM_ALLOC_WORDS_EXT bignums */
 
 STDC_NONNULL_ARG( ( 1 ) ) \
 BN_ULONG BN_get_word( const BIGNUM *bignum );
@@ -475,19 +485,24 @@ CHECK_RETVAL_LENGTH_SHORT STDC_NONNULL_ARG( ( 1 ) ) \
 int BN_num_bits( const BIGNUM *bignum );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN BN_set_bit( INOUT_PTR BIGNUM *bignum, 
-					IN_RANGE( 0, bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
+					IN_RANGE( 0, bytesToBits( CRYPT_MAX_PKCSIZE * 2 ) ) \
 						int bitNo );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN BN_is_bit_set( const BIGNUM *bignum, /* See comment */ int bitNo );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN BN_high_bit( const BIGNUM *bignum );
 STDC_NONNULL_ARG( ( 1 ) ) \
-void BN_set_negative( INOUT_PTR BIGNUM *bignum, const int value );
+void BN_set_negative( INOUT_PTR BIGNUM *bignum, const int isNegative );
 RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN BN_normalise( INOUT_PTR BIGNUM *bignum );
 RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN BN_clear_top( INOUT_PTR BIGNUM *bignum, 
-					  IN_RANGE( 0, BIGNUM_ALLOC_WORDS_EXT2 ) const int oldTop );
+					  IN_RANGE( 0, BIGNUM_ALLOC_WORDS_EXT2 ) \
+							const int oldTop );
+RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
+BOOLEAN BN_clear_top_normalise( INOUT_PTR BIGNUM *bignum, 
+								IN_RANGE( 0, BIGNUM_ALLOC_WORDS_EXT2 ) \
+									const int oldTop );
 
 /* Bignum context init/shutdown functions */
 
@@ -551,12 +566,12 @@ BOOLEAN BN_sub( INOUT_PTR BIGNUM *r,
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 BOOLEAN BN_lshift( INOUT_PTR BIGNUM *r, 
 				   IN_PTR const BIGNUM *a, 
-				   IN_RANGE( 0, bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
+				   IN_RANGE( 1, bytesToBits( CRYPT_MAX_PKCSIZE ) - 1 ) \
 						const int shiftAmount );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 BOOLEAN BN_rshift( INOUT_PTR BIGNUM *r, 
 				   IN_PTR const BIGNUM *a, 
-				   IN_RANGE( 0, bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
+				   IN_RANGE( 1, bytesToBits( CRYPT_MAX_PKCSIZE ) - 1 ) \
 						const int shiftAmount );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN BN_add_word( INOUT_PTR BIGNUM *a, const BN_ULONG w );
@@ -612,7 +627,7 @@ BOOLEAN BN_mod_sqr( INOUT_PTR BIGNUM *r,
 					INOUT_PTR BN_CTX *ctx );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
 BOOLEAN BN_mod_lshift_quick( BIGNUM *r, const BIGNUM *a, 
-							 IN_RANGE( 0, bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
+							 IN_RANGE( 1, bytesToBits( CRYPT_MAX_PKCSIZE ) - 1 ) \
 								const int shiftAmount,
 							 const BIGNUM *m );
 

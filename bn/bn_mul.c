@@ -949,7 +949,7 @@ void bn_mul_high(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b, BN_ULONG *l, int n2,
 
 int BN_mul(BIGNUM *r, const BIGNUM *a, const BIGNUM *b, BN_CTX *ctx)
 {
-    int ret = 0;
+    int ret = 0, extMul1Failed = 0;
     int top, al, bl;
     BIGNUM *rr;
 #if defined(BN_MUL_COMBA) || defined(BN_RECURSION)
@@ -1001,7 +1001,10 @@ int BN_mul(BIGNUM *r, const BIGNUM *a, const BIGNUM *b, BN_CTX *ctx)
 		   so we have to use an extended-size bignum for rr in all cases */
 		rr = ( BIGNUM * ) BN_CTX_get_ext( ctx, BIGNUM_EXT_MUL1 );
 		if( rr == NULL )
+			{
+			extMul1Failed = 1;
 			goto err;
+			}
 		}
 /* End changes for cryptlib - pcg */
     rr->neg = a->neg ^ b->neg;
@@ -1076,7 +1079,8 @@ int BN_mul(BIGNUM *r, const BIGNUM *a, const BIGNUM *b, BN_CTX *ctx)
 				   code is present only to document the issue */
 				if( k * 4 > BIGNUM_ALLOC_WORDS_EXT2 )
 					{
-					DEBUG_DIAG(( "Attempt to allocate over-large bignum due to non-power-of-2 BIGNUM_ALLOC_WORDS" ));
+					DEBUG_DIAG(( "Attempt to allocate over-large bignum due "
+								 "to non-power-of-2 BIGNUM_ALLOC_WORDS" ));
 					goto err;
 					}
 /* End changes for cryptlib - pcg */
@@ -1153,7 +1157,20 @@ int BN_mul(BIGNUM *r, const BIGNUM *a, const BIGNUM *b, BN_CTX *ctx)
     ret = 1;
  err:
     bn_check_top(r);
-	BN_CTX_end_ext( ctx, BIGNUM_EXT_MUL1 );			/* pcg */
+/* Changes for cryptlib - pcg */
+    if( extMul1Failed )
+		{
+		/* The BN_CTX_get_ext() failed, use a standard BN_CTX_end() to clean 
+		   up */
+		BN_CTX_end( ctx );
+		}
+    else
+		{
+		/* This release both MUL1 and MUL2 if required */
+		BN_CTX_end_ext( ctx, BIGNUM_EXT_MUL1 );
+		}
+/* End changes for cryptlib - pcg */
+					
     return (ret);
 }
 

@@ -799,6 +799,11 @@ int base64decode( OUT_BUFFER( destMaxLen, *destLen ) void *dest,
 
 		/* We've got another six bits of valid data, shift them into the 
 		   accumulator */
+		if( checkOverflowShift( accumulator, 6 ) )
+			{
+			sMemDisconnect( &stream );
+			return( CRYPT_ERROR_BADDATA );
+			}
 		accumulator = ( accumulator << 6 ) | value;
 		byteCount++;
 

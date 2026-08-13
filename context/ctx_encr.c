@@ -18,8 +18,8 @@
 #endif /* Compiler-specific includes */
 
 /* The number of bytes of data that we check to make sure that the 
-   encryption operation succeeded.  See the comment in encryptData() before 
-   changing this */
+   encryption operation succeeded.  See the comment in encryptDataConv() 
+   before changing this */
 
 #define ENCRYPT_CHECKSIZE	16
 
@@ -35,18 +35,19 @@
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 static BOOLEAN checkContextStateData( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
-	const CAPABILITY_INFO *capabilityInfoPtr;
+	const CAPABILITY_INFO *capabilityInfoPtr = \
+					DATAPTR_GET( contextInfoPtr->capabilityInfo );
+	const void *keyingInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	int status = CRYPT_OK;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES_B( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES_B( contextInfoPtr->type == CONTEXT_CONV || \
+				contextInfoPtr->type == CONTEXT_MAC || \
 				contextInfoPtr->type == CONTEXT_PKC );
-
-	/* Get the capability info for the context */
-	capabilityInfoPtr = DATAPTR_GET( contextInfoPtr->capabilityInfo );
 	REQUIRES_B( capabilityInfoPtr != NULL );
+	REQUIRES_B( keyingInfo != NULL );
 
 	/* If it's a context with the keying information held externally then we 
 	   can't check it */
@@ -54,19 +55,40 @@ static BOOLEAN checkContextStateData( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 		return( TRUE );
 
 	/* Make sure that the keying information hasn't been corrupted */
-	if( contextInfoPtr->type == CONTEXT_PKC )
+	switch( contextInfoPtr->type )
 		{
-		status = checksumContextData( contextInfoPtr->ctxPKC, 
-					TEST_FLAG( contextInfoPtr->flags, 
-							   CONTEXT_FLAG_ISPUBLICKEY ) ? FALSE : TRUE );
-		}
-	else
-		{
-		const CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+		case CONTEXT_CONV:
+			{
+			const CONV_INFO *convInfo = ( const CONV_INFO * ) keyingInfo;
 
-		if( checksumData( convInfo->key, \
-						  convInfo->keyDataSize ) != convInfo->keyDataChecksum )
-			status = CRYPT_ERROR_FAILED;
+			if( checksumData( convInfo->key, convInfo->keyDataSize ) != \
+												convInfo->keyDataChecksum )
+				status = CRYPT_ERROR_FAILED;
+			break;
+			}
+
+		case CONTEXT_MAC:
+			{
+			const MAC_INFO *macInfo = ( const MAC_INFO * ) keyingInfo;
+
+			if( checksumData( macInfo->macInfo, macInfo->macInfoSize ) != \
+												macInfo->macInfoChecksum )
+				status = CRYPT_ERROR_FAILED;
+			break;
+			}
+		
+		case CONTEXT_PKC:
+			{
+			PKC_INFO *pkcInfo = ( PKC_INFO * ) keyingInfo;
+
+			status = checksumContextData( pkcInfo, 
+						TEST_FLAG( contextInfoPtr->flags, 
+								   CONTEXT_FLAG_ISPUBLICKEY ) ? FALSE : TRUE );
+			break;
+			}
+
+		default:
+			retIntError();
 		}
 	if( cryptStatusError( status ) )
 		{
@@ -87,7 +109,7 @@ static BOOLEAN checkContextStateData( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 
 STDC_NONNULL_ARG( ( 1 ) ) \
 static void sanitiseFailedData( INOUT_BUFFER_FIXED( dataLength ) void *data, 
-								IN_LENGTH_Z const int dataLength,
+								IN_LENGTH const int dataLength,
 								IN_MESSAGE const MESSAGE_TYPE message,
 								IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
@@ -105,7 +127,23 @@ static void sanitiseFailedData( INOUT_BUFFER_FIXED( dataLength ) void *data,
 	   it.  This gets a bit complicated because the output length is 
 	   typically cleared during processing until the final output is actually
 	   available.  To deal with this we use the maximum length possible for 
-	   the fixed-size buffers */
+	   the fixed-size buffers.
+	   
+	   Another thing that we have to be careful about is how we got here in 
+	   the first place.  If it's an internal error then it may be because 
+	   there's something wrong with the data that we're trying to clear, or 
+	   it could be one of the many other things that would trigger an 
+	   exception, so we can't just exclude any CRYPT_ERROR_INTERNAL paths
+	   because most of them won't affect what we're doing here, and in fact
+	   many of them will make it important that we do sanitise the data.
+	   
+	   This is another shouldn't-happen catch-22 situation, we should never
+	   get here and if we do it's not clear what the best way to handle a
+	   stacked should-never-happen situation is.  To deal with this we catch
+	   the only CRYPT_ERROR_INTERNAL conditions that could have brought us 
+	   here and that we can't handle, a data-size error in the data that 
+	   we're going to sanitise, via the general isIntegerRangeNZ() check on
+	   the length and then specific checks for structured data */
 	switch( cryptAlgo )
 		{
 		case CRYPT_ALGO_DH:
@@ -119,12 +157,19 @@ static void sanitiseFailedData( INOUT_BUFFER_FIXED( dataLength ) void *data,
 			{
 			KEYAGREE_PARAMS *keyAgreeParams = ( KEYAGREE_PARAMS * ) data;
 
+			REQUIRES_V( dataLength == sizeof( KEYAGREE_PARAMS ) );
+
 			if( message == MESSAGE_CTX_ENCRYPT )
 				{
 				static_assert( sizeof( keyAgreeParams->publicValue ) >= \
 														KEYAGREE_DATA_SIZE,
 							   "KEYAGREE_PARAMS publicValue size" );
 
+				/* ML-KEM, as usual for a PQC, does things in a bizarre way, 
+				   outputting the wrapped key as the publicValue and the 
+				   shared secret as the wrappedKey.  The important one to
+				   sanitised is the wrapped key, which is what gets 
+				   communicated to the other side */
 				dataPtr = keyAgreeParams->publicValue;
 				}
 			else
@@ -153,6 +198,8 @@ static void sanitiseFailedData( INOUT_BUFFER_FIXED( dataLength ) void *data,
 			static_assert( sizeof( dlpParams->outParam ) >= DLP_DATA_SIZE,
 						   "DLP_PARAMS wrappedKey size" );
 
+			REQUIRES_V( dataLength == sizeof( DLP_PARAMS ) );
+
 			dataPtr = dlpParams->outParam;
 			length = DLP_DATA_SIZE;
 			break;
@@ -175,7 +222,13 @@ static void sanitiseFailedData( INOUT_BUFFER_FIXED( dataLength ) void *data,
 		{
 		MESSAGE_DATA msgData;
 
-		setMessageData( &msgData, dataPtr, length );
+		/* The largest amount of nonce data that we can get is 
+		   MAX_INTLENGTH_SHORT, so we limit the request to that and fill the
+		   rest of the buffer with fixed nonzero data.  Presumably the first
+		   MAX_INTLENGTH_SHORT bytes of random garbage will be a sufficient 
+		   clue that something went wrong */
+		setMessageData( &msgData, dataPtr, 
+						min( length, MAX_INTLENGTH_SHORT ) );
 		status = krnlSendMessage( SYSTEM_OBJECT_HANDLE, IMESSAGE_GETATTRIBUTE_S,
 								  &msgData, CRYPT_IATTRIBUTE_RANDOM_NONCE );
 		if( cryptStatusError( status ) )
@@ -184,6 +237,18 @@ static void sanitiseFailedData( INOUT_BUFFER_FIXED( dataLength ) void *data,
 			   fixed, but non-zero, data */
 			REQUIRES_V( isIntegerRangeNZ( length ) ); 
 			memset( dataPtr, '*', length );
+			}
+		else
+			{
+			/* We got the random data, if there's even more to overwrite just
+			   use fixed data for the rest */
+			if( length > MAX_INTLENGTH_SHORT )
+				{
+				REQUIRES_V( checkOverflowSub( length, MAX_INTLENGTH_SHORT ) );
+				REQUIRES_V( isIntegerRangeNZ( length - MAX_INTLENGTH_SHORT ) ); 
+				memset( ( BYTE * ) dataPtr + MAX_INTLENGTH_SHORT, '*',
+						length - MAX_INTLENGTH_SHORT );
+				}
 			}
 		}
 	else
@@ -208,7 +273,9 @@ static int encryptDataConv( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 							INOUT_BUFFER_FIXED( dataLength ) void *data, 
 							IN_LENGTH const int dataLength )
 	{
-	const CAPABILITY_INFO *capabilityInfoPtr;
+	const CAPABILITY_INFO *capabilityInfoPtr = \
+					DATAPTR_GET( contextInfoPtr->capabilityInfo );
+	const CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	CTX_ENCRYPT_FUNCTION encryptFunction;
 	const int savedDataLength = min( dataLength, ENCRYPT_CHECKSIZE );
 	BYTE savedData[ ENCRYPT_CHECKSIZE + 8 ];
@@ -221,12 +288,10 @@ static int encryptDataConv( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( contextInfoPtr->type == CONTEXT_CONV );
 	REQUIRES( !needsKey( contextInfoPtr ) );
 	REQUIRES( isIntegerRangeNZ( dataLength ) );
-
-	/* Get the capability info for the context */
-	capabilityInfoPtr = DATAPTR_GET( contextInfoPtr->capabilityInfo );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( convInfo != NULL );
 	REQUIRES( isStreamCipher( capabilityInfoPtr->cryptAlgo ) || \
-			  !needsIV( contextInfoPtr->ctxConv->mode ) ||
+			  !needsIV( convInfo->mode ) ||
 			  TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_IV_SET ) );
 
 	/* Get function pointers for the context */
@@ -238,7 +303,7 @@ static int encryptDataConv( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( rangeCheck( savedDataLength, 1, ENCRYPT_CHECKSIZE ) );
 	memcpy( savedData, data, savedDataLength );
 	status = encryptFunction( contextInfoPtr, data, dataLength );
-	if( cryptStatusError( status ) || savedDataLength <= 8 )
+	if( cryptStatusError( status ) )
 		{
 		REQUIRES( rangeCheck( savedDataLength, 1, ENCRYPT_CHECKSIZE ) );
 		zeroise( savedData, savedDataLength );
@@ -246,22 +311,30 @@ static int encryptDataConv( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		}
 
 	/* Check for a catastrophic failure of the encryption.  A check of
-	   a single block unfortunately isn't completely foolproof for 64-bit
-	   blocksize ciphers in CBC mode because of the way the IV is applied to 
-	   the input.  For the CBC encryption operation:
+	   a single block unfortunately isn't completely foolproof for ciphers 
+	   in CBC mode because of the way that the IV is applied to the input.  
+	   For the CBC encryption operation:
 					
 		out = enc( in ^ IV )
 						
 	   if out == IV the operation turns into a no-op.  Consider the simple 
 	   case where IV == in, so IV ^ in == 0.  Then out = enc( 0 ) == IV, 
-	   with the input appearing again at the output.  In fact for a 64-bit 
-	   block cipher this can occur during normal operation once every 2^32 
-	   blocks.  Although the chances of this happening are fairly low (the 
-	   collision would have to occur on the first encrypted block in a 
-	   message since that's the one that we check), we check the first two 
-	   blocks if we're using a 64-bit block cipher in CBC mode in order to 
-	   reduce false positives */
-	if( !memcmp( savedData, data, savedDataLength ) )
+	   with the input appearing again at the output.  
+	   
+	   In fact for a 64-bit block cipher this can occur during normal 
+	   operation once every 2^32 blocks.  Although the chances of this 
+	   happening are fairly low (the collision would have to occur on the 
+	   first encrypted block in a message since that's the one that we 
+	   check), we skip the check if we're encrypting a single block in CBC 
+	   mode.
+	   
+	   We also skip the check if we've got less than 64 bits of data to
+	   compare in any mode, again because of the chance of a false 
+	   positive */
+	if( dataLength >= 8 && \
+		!( convInfo->mode == CRYPT_MODE_CBC && \
+		   capabilityInfoPtr->blockSize == dataLength ) && \
+		compareDataConstTime( savedData, data, savedDataLength ) == TRUE )
 		status = CRYPT_ERROR_FAILED;
 
 	REQUIRES( rangeCheck( savedDataLength, 1, ENCRYPT_CHECKSIZE ) );
@@ -274,9 +347,10 @@ static int encryptDataConv( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int encryptDataPKC( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
 						   INOUT_BUFFER_FIXED( dataLength ) void *data, 
-						   IN_LENGTH_PKC const int dataLength )
+						   IN_LENGTH_SHORT const int dataLength )
 	{
-	const CAPABILITY_INFO *capabilityInfoPtr;
+	const CAPABILITY_INFO *capabilityInfoPtr = \
+					DATAPTR_GET( contextInfoPtr->capabilityInfo );
 	CTX_ENCRYPT_FUNCTION encryptFunction;
 	BYTE savedData[ ENCRYPT_CHECKSIZE + 8 ];
 	int status;
@@ -287,9 +361,7 @@ static int encryptDataPKC( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC );
 	REQUIRES( !needsKey( contextInfoPtr ) );
-
-	/* Get the capability info for the context */
-	capabilityInfoPtr = DATAPTR_GET( contextInfoPtr->capabilityInfo );
+	REQUIRES( isShortIntegerRangeNZ( dataLength ) );
 	REQUIRES( capabilityInfoPtr != NULL );
 
 	/* Get function pointers for the context */
@@ -314,7 +386,8 @@ static int encryptDataPKC( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				}
 
 			/* Check for a catastrophic failure of the encryption */
-			if( !memcmp( savedData, data, ENCRYPT_CHECKSIZE ) )
+			if( compareDataConstTime( savedData, data, \
+									  ENCRYPT_CHECKSIZE ) == TRUE )
 				status = CRYPT_ERROR_FAILED;
 
 			zeroise( savedData, ENCRYPT_CHECKSIZE );
@@ -387,7 +460,9 @@ int processActionMessage( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 						  INOUT_BUFFER_FIXED( dataLength ) void *data, 
 						  IN_LENGTH_Z const int dataLength )
 	{
-	const CAPABILITY_INFO *capabilityInfoPtr;
+	const CAPABILITY_INFO *capabilityInfoPtr = \
+					DATAPTR_GET( contextInfoPtr->capabilityInfo );
+	PKC_INFO *pkcInfo DUMMY_INIT_PTR;
 	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -399,10 +474,14 @@ int processActionMessage( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( message >= MESSAGE_CTX_ENCRYPT && message <= MESSAGE_CTX_HASH );
 	REQUIRES( isIntegerRange( dataLength ) );
-
-	/* Get the capability info for the context */
-	capabilityInfoPtr = DATAPTR_GET( contextInfoPtr->capabilityInfo );
 	REQUIRES( capabilityInfoPtr != NULL );
+
+	/* Get subtype-specific storage if required */
+	if( contextInfoPtr->type == CONTEXT_PKC )
+		{
+		pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+		REQUIRES( pkcInfo != NULL );
+		}
 
 	switch( message )
 		{
@@ -410,20 +489,28 @@ int processActionMessage( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			if( !checkContextStateData( contextInfoPtr ) )
 				return( CRYPT_ERROR_FAILED );
 			if( contextInfoPtr->type == CONTEXT_PKC )
+				{
 				status = encryptDataPKC( contextInfoPtr, data, dataLength );
+				if( !TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_DUMMY ) )
+					clearTempBignums( pkcInfo );
+				}
 			else
 				status = encryptDataConv( contextInfoPtr, data, dataLength );
-			if( contextInfoPtr->type == CONTEXT_PKC && \
-				!TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_DUMMY ) )
-				clearTempBignums( contextInfoPtr->ctxPKC );
 			if( cryptStatusOK( status ) && \
 				!checkContextStateData( contextInfoPtr ) )
 				status = CRYPT_ERROR_FAILED;
 			if( cryptStatusError( status ) )
 				{
+				/* We shouldn't have a length of zero but if we do then it'll
+				   trigger an error condition from the encrypt function, end
+				   up here, and trigger a second one in the sanitise data
+				   function */
 				assert_nofuzz( DEBUG_WARN );
-				sanitiseFailedData( data, dataLength, message, 
-									capabilityInfoPtr->cryptAlgo );
+				if( dataLength > 0 )
+					{
+					sanitiseFailedData( data, dataLength, message, 
+										capabilityInfoPtr->cryptAlgo );
+					}
 				}
 			break;
 
@@ -434,21 +521,29 @@ int processActionMessage( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 						FNPTR_GET( contextInfoPtr->decryptFunction );
 
 			REQUIRES( decryptFunction != NULL );
+			REQUIRES( !needsKey( contextInfoPtr ) );
 
 			if( !checkContextStateData( contextInfoPtr ) )
 				return( CRYPT_ERROR_FAILED );
 			status = decryptFunction( contextInfoPtr, data, dataLength );
 			if( contextInfoPtr->type == CONTEXT_PKC && \
 				!TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_DUMMY ) )
-				clearTempBignums( contextInfoPtr->ctxPKC );
+				clearTempBignums( pkcInfo );
 			if( cryptStatusOK( status ) && \
 				!checkContextStateData( contextInfoPtr ) )
 				status = CRYPT_ERROR_FAILED;
 			if( cryptStatusError( status ) )
 				{
+				/* We shouldn't have a length of zero but if we do then it'll
+				   trigger an error condition from the encrypt function, end
+				   up here, and trigger a second one in the sanitise data
+				   function */
 				assert_nofuzz( DEBUG_WARN );
-				sanitiseFailedData( data, dataLength, message, 
-									capabilityInfoPtr->cryptAlgo );
+				if( dataLength > 0 )
+					{
+					sanitiseFailedData( data, dataLength, message, 
+										capabilityInfoPtr->cryptAlgo );
+					}
 				}
 			break;
 			}
@@ -462,7 +557,7 @@ int processActionMessage( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				{
 				/* We can do this unconditionally since a sign operation 
 				   can only be used with a PKC context */
-				clearTempBignums( contextInfoPtr->ctxPKC );
+				clearTempBignums( pkcInfo );
 				}
 			if( cryptStatusOK( status ) && \
 				!checkContextStateData( contextInfoPtr ) )
@@ -484,7 +579,7 @@ int processActionMessage( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				{
 				/* We can do this unconditionally since a sign operation 
 				   can only be used with a PKC context */
-				clearTempBignums( contextInfoPtr->ctxPKC );
+				clearTempBignums( pkcInfo );
 				}
 			if( cryptStatusOK( status ) && \
 				!checkContextStateData( contextInfoPtr ) )
@@ -499,11 +594,12 @@ int processActionMessage( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 		case MESSAGE_CTX_HASH:
 			{
-			/* We don't check the state for these since there's not much 
+			/* We don't check the state for hashes since there's not much 
 			   that can be done in terms of an attack, we'll just produce a
-			   random hash/MAC value that can't be verified */
-			REQUIRES( contextInfoPtr->type == CONTEXT_HASH || \
-					  contextInfoPtr->type == CONTEXT_MAC );
+			   random hash value that can't be verified */
+			if( contextInfoPtr->type == CONTEXT_MAC && \
+				!checkContextStateData( contextInfoPtr ) )
+				return( CRYPT_ERROR_FAILED );
 
 			/* If we've already completed the hashing/MACing then we can't 
 			   continue */
@@ -512,6 +608,20 @@ int processActionMessage( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 			status = capabilityInfoPtr->encryptFunction( contextInfoPtr,
 														 data, dataLength );
+			if( cryptStatusOK( status ) && \
+				contextInfoPtr->type == CONTEXT_MAC )
+				{
+				MAC_INFO *macInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+
+				REQUIRES( macInfo != NULL );
+
+				/* The hash/MAC operation always updates the hash/MAC state 
+				   so instead of re-checking the checksum as we do for 
+				   conventional contexts we need to recalculate the it for 
+				   the next access */
+				macInfo->macInfoChecksum = checksumData( macInfo->macInfo, 
+														 macInfo->macInfoSize );
+				}
 			if( cryptStatusError( status ) )
 				{
 				assert( DEBUG_WARN );
@@ -521,8 +631,8 @@ int processActionMessage( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				{
 				/* Usually the MAC initialisation happens when we load the 
 				   key, but if we've deleted the MAC value to process 
-				   another piece of data it'll happen on-demand so we have 
-				   to set the flag here */
+				   another piece of data then it'll happen on-demand so we 
+				   have to set the flag here */
 				SET_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_HASH_INITED );
 				}
 			else

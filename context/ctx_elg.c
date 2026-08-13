@@ -23,18 +23,9 @@
 
 /* If we're doing a self-test we use the following fixed k (for the
    signature) and kRandom (for the encryption) data rather than a randomly-
-   generated value.  The k value is the 160-bit DSA one from FIPS 186-1, 
-   which seems as good as any.  The k random value is a string of random 
-   bytes, a static equivalent of calling generateBignum() */
-
-#if 0	/* Only needed for Elgamal signing */
-
-static const BYTE kVal[] = {
-	0x35, 0x8D, 0xAD, 0x57, 0x14, 0x62, 0x71, 0x0F,
-	0x50, 0xE2, 0x54, 0xCF, 0x1A, 0x37, 0x6B, 0x2B,
-	0xDE, 0xAA, 0xDF, 0xBF
-	};
-#endif /* 0 */
+   generated value.  The k random value is a string of random bytes, a 
+   static equivalent of calling generateBignum() that's only used in the
+   self-test */
 
 static const BYTE kRandomVal[] = {
 	0x2A, 0x7C, 0x01, 0xFD, 0x62, 0xF7, 0x43, 0x13,
@@ -77,22 +68,30 @@ static const BYTE randomTestData[ 128 ] = \
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 static BOOLEAN pairwiseConsistencyTest( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
-										IN_BOOL const BOOLEAN isGeneratedKey )
+										IN_BOOL const BOOLEAN isSelftest )
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	DLP_PARAMS dlpParamsEncrypt, dlpParamsDecrypt;
 	BYTE buffer[ ( CRYPT_MAX_PKCSIZE * 2 ) + 16 + 8 ];
-	const int length = bitsToBytes( contextInfoPtr->ctxPKC->keySizeBits );
-	int status;
+	int length, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES_B( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES_B( isBooleanValue( isGeneratedKey ) );
+	REQUIRES_B( isBooleanValue( isSelftest ) );
 	REQUIRES_B( capabilityInfoPtr != NULL );
+	REQUIRES_B( pkcInfo != NULL );
 
-	/* Encrypt with the public key */
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	length = bitsToBytes( pkcInfo->keySizeBits );
+	ENSURES( rangeCheck( length, MIN_PKCSIZE, CRYPT_MAX_PKCSIZE ) );
+
+	/* Encrypt with the public key.  If it's a self-test we indicate that we 
+	   use a fixed k value for the encryption, which means we don't stall 
+	   waiting for random data during the self-test process  */
 	memset( buffer, 0, ( CRYPT_MAX_PKCSIZE * 2 ) + 16 );
 	memcpy( buffer, randomTestData, 128 );
 #if CRYPT_MAX_PKCSIZE >= 256
@@ -108,12 +107,8 @@ static BOOLEAN pairwiseConsistencyTest( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		memcpy( buffer + 384, randomTestData, min( 128, length - 384 ) );
 #endif /* CRYPT_MAX_PKCSIZE >= 512 */
 	initDLPParamsCrypt( &dlpParamsEncrypt, buffer, length );
-	if( !isGeneratedKey )
-		{
-		/* Force the use of a fixed k value for the encryption test to
-		   avoid having to go via the RNG */
+	if( isSelftest )
 		dlpParamsEncrypt.inLen2 = -999;
-		}
 	status = capabilityInfoPtr->encryptFunction( contextInfoPtr,
 						( BYTE * ) &dlpParamsEncrypt, sizeof( DLP_PARAMS ) );
 	if( cryptStatusError( status ) )
@@ -129,7 +124,9 @@ static BOOLEAN pairwiseConsistencyTest( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	/* Make sure that we're recovered the original, including correct
 	   handling of leading zeroes */
-	return( !memcmp( dlpParamsDecrypt.outParam, randomTestData, 128 ) );
+	if( dlpParamsDecrypt.outLen != length )
+		return( FALSE );
+	return( !memcmp( dlpParamsDecrypt.outParam, buffer, length ) );
 	}
 
 #ifndef CONFIG_NO_SELFTEST
@@ -231,7 +228,7 @@ static int selfTest( void )
 								getElgamalCapability(), &contextData, 
 								sizeof( PKC_INFO ), NULL );
 	if( cryptStatusError( status ) )
-		return( status );
+		return( CRYPT_ERROR_FAILED );
 	status = importBignum( &pkcInfo->dlpParam_p, dlpTestKey.p, 
 						   dlpTestKey.pLen, DLPPARAM_MIN_P, 
 						   DLPPARAM_MAX_P, NULL, 
@@ -290,7 +287,7 @@ static int selfTest( void )
 #endif /* 0 */
 	status = capabilityInfoPtr->initKeyFunction( &contextInfo, NULL, 0 );
 	if( cryptStatusError( status ) || \
-		!pairwiseConsistencyTest( &contextInfo, FALSE ) )
+		!pairwiseConsistencyTest( &contextInfo, TRUE ) )
 		{
 		staticDestroyContext( &contextInfo );
 		return( CRYPT_ERROR_FAILED );
@@ -308,7 +305,7 @@ static int selfTest( void )
 	memset( buffer, 0, ( CRYPT_MAX_PKCSIZE * 2 ) + 32 );
 	memcpy( buffer + 1, "abcde", 5 );
 	setDLPParams( &dlpParams, buffer,
-				  bitsToBytes( contextInfo.ctxPKC->keySizeBits ),
+				  bitsToBytes( pkcInfo->keySizeBits ),
 				  buffer, ( CRYPT_MAX_PKCSIZE * 2 ) + 32 );
 	status = capabilityInfoPtr->encryptFunction( &contextInfo,
 							( BYTE * ) &dlpParams, sizeof( DLP_PARAMS ) );
@@ -325,6 +322,8 @@ static int selfTest( void )
 	status = checksumContextData( pkcInfo, TRUE );
 	if( !cryptStatusError( status ) )
 		{
+		/* If the check didn't return an error status due to corrupted data,
+		   this is a test failure */
 		staticDestroyContext( &contextInfo );
 		return( CRYPT_ERROR_FAILED );
 		}
@@ -368,15 +367,11 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 				DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	DLP_PARAMS *dlpParams = ( DLP_PARAMS * ) buffer;
-	const BIGNUM *p = &pkcInfo->dlpParam_p, *g = &pkcInfo->dlpParam_g;
-	const BIGNUM *y = &pkcInfo->dlpParam_y;
-	BIGNUM *tmp = &pkcInfo->tmp1, *k = &pkcInfo->tmp2;
-	BIGNUM *r = &pkcInfo->tmp3, *s = &pkcInfo->dlpTmp1;
-	BIGNUM *phi_p = &pkcInfo->dlpTmp2;
-	const int length = bitsToBytes( pkcInfo->keySizeBits );
-	int bnStatus = BN_STATUS, status;
+	const BIGNUM *p, *g, *y;
+	BIGNUM *tmp, *k, *r, *s, *phi_p;
+	int length, bnStatus = BN_STATUS, status;
 	LOOP_INDEX i;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -384,9 +379,17 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( noBytes == sizeof( DLP_PARAMS ) );
-	REQUIRES( dlpParams->inLen1 == length );
 	REQUIRES( dlpParams->inLen2 == 0 || dlpParams->inLen2 == -999 );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	p = &pkcInfo->dlpParam_p; g = &pkcInfo->dlpParam_g; 
+	y = &pkcInfo->dlpParam_y; tmp = &pkcInfo->tmp1; k = &pkcInfo->tmp2;
+	r = &pkcInfo->tmp3; s = &pkcInfo->dlpTmp1; phi_p = &pkcInfo->dlpTmp2;
+	length = bitsToBytes( pkcInfo->keySizeBits );
+	REQUIRES( dlpParams->inLen1 == length );
 
 	/* Clear return values */
 	REQUIRES( rangeCheck( DLP_DATA_SIZE, 1, DLP_DATA_SIZE ) ); 
@@ -421,6 +424,8 @@ static int encryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   accidental use of the parameter which is normally unused */
 	if( dlpParams->inLen2 == -999 )
 		{
+		ENSURES( length <= 128 );
+				 /* Guaranteed by the self-test call */
 		status = importBignum( k, ( BYTE * ) kRandomVal, length, 
 							   length - 1, length, NULL, 
 							   BIGNUM_CHECK_VALUE_PKC );
@@ -517,22 +522,27 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 				DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	DLP_PARAMS *dlpParams = ( DLP_PARAMS * ) buffer;
-	const BIGNUM *x = &pkcInfo->dlpParam_x;
-	const BIGNUM *p = &pkcInfo->dlpParam_p;
-	BIGNUM *r = &pkcInfo->tmp1, *s = &pkcInfo->tmp2, *tmp = &pkcInfo->tmp3;
-	const int length = bitsToBytes( pkcInfo->keySizeBits );
-	int offset, dummy, bnStatus = BN_STATUS, status;
+	const BIGNUM *x, *p;
+	BIGNUM *r, *s, *tmp;
+	int length, offset, dummy, bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( dlpParams, sizeof( DLP_PARAMS ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( noBytes == sizeof( DLP_PARAMS ) );
+	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	x = &pkcInfo->dlpParam_x; p = &pkcInfo->dlpParam_p;
+	r = &pkcInfo->tmp1; s = &pkcInfo->tmp2; tmp = &pkcInfo->tmp3;
+	length = bitsToBytes( pkcInfo->keySizeBits );
 	REQUIRES( dlpParams->inLen1 >= ( 2 + ( length - 2 ) ) * 2 && \
 			  dlpParams->inLen1 < MAX_INTLENGTH_SHORT );
-	REQUIRES( capabilityInfoPtr != NULL );
 
 	/* Decode the values from a DL data block and make sure that r and s are
 	   valid, i.e. r, s = [1...p-1] */
@@ -565,7 +575,7 @@ static int decryptFn( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		{
 		/* If the resulting value has more than 128 bits of leading zeroes
 		   then there's something wrong */
-		if( offset > 16 )
+		if( offset > bytesToBits( 128 ) )
 			return( CRYPT_ERROR_BADDATA );
 		REQUIRES( rangeCheck( offset, 1, 16 ) );
 		memset( dlpParams->outParam, 0, offset );
@@ -595,7 +605,7 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					IN_BUFFER_OPT( keyLength ) const void *key,
 					IN_LENGTH_SHORT_OPT const int keyLength )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( ( key == NULL && keyLength == 0 ) || \
@@ -605,6 +615,7 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( ( key == NULL && keyLength == 0 ) || \
 			  ( key != NULL && keyLength == sizeof( CRYPT_PKCINFO_DLP ) ) );
+	REQUIRES( pkcInfo != NULL );
 
 #ifndef USE_FIPS140
 	/* Load the key component from the external representation into the
@@ -668,8 +679,7 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   it as a PKCS #3 key to ensure that it doesn't fail the validity check 
 	   for q != 0 */
 	if( key == NULL && \
-		TEST_FLAG( contextInfoPtr->ctxPKC->flags, 
-				   PKCINFO_FLAG_OPENPGPKEYID_SET ) && \
+		TEST_FLAG( pkcInfo->flags, PKCINFO_FLAG_OPENPGPKEYID_SET ) && \
 		BN_is_zero( &pkcInfo->dlpParam_q ) )
 		{
 		/* It's a PGP Elgamal key, treat it as a PKCS #3 key for checking
@@ -683,7 +693,8 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
-						IN_LENGTH_SHORT_MIN( MIN_PKCSIZE * 8 ) \
+						IN_RANGE( bytesToBits( MIN_KEYSIZE ),
+								  bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
 							const int keySizeBits )
 	{
 	int status;
@@ -696,7 +707,7 @@ static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	status = generateDLPkey( contextInfoPtr, keySizeBits );
 	if( cryptStatusOK( status ) && \
-		!pairwiseConsistencyTest( contextInfoPtr, TRUE ) )
+		!pairwiseConsistencyTest( contextInfoPtr, FALSE ) )
 		{
 		DEBUG_DIAG(( "Consistency check of freshly-generated Elgamal key "
 					 "failed" ));

@@ -116,10 +116,10 @@ int suiteBMain( int argc, char **argv );
 
 static void cleanExit( const int exitStatus )
 	{
-#if defined( __WINDOWS__ ) && !defined( NDEBUG )
+#if defined( __WINDOWS__ ) 
 	puts( "\nHit a key..." );
 	( void ) getchar();
-#endif /* __WINDOWS__ && !NDEBUG */
+#endif /* __WINDOWS__ */
 	exit( exitStatus );
 	}
 static void cleanupAndExit( const int exitStatus )
@@ -199,7 +199,7 @@ static void updateConfig( void )
 #else
 	const char *driverPath = "/home/fuzzer/FREEHSM/libfreehsm-fips.so";	/* FreeHSM */
 #endif /* Windows/Unix */
-	int status;
+	int value, status;
 
 	printf( "Updating cryptlib configuration to load PKCS #11 driver\n  "
 			"'%s'\nas default driver...", driverPath );
@@ -223,6 +223,15 @@ static void updateConfig( void )
 		{
 		printf( "\n\nError committing device driver profile update to "
 				"disk, status %d.\n", status );
+		cleanupAndExit( EXIT_FAILURE );
+		}
+
+	/* Make sure the write was OK */
+	status = cryptGetAttribute( CRYPT_UNUSED, CRYPT_OPTION_CONFIGCHANGED, 
+								&value );
+	if( cryptStatusError( status ) || value )
+		{
+		printf( "\n\ncryptlib reports configuration data wasn't updated.\n" );
 		cleanupAndExit( EXIT_FAILURE );
 		}
 
@@ -981,11 +990,11 @@ static int fuzz( const char *cmd, const char *arg )
 	/* Test harness for code checking */
 #if defined( __WINDOWS__ ) && 1
 //	cmd = "base64"; arg = "test/fuzz/base64.dat";
-//	cmd = "certificate"; arg = "test/fuzz/certificate.dat";
+	cmd = "certificate"; arg = "test/fuzz/certificate.dat";
 //	cmd = "certchain"; arg = "test/fuzz/certchain.dat";
 //	cmd = "certreq"; arg = "test/fuzz/certreq.dat";
 //	cmd = "cms"; arg = "test/fuzz/cms.dat";
-	cmd = "pgp"; arg = "test/fuzz/pgp.dat";
+//	cmd = "pgp"; arg = "test/fuzz/pgp.dat";
 //	cmd = "pkcs12"; arg = "test/fuzz/pkcs12.dat";
 //	cmd = "pkcs15"; arg = "test/fuzz/pkcs15.dat";
 //
@@ -1105,10 +1114,9 @@ static int fuzz( const char *cmd, const char *arg )
 		}
 	puts( "Done." );
 	if( i <= 0 )
-		{
 		puts( "Warning: No input files processed." );
-		getchar();
-		}
+	( void ) getchar();
+
 	exit( EXIT_SUCCESS );
 	}
 #endif /* __WINDOWS__ test */
@@ -1441,7 +1449,10 @@ int main( int argc, char **argv )
 		goto errorExit1;
 		}
 
-	puts( "All tests concluded successfully." );
+ 	puts( "All tests concluded successfully." );
+#ifdef __WINDOWS__ 
+	cleanExit( EXIT_SUCCESS );
+#endif /* Non-CLI systems */
 	return( EXIT_SUCCESS );
 
 	/* All errors end up here */

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							PGP Definitions Header File						*
-*						Copyright Peter Gutmann 1996-2013					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -271,8 +271,9 @@ int pgpToCryptlibAlgo( IN_RANGE( PGP_ALGO_NONE, 0xFF ) const int pgpAlgo,
 							const PGP_ALGOCLASS_TYPE pgpAlgoClass,
 					   OUT_ALGO_Z CRYPT_ALGO_TYPE *cryptAlgo,
 					   OUT_OPT_INT_Z int *cryptParam );
-CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
 int cryptlibToPgpAlgo( IN_ALGO const CRYPT_ALGO_TYPE cryptlibAlgo,
+					   IN_INT_SHORT_Z const int cryptlibParam,
 					   OUT_RANGE( PGP_ALGO_NONE, PGP_ALGO_LAST ) \
 							int *pgpAlgo );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
@@ -290,6 +291,7 @@ int pgpPasswordToKey( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 					  IN_BUFFER( passwordLength ) const char *password, 
 					  IN_DATALENGTH const int passwordLength, 
 					  IN_ALGO const CRYPT_ALGO_TYPE hashAlgo, 
+					  IN_LENGTH_HASH const int hashParam,
 					  IN_BUFFER_OPT( saltSize ) const BYTE *salt, 
 					  IN_RANGE( 0, CRYPT_MAX_HASHSIZE ) const int saltSize,
 					  IN_INT const int iterations );
@@ -301,7 +303,7 @@ int pgpProcessIV( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 				  IN_LENGTH_IV const int ivDataSize, 
 				  IN_HANDLE_OPT const CRYPT_CONTEXT iMdcContext,
 				  IN_BOOL const BOOLEAN isEncrypt );
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4, 6 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4, 6, 7 ) ) \
 int readPgpS2K( INOUT_PTR STREAM *stream, 
 				OUT_ALGO_Z CRYPT_ALGO_TYPE *hashAlgo,
 				OUT_LENGTH_HASH_Z int *hashParam,

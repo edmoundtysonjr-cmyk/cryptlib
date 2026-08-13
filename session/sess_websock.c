@@ -26,7 +26,9 @@
 #ifdef USE_WEBSOCKETS
 
 #if defined( _MSC_VER ) || defined( __GNUC__ ) || defined( __clang__ ) 
-  #pragma message( "  Warning: The WebSockets implementation is for testing only and should not be used in a production environment." )
+  #pragma message( "  Warning: The WebSockets implementation is for testing only " )
+  #pragma message( "           and should not be used in a production environment." )
+  #pragma message( "    " )
 #endif /* Notify insecure keyex use */
 
 /****************************************************************************

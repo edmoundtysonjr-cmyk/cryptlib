@@ -127,7 +127,9 @@ static const BYTE kVal[] = {
 /* Perform a pairwise consistency test on a public/private key pair */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-static BOOLEAN pairwiseConsistencyTest( CONTEXT_INFO *contextInfoPtr )
+static BOOLEAN pairwiseConsistencyTest( INOUT_PTR \
+											CONTEXT_INFO *contextInfoPtr, 
+										IN_BOOL const BOOLEAN isSelftest )
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
@@ -138,20 +140,29 @@ static BOOLEAN pairwiseConsistencyTest( CONTEXT_INFO *contextInfoPtr )
 
 	REQUIRES_B( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES_B( capabilityInfoPtr != NULL );
+	REQUIRES_B( isBooleanValue( isSelftest ) );
 
-	/* Generate a signature with the private key */
+	/* Generate a signature with the private key.  If it's a self-test we 
+	   indicate that we use a fixed k value for signing, which means we 
+	   don't stall waiting for random data during the self-test process */
 	initDLPParamsSign( &dlpParamsSign, shaM, 20 );
-	dlpParamsSign.inLen2 = -999;
+	if( isSelftest )
+		dlpParamsSign.inLen2 = -999;
 	status = capabilityInfoPtr->signFunction( contextInfoPtr,
 						( BYTE * ) &dlpParamsSign, sizeof( DLP_PARAMS ) );
-	if( cryptStatusError( status ) )
-		return( FALSE );
+	if( cryptStatusOK( status ) )
+		{
+		/* Verify the signature with the public key */
+		initDLPParamsSigCheck( &dlpParamsSigCheck, shaM, 20, 
+							   dlpParamsSign.outParam, 
+							   dlpParamsSign.outLen );
+		status = capabilityInfoPtr->sigCheckFunction( contextInfoPtr,
+								( BYTE * ) &dlpParamsSigCheck, 
+								sizeof( DLP_PARAMS ) );
+		}
+	zeroise( &dlpParamsSign, sizeof( DLP_PARAMS ) );
+	zeroise( &dlpParamsSigCheck, sizeof( DLP_PARAMS ) );
 
-	/* Verify the signature with the public key */
-	initDLPParamsSigCheck( &dlpParamsSigCheck, shaM, 20, 
-						   dlpParamsSign.outParam, dlpParamsSign.outLen );
-	status = capabilityInfoPtr->sigCheckFunction( contextInfoPtr,
-						( BYTE * ) &dlpParamsSigCheck, sizeof( DLP_PARAMS ) );
 	return( cryptStatusOK( status ) ? TRUE : FALSE );
 	}
 
@@ -302,7 +313,7 @@ static int selfTest( void )
 								getDSACapability(), &contextData, 
 								sizeof( PKC_INFO ), NULL );
 	if( cryptStatusError( status ) )
-		return( status );
+		return( CRYPT_ERROR_FAILED );
 	status = importBignum( &pkcInfo->dlpParam_p, dlpTestKey.p, 
 						   dlpTestKey.pLen, DLPPARAM_MIN_P, 
 						   DLPPARAM_MAX_P, NULL, BIGNUM_CHECK_VALUE_PKC );
@@ -347,7 +358,7 @@ static int selfTest( void )
 	/* Perform the test sign/sig.check of the FIPS 186 test values */
 	status = capabilityInfoPtr->initKeyFunction( &contextInfo, NULL, 0 );
 	if( cryptStatusError( status ) || \
-		!pairwiseConsistencyTest( &contextInfo ) )
+		!pairwiseConsistencyTest( &contextInfo, TRUE ) )
 		{
 		staticDestroyContext( &contextInfo );
 		return( CRYPT_ERROR_FAILED );
@@ -355,7 +366,7 @@ static int selfTest( void )
 
 	/* Try it again with side-channel protection enabled */
 	SET_FLAG( contextInfo.flags, CONTEXT_FLAG_SIDECHANNELPROTECTION );
-	if( !pairwiseConsistencyTest( &contextInfo ) )
+	if( !pairwiseConsistencyTest( &contextInfo, TRUE ) )
 		{
 		staticDestroyContext( &contextInfo );
 		return( CRYPT_ERROR_FAILED );
@@ -387,6 +398,8 @@ static int selfTest( void )
 	status = checksumContextData( pkcInfo, TRUE );
 	if( !cryptStatusError( status ) )
 		{
+		/* If the check didn't return an error status due to corrupted data,
+		   this is a test failure */
 		staticDestroyContext( &contextInfo );
 		return( CRYPT_ERROR_FAILED );
 		}
@@ -434,14 +447,11 @@ static int sign( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 				DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	DLP_PARAMS *dlpParams = ( DLP_PARAMS * ) buffer;
-	const BIGNUM *p = &pkcInfo->dlpParam_p, *q = &pkcInfo->dlpParam_q;
-	const BIGNUM *g = &pkcInfo->dlpParam_g, *x = &pkcInfo->dlpParam_x;
-	BIGNUM *hash = &pkcInfo->tmp1, *k = &pkcInfo->tmp2, *kInv = &pkcInfo->tmp3;
-	BIGNUM *r = &pkcInfo->dlpTmp1, *s = &pkcInfo->dlpTmp2;
-	const int qLen = BN_num_bytes( q );
-	int bnStatus = BN_STATUS, status;
+	const BIGNUM *p, *q, *g, *x;
+	BIGNUM *hash, *k, *kInv, *r, *s;
+	int qLen, bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( dlpParams, sizeof( DLP_PARAMS ) ) );
@@ -451,13 +461,22 @@ static int sign( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( dlpParams->inLen1 >= max( 20, MIN_HASHSIZE ) && \
 			  dlpParams->inLen1 <= CRYPT_MAX_HASHSIZE );
 	REQUIRES( dlpParams->inLen2 == 0 || dlpParams->inLen2 == -999 );
-	REQUIRES( qLen >= DLPPARAM_MIN_Q && qLen <= DLPPARAM_MAX_Q );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Clear return values */
 	REQUIRES( rangeCheck( DLP_DATA_SIZE, 1, DLP_DATA_SIZE ) ); 
 	memset( dlpParams->outParam, 0, min( 16, DLP_DATA_SIZE ) );
 	dlpParams->outLen = 0;
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	p = &pkcInfo->dlpParam_p; q = &pkcInfo->dlpParam_q;
+	g = &pkcInfo->dlpParam_g; x = &pkcInfo->dlpParam_x;
+	hash = &pkcInfo->tmp1; k = &pkcInfo->tmp2; kInv = &pkcInfo->tmp3;
+	r = &pkcInfo->dlpTmp1; s = &pkcInfo->dlpTmp2;
+	qLen = BN_num_bytes( q );
+	REQUIRES( qLen >= DLPPARAM_MIN_Q && qLen <= DLPPARAM_MAX_Q );
 
 	/* Generate the secret random value k.  During the initial self-test
 	   the random data pool may not exist yet, and may in fact never exist in
@@ -526,11 +545,11 @@ static int sign( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	if( bnStatusError( bnStatus ) )
 		return( getBnStatus( bnStatus ) );
 
-	/* Make k fixed-length to try and close one of Schnorr signature's infinite
-	   collection of side-channels, see "Remote Timing Attacks are Still 
-	   Pracical" by Brumley and Tuveri, ESORICS'11, for details.  And then ten 
-	   years later it came up again in "Minerva: The curse of ECDSA nonces" by 
-	   Jancar, Sedlacek, Svenda and Sys, CHES 2020 */
+	/* Make k fixed-length to try and close one of the Schnorr signature's 
+	   infinite collection of side-channels, see "Remote Timing Attacks are 
+	   Still Pracical" by Brumley and Tuveri, ESORICS'11, for details.  And 
+	   then ten years later it came up again in "Minerva: The curse of ECDSA 
+	   nonces" by Jancar, Sedlacek, Svenda and Sys, CHES 2020 */
 	CK( BN_add( k, k, q ) );
 	if( BN_num_bits( k ) <= BN_num_bits( q ) )
 		{
@@ -620,12 +639,10 @@ static int sigCheck( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 				DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	DLP_PARAMS *dlpParams = ( DLP_PARAMS * ) buffer;
-	const BIGNUM *p = &pkcInfo->dlpParam_p, *q = &pkcInfo->dlpParam_q;
-	const BIGNUM *g = &pkcInfo->dlpParam_g, *y = &pkcInfo->dlpParam_y;
-	BIGNUM *r = &pkcInfo->tmp1, *s = &pkcInfo->tmp2;
-	BIGNUM *u1 = &pkcInfo->tmp3, *u2 = &pkcInfo->dlpTmp1;	/* Doubles as w */
+	const BIGNUM *p, *q, *g, *y;
+	BIGNUM *r, *s, *u1, *u2;	/* u2 doubles as w */
 	int bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -633,15 +650,22 @@ static int sigCheck( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( noBytes == sizeof( DLP_PARAMS ) );
-	REQUIRES( ( dlpParams->formatType == CRYPT_FORMAT_CRYPTLIB && \
-				( dlpParams->inLen2 >= 42 && dlpParams->inLen2 <= 128 ) ) || \
-			  ( dlpParams->formatType == CRYPT_FORMAT_PGP && \
-				( dlpParams->inLen2 >= 42 && dlpParams->inLen2 <= 128 ) ) || \
+	REQUIRES( ( ( dlpParams->formatType == CRYPT_FORMAT_CRYPTLIB || \
+				  dlpParams->formatType == CRYPT_FORMAT_PGP ) && \
+				  dlpParams->inLen2 >= 42 && dlpParams->inLen2 <= 128 ) || \
 			  ( dlpParams->formatType == CRYPT_IFORMAT_SSH && \
 				dlpParams->inLen2 == 40 ) );
 	REQUIRES( dlpParams->inLen1 >= max( 20, MIN_HASHSIZE ) && \
 			  dlpParams->inLen1 <= CRYPT_MAX_HASHSIZE );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	p = &pkcInfo->dlpParam_p; q = &pkcInfo->dlpParam_q;
+	g = &pkcInfo->dlpParam_g; y = &pkcInfo->dlpParam_y;
+	r = &pkcInfo->tmp1; s = &pkcInfo->tmp2; u1 = &pkcInfo->tmp3;
+	u2 = &pkcInfo->dlpTmp1;
 
 	/* Decode the values from a DL data block and make sure that r and s are
 	   valid, i.e. r, s = [1...q-1] */
@@ -717,9 +741,11 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   internal bignums unless we're doing an internal load */
 	if( key != NULL )
 		{
-		PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+		PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 		const CRYPT_PKCINFO_DLP *dsaKey = ( CRYPT_PKCINFO_DLP * ) key;
 		int status;
+
+		REQUIRES( pkcInfo != NULL );
 
 		if( dsaKey->isPublicKey )
 			SET_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_ISPUBLICKEY );
@@ -776,7 +802,8 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
-						IN_LENGTH_SHORT_MIN( MIN_PKCSIZE * 8 ) \
+						IN_RANGE( bytesToBits( MIN_KEYSIZE ),
+								  bytesToBits( CRYPT_MAX_PKCSIZE ) ) \
 							const int keySizeBits )
 	{
 	int status;
@@ -789,7 +816,7 @@ static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	status = generateDLPkey( contextInfoPtr, ( keySizeBits / 64 ) * 64 );
 	if( cryptStatusOK( status ) && \
-		!pairwiseConsistencyTest( contextInfoPtr ) )
+		!pairwiseConsistencyTest( contextInfoPtr, FALSE ) )
 		{
 		DEBUG_DIAG(( "Consistency check of freshly-generated DSA key "
 					 "failed" ));

@@ -132,6 +132,8 @@ static int readNumericValue( INOUT_PTR STREAM *stream,
 			if( i > 2 )
 				return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 #endif /* MAX_LEADING_ZEROES > 2 */
+			if( !isZeroValueOK )
+				return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 			return( CRYPT_OK );	
 			}
 		bufPtr += i;			/* Skip leading zero(es) */
@@ -147,15 +149,19 @@ static int readNumericValue( INOUT_PTR STREAM *stream,
 	/* Read and check the value */
 	LOOP_SMALL( ( localValue = 0, i = 0 ), i < noBytes, i++ )
 		{
-		const long localValueTmp = localValue << 8;
+		long localValueTmp;
 		int data;
 
 		ENSURES_S( LOOP_INVARIANT_SMALL( i, 0, noBytes - 1 ) );
 
+		if( checkOverflowShift( localValue, 8 ) )
+			{
+			/* Integer overflow would occur */
+			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
+			}
+		localValueTmp = localValue << 8;
 		data = byteToInt( bufPtr[ i ] );
-		if( localValue >= ( MAX_INTLENGTH >> 8 ) || \
-			localValueTmp < 0 || \
-			checkOverflowAdd( localValueTmp, data ) )
+		if( localValueTmp < 0 || checkOverflowAdd( localValueTmp, data ) )
 			{
 			/* Integer overflow */
 			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
@@ -198,7 +204,7 @@ static int readNumericValue( INOUT_PTR STREAM *stream,
    for long and short lengths and indefinite-length encodings:
 
 	0x00 - 0x7F					Basic length
-	0x80						Ondefinite
+	0x80						Indefinite
 	0x81 0xnn					8-bit length
 	0x82 0xnn 0xnn				16-bit length
 	0x83 0xnn 0xnn 0xnn			24-bit length
@@ -311,7 +317,7 @@ static int readNumeric( INOUT_PTR STREAM *stream,
 		   zero value */
 		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 		}
-	ENSURES_S( isShortIntegerRangeNZ( length ) )
+	ENSURES_S( isShortIntegerRangeNZ( length ) );
 	if( length > MAX_NUMERIC_DATA_BYTES )
 		{
 		/* We allow up to MAX_NUMERIC_DATA_BYTES bytes of data to 
@@ -622,7 +628,7 @@ static int readIntegerHeader( INOUT_PTR STREAM *stream,
 		   zero value */
 		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 		}
-	ENSURES_S( isShortIntegerRangeNZ( length ) )
+	ENSURES_S( isShortIntegerRangeNZ( length ) );
 
 	/* ASN.1 encoded values are signed while the internal representation is
 	   unsigned so we skip any leading zero bytes needed to encode a value
@@ -717,7 +723,7 @@ int readIntegerTag( INOUT_PTR STREAM *stream,
 	status = length = readIntegerHeader( stream, tag );
 	if( cryptStatusError( status ) )
 		return( status );
-	ENSURES_S( isShortIntegerRangeNZ( length ) )
+	ENSURES_S( isShortIntegerRangeNZ( length ) );
 
 	/* Read in the numeric value, limiting the size to the maximum buffer 
 	   size.  This is safe because the only situation where this can occur 
@@ -1383,7 +1389,7 @@ int readBitStringTag( INOUT_PTR STREAM *stream,
 		data = ( data & 0x33333333 ) << 2 | ( data >> 2 ) & 0x33333333;
 		data = ( data & 0x0F0F0F0F ) << 4 | ( data >> 4 ) & 0x0F0F0F0F;
 		data = ( data << 24 ) | ( ( data & 0xFF00 ) << 8 ) | \
-			   ( ( data >> 8 ) & 0xFF00 || ( data >> 24 );
+			   ( ( data >> 8 ) & 0xFF00 ) | ( data >> 24 );
 
 	  which swaps adjacent bits, then 2-bit fields, then 4-bit fields, and 
 	  so on */
@@ -1392,17 +1398,21 @@ int readBitStringTag( INOUT_PTR STREAM *stream,
 		return( status );
 	LOOP_SMALL( ( mask = 0x80, i = 1 ), i < length, ( mask <<= 8, i++ ) )
 		{
-		const long dataValTmp = data << 8;
+		long dataValTmp;
 		int dataTmp;
 
 		ENSURES_S( LOOP_INVARIANT_SMALL( i, 1, length - 1 ) );
 
+		if( checkOverflowShift( data, 8 ) )
+			{
+			/* Integer overflow would occur */
+			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
+			}
+		dataValTmp = data << 8;
 		status = dataTmp = sgetc( stream );
 		if( cryptStatusError( status ) )
 			return( status );
-		if( data >= ( MAX_INTLENGTH >> 8 ) || \
-			dataValTmp < 0 || \
-			checkOverflowAdd( dataValTmp, dataTmp ) )
+		if( dataValTmp < 0 || checkOverflowAdd( dataValTmp, dataTmp ) )
 			{
 			/* Integer overflow */
 			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
@@ -1423,7 +1433,7 @@ int readBitStringTag( INOUT_PTR STREAM *stream,
 
 		if( data & mask )
 			value |= flag;
-		data <<= 1;
+		mask >>= 1;
 		}
 	ENSURES_S( LOOP_BOUND_OK );
 	if( !isIntegerRange( value ) )
@@ -1862,7 +1872,7 @@ static int checkReadTag( INOUT_PTR STREAM *stream,
 	/* In addition we can accept context-specific tagged items up to 
 	   MAX_CTAG_VALUE */
 	if( ( tagValue & BER_CLASS_MASK ) == BER_CONTEXT_SPECIFIC && \
-		( tagValue & BER_SHORT_ID_MASK ) <= MAX_CTAG_VALUE )
+		( tagValue & BER_SHORT_ID_MASK ) < MAX_CTAG_VALUE )
 		return( CRYPT_OK );
 
 	/* If we're reading an object as a genuine blob rather than a 

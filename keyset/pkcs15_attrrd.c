@@ -205,8 +205,7 @@ static int readKeyIdentifiers( INOUT_PTR STREAM *stream,
 		/* This could be either an internal error or some seriously 
 		   malformed data, since we can't tell without human intervention
 		   we throw a debug exception but otherwise treat it as bad data */
-		DEBUG_DIAG(( "Encountered more than %d key IDs", 
-					 FAILSAFE_ITERATIONS_MED ));
+		DEBUG_DIAG(( "Encountered more than 32 key IDs" ));
 		assert( DEBUG_WARN );
 		return( CRYPT_ERROR_BADDATA );
 		}
@@ -603,7 +602,7 @@ static int readTypeAttributes( INOUT_PTR STREAM *stream,
 		status = readConstructed( stream, NULL, CTAG_OV_DIRECT );
 		}
 	if( cryptStatusError( status ) )
-		return( status );
+		return( status );	/* Residual error from peekTag() */
 
 	/* Read the payload data, which just consists of remembering where the 
 	   payload starts */
@@ -841,6 +840,8 @@ int readObjectAttributes( INOUT_PTR STREAM *stream,
 														  "subclass" ) );
 			}
 		}
+	if( cryptStatusError( status ) )
+		return( status );	/* Residual error from peekTag() */
 
 	/* Process the type attributes */
 	status = readTypeAttributes( stream, pkcs15infoPtr, type, 

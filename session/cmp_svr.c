@@ -37,7 +37,7 @@ static const MAP_TABLE reqClibReqMapTbl[] = {
 	{ CRYPT_ERROR, CRYPT_ERROR }, { CRYPT_ERROR, CRYPT_ERROR }
 	};
 
-CHECK_RETVAL_RANGE( CRYPT_REQUESTTYPE_NONE, CRYPT_REQUESTTYPE_LAST ) \
+CHECK_RETVAL_RANGE( CRYPT_REQUESTTYPE_NONE + 1, CRYPT_REQUESTTYPE_LAST - 1 ) \
 static int reqToClibReq( IN_ENUM_OPT( CMP_MESSAGE ) \
 							const CMP_MESSAGE_TYPE reqType )
 	{
@@ -200,8 +200,8 @@ int initServerAuthentSign( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	REQUIRES( sanityCheckCMPProtocolInfo( protocolInfo ) );
 
 	/* Set up general authentication information and if there's client 
-	   authentication information still present from a previous transaction 
-	   that used MAC authentication, clear it */
+	   authentication information still present from a previous transaction, 
+	   clear it */
 	status = setCMPprotocolInfo( protocolInfo, NULL, 0, CMP_INIT_FLAG_NONE,
 								 TRUE );
 	if( cryptStatusError( status ) )
@@ -210,6 +210,12 @@ int initServerAuthentSign( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{
 		krnlSendNotifier( cmpInfo->userInfo, IMESSAGE_DECREFCOUNT );
 		cmpInfo->userInfo = CRYPT_ERROR;
+		}
+	if( sessionInfoPtr->iAuthInContext != CRYPT_ERROR )
+		{
+		krnlSendNotifier( sessionInfoPtr->iAuthInContext, 
+						  IMESSAGE_DECREFCOUNT );
+		sessionInfoPtr->iAuthInContext = CRYPT_ERROR;
 		}
 	protocolInfo->userIsRA = FALSE;
 
@@ -294,7 +300,7 @@ int initServerAuthentSign( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 /* Clean up after a failed/aborted certificate issue */
 
-STDC_NONNULL_ARG( ( 1, 2 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int cleanupFailedIssue( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							   INOUT_PTR CMP_PROTOCOL_INFO *protocolInfo,
 							   IN_STATUS const int status )
@@ -435,7 +441,7 @@ static int serverTransact( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	   server doesn't have a user ID (it uses what the client sends it), we 
 	   set the userID-sent flag to indicate that it's been implicitly 
 	   exchanged */
-	status  = initCMPprotocolInfo( &protocolInfo, sessionInfoPtr, TRUE );
+	status = initCMPprotocolInfo( &protocolInfo, sessionInfoPtr, TRUE );
 	if( cryptStatusError( status ) )
 		return( status );
 	SET_FLAG( sessionInfoPtr->protocolFlags, CMP_PFLAG_USERIDSENT );
@@ -477,8 +483,8 @@ static int serverTransact( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 
 		/* We're (potentially) re-using user information from a previous 
 		   session, if there are cryptographic credentials associated with
-		   the user information we have to move them over to the current
-		   protocol state data */
+		   the user information then we have to move them over to the 
+		   current protocol state data */
 		if( cmpInfo->iSavedMacContext != CRYPT_ERROR )
 			{
 			protocolInfo.iMacContext = cmpInfo->iSavedMacContext;
@@ -661,13 +667,13 @@ static int serverTransact( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 				   ( status, SESSION_ERRINFO, sessionInfoPtr->cryptKeyset,
 					 "CMP %s request for '%s' couldn't be added to the "
 					 "certificate store", 
-					 ( operation == CTAG_PB_IR ) ?"initialisation" : \
+					 ( operation == CTAG_PB_IR ) ? "initialisation" : \
 					 ( operation == CTAG_PB_KUR ) ? "key update" : \
 					 ( operation == CTAG_PB_RR ) ? "revocation" : \
 												   "certificate",
 					 getCertHolderName( sessionInfoPtr->iCertRequest, 
 										certName, CRYPT_MAX_TEXTSIZE ) ) );
- 		}
+		}
 	CFI_CHECK_UPDATE( "IMESSAGE_KEY_SETKEY" );
 
 	/* Create or revoke a certificate from the request */
@@ -913,7 +919,7 @@ static int serverTransact( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 ****************************************************************************/
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-void initCMPserverProcessing( SESSION_INFO *sessionInfoPtr )
+void initCMPserverProcessing( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 

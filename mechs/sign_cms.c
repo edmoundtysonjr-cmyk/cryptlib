@@ -28,12 +28,30 @@
 #define ENCODED_ATTRIBUTE_SIZE	512
 
 /* Following PKIX/CMS tradition, the ESSCertID/ESSCertIDv2 isn't just a hash 
-   but a complex composite field.  To deal with this we use a fixed SEQUENCE 
-   { OCTET STRING ... } header before the SHA-2 hash value (see the comment
-   in addSigningCertificate() for why we hardcode SHA-2) */
+   but a complex composite field:
 
+	ESSCertID ::=  SEQUENCE {
+		certHash			OCTET STRING
+		[...]
+		}
+
+	ESSCertIDv2 ::= SEQUENCE {
+		hashAlgorithm		AlgorithmIdentifier DEFAULT SHA-256,
+		certHash			OCTET STRING
+		[...]
+        }  
+   
+   In the SHA-256 case both have the same encoding, differing only in the 
+   length value.  To deal with this we use a fixed SEQUENCE 
+   { OCTET STRING ... } header before the SHA-2 hash value (see the comment
+   in addSigningCertificate() for why we hardcode SHA-2).
+   
+   Note that the two headers have the same size, and in fact only differ in
+   the hash sizes, so we can use one to cover both values */
+
+#define ESSCERTIDv1_HEADER		"\x30\x16\x04\x14"
 #define ESSCERTIDv2_HEADER		"\x30\x22\x04\x20"
-#define ESSCERTIDv2_HEADER_SIZE	4
+#define ESSCERTID_HEADER_SIZE	4
 
 /* A structure to store CMS attribute information */
 
@@ -66,6 +84,7 @@ typedef struct {
 	} CMS_ATTRIBUTE_INFO;
 
 #define initCmsAttributeInfo( attributeInfo, useSmime, useDefault, cmsAttributes, messageHash, timeSource, tspSession ) \
+		{ \
 		memset( attributeInfo, 0, sizeof( CMS_ATTRIBUTE_INFO ) ); \
 		( attributeInfo )->useSmimeSig = useSmime; \
 		( attributeInfo )->useDefaultAttributes = useDefault; \
@@ -73,7 +92,8 @@ typedef struct {
 		( attributeInfo )->iMessageHash = messageHash; \
 		( attributeInfo )->iTimeSource = timeSource; \
 		( attributeInfo )->iTspSession = tspSession; \
-		( attributeInfo )->maxEncodedAttributeSize = ENCODED_ATTRIBUTE_SIZE;
+		( attributeInfo )->maxEncodedAttributeSize = ENCODED_ATTRIBUTE_SIZE; \
+		}
 
 #ifdef USE_INT_CMS
 
@@ -99,7 +119,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 7 ) ) \
 static int writeCmsSignerInfo( INOUT_PTR STREAM *stream,
 							   IN_HANDLE const CRYPT_CERTIFICATE certificate,
 							   IN_ALGO const CRYPT_ALGO_TYPE hashAlgo,
-							   IN_LENGTH_HASH_Z const int hashParam,
+							   IN_LENGTH_HASH const int hashParam,
 							   IN_BUFFER_OPT( attributeSize ) \
 									const void *attributes, 
 							   IN_LENGTH_SHORT_Z const int attributeSize,
@@ -158,7 +178,8 @@ static int writeCmsSignerInfo( INOUT_PTR STREAM *stream,
 	REQUIRES( !checkOverflowAdd3( dynLength( iAndSDB ), sizeofHashAlgoID,
 								  attributeSize ) );
 	REQUIRES( !checkOverflowAdd3( dynLength( iAndSDB ) + sizeofHashAlgoID + \
-									attributeSize, signatureSize, 1024 ) );
+									attributeSize, signatureSize, 
+								  sizeofShortObject( unsignedAttributeSize ) ) );
 	writeSequence( stream, sizeofShortInteger( CMS_VERSION ) + \
 						   dynLength( iAndSDB ) + sizeofHashAlgoID + \
 						   attributeSize + signatureSize + \
@@ -193,7 +214,7 @@ static int writeCmsSignerInfo( INOUT_PTR STREAM *stream,
 			} */
 	writeConstructed( stream, unsignedAttributeSize, 1 );
 	writeSequence( stream, sizeofOID( OID_TSP_TSTOKEN ) + \
-						   sizeofObject( timeStampSize ) );
+						   sizeofShortObject( timeStampSize ) );
 	writeOID( stream, OID_TSP_TSTOKEN );
 	status = writeSet( stream, timeStampSize );
 	if( cryptStatusError( status ) )
@@ -270,8 +291,8 @@ static int createCmsCountersignature( IN_BUFFER( dataSignatureSize ) \
 		}
 	sMemDisconnect( &stream );
 #else	/* Broken TSP not-quite-countersignature */
-	krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH,
-					 ( MESSAGE_CAST ) dataSignature, dataSignatureSize );
+	status = krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH,
+					( MESSAGE_CAST ) dataSignature, dataSignatureSize );
 #endif /* 1 */
 	if( cryptStatusOK( status ) )
 		status = krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH, "", 0 );
@@ -354,7 +375,7 @@ static void addSigningCertificate( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttribu
 	{
 	CRYPT_CERTIFICATE iCryptCert;
 	MESSAGE_DATA msgData DUMMY_INIT_STRUCT;
-	BYTE essCertID[ ESSCERTIDv2_HEADER_SIZE + CRYPT_MAX_HASHSIZE + 8 ];
+	BYTE essCertID[ ESSCERTID_HEADER_SIZE + CRYPT_MAX_HASHSIZE + 8 ];
 	int fingerprintSize, status;
 
 	REQUIRES_V( isHandleRangeValid( iCmsAttributes ) );
@@ -386,9 +407,9 @@ static void addSigningCertificate( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttribu
 		{
 		/* Following PKIX/CMS tradition the ESSCertID isn't just a hash but 
 		   a complex composite field.  To deal with this we copy in a fixed
-		   ESSCERTIDv2 header before the hash value */
-		memcpy( essCertID, ESSCERTIDv2_HEADER, ESSCERTIDv2_HEADER_SIZE );
-		setMessageData( &msgData, essCertID + ESSCERTIDv2_HEADER_SIZE, 
+		   ESSCERTIDv2 header before the (also fixed-size) hash value */
+		memcpy( essCertID, ESSCERTIDv2_HEADER, ESSCERTID_HEADER_SIZE );
+		setMessageData( &msgData, essCertID + ESSCERTID_HEADER_SIZE, 
 						CRYPT_MAX_HASHSIZE );
 		status = krnlSendMessage( iCryptCert, IMESSAGE_GETATTRIBUTE_S,
 								  &msgData, CRYPT_CERTINFO_FINGERPRINT_SHA2 );
@@ -400,10 +421,10 @@ static void addSigningCertificate( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttribu
 	fingerprintSize = msgData.length;
 
 	/* Add the ESSCertIDv2 for the signing certificate */
-	REQUIRES_V( !checkOverflowAdd( ESSCERTIDv2_HEADER_SIZE, 
+	REQUIRES_V( !checkOverflowAdd( ESSCERTID_HEADER_SIZE, 
 								   fingerprintSize ) );
 	setMessageData( &msgData, essCertID, 
-					ESSCERTIDv2_HEADER_SIZE + fingerprintSize );
+					ESSCERTID_HEADER_SIZE + fingerprintSize );
 	( void ) krnlSendMessage( iCmsAttributes, IMESSAGE_SETATTRIBUTE_S,
 							  &msgData, 
 							  CRYPT_CERTINFO_CMS_SIGNINGCERTV2_ESSCERTIDV2 );
@@ -415,7 +436,7 @@ static int checkSigningCertificate( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttrib
 	{
 	CRYPT_CERTIFICATE iCryptCert;
 	MESSAGE_DATA msgData DUMMY_INIT_STRUCT;
-	BYTE essCertID[ ESSCERTIDv2_HEADER_SIZE + CRYPT_MAX_HASHSIZE + 8 ];
+	BYTE essCertID[ ESSCERTID_HEADER_SIZE + CRYPT_MAX_HASHSIZE + 8 ];
 	BYTE hashValue[ CRYPT_MAX_HASHSIZE + 8 ];
 	BOOLEAN isESSCertIDv2 = TRUE;
 	int hashSize DUMMY_INIT, status;
@@ -425,7 +446,7 @@ static int checkSigningCertificate( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttrib
 
 	/* Try and get the signingCertificate identifier */
 	setMessageData( &msgData, essCertID, 
-					ESSCERTIDv2_HEADER_SIZE + CRYPT_MAX_HASHSIZE );
+					ESSCERTID_HEADER_SIZE + CRYPT_MAX_HASHSIZE );
 	status = krnlSendMessage( iCmsAttributes, IMESSAGE_GETATTRIBUTE_S, 
 							  &msgData, 
 							  CRYPT_CERTINFO_CMS_SIGNINGCERTV2_ESSCERTIDV2 );
@@ -434,7 +455,7 @@ static int checkSigningCertificate( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttrib
 		/* We couldn't get the v2 ID, try for a v1 ID */
 		isESSCertIDv2 = FALSE;
 		setMessageData( &msgData, essCertID, 
-						ESSCERTIDv2_HEADER_SIZE + CRYPT_MAX_HASHSIZE );
+						ESSCERTID_HEADER_SIZE + CRYPT_MAX_HASHSIZE );
 		status = krnlSendMessage( iCmsAttributes, IMESSAGE_GETATTRIBUTE_S, 
 								  &msgData, 
 								  CRYPT_CERTINFO_CMS_SIGNINGCERT_ESSCERTID );
@@ -447,21 +468,39 @@ static int checkSigningCertificate( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttrib
 		return( CRYPT_OK );
 		}
 
-	/* Make sure that we've got enough data to work with, at least the 
-	   header plus a SHA1 or SHA2 hash.  If it's malformed, we report it as
-	   a signature error */
-	if( msgData.length < ESSCERTIDv2_HEADER_SIZE + \
+	/* Make sure that we've got enough data to work with, at least a minimal-
+	   length ID value.  If it's less than that, we report it as a signature 
+	   error */
+	if( msgData.length < ESSCERTID_HEADER_SIZE + \
 						 ( isESSCertIDv2 ? 32 : 20 ) )
 		return( CRYPT_ERROR_SIGNATURE );
 
-	/* If it's an ESSCertIDv2, make sure that it's a form that we can 
-	   handle.  This isn't necessary for the basic ESSCertID because only
-	   one form is possible */
-	if( isESSCertIDv2 && \
-		memcmp( essCertID, ESSCERTIDv2_HEADER, ESSCERTIDv2_HEADER_SIZE ) )
+	/* Make sure that it's a form that we can handle.  It's not clear 
+	   whether a failure here should fail open or closed, it's an optional
+	   attribute so its absence is always a CRYPT_OK result and it's
+	   provided by the signer and covered by the signature so isn't
+	   attacker-controlled.  The only IDs that have ever been seen are a
+	   pure-hash form so possibly we should fail closed, but given that
+	   this attribute is essentially never used it's not clear whether
+	   breaking verification based on something the sender may not even 
+	   know exists is worth it */
+	if( isESSCertIDv2 )
 		{
-		/* It's something weird, we can't do anything with it */
-		return( CRYPT_OK );
+		if( memcmp( essCertID, ESSCERTIDv2_HEADER, \
+					ESSCERTID_HEADER_SIZE ) )
+			{
+			/* It's something weird, we can't do anything with it */
+			return( CRYPT_OK );
+			}
+		}
+	else
+		{
+		if( memcmp( essCertID, ESSCERTIDv1_HEADER, \
+					ESSCERTID_HEADER_SIZE ) )
+			{
+			/* It's something weird, we can't do anything with it */
+			return( CRYPT_OK );
+			}
 		}
 
 	/* Lock the certificate for our exclusive use, select the first 
@@ -504,7 +543,7 @@ static int checkSigningCertificate( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttrib
 
 	/* We've now got a copy of the required certificate hash and the actual
 	   certificate hash, make sure that they match up */
-	if( memcmp( hashValue, essCertID + ESSCERTIDv2_HEADER_SIZE, hashSize ) )
+	if( memcmp( hashValue, essCertID + ESSCERTID_HEADER_SIZE, hashSize ) )
 		return( CRYPT_ERROR_SIGNATURE );
 
 	return( CRYPT_OK );
@@ -542,14 +581,14 @@ static int addAlgorithmProtection( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttribu
 	if( cryptStatusOK( status ) )
 		{
 		status = krnlSendMessage( iCmsAttributes, IMESSAGE_SETATTRIBUTE, 
-								  &sigAlgorithm, 
-								  CRYPT_CERTINFO_CMS_ALGORITHMPROTECTION_SIG );
+							&sigAlgorithm, 
+							CRYPT_CERTINFO_CMS_ALGORITHMPROTECTION_SIG );
 		}
 	if( cryptStatusOK( status ) )
 		{
 		status = krnlSendMessage( iCmsAttributes, IMESSAGE_SETATTRIBUTE, 
-								  ( MESSAGE_CAST ) &hashAlgoValue, 
-								  CRYPT_CERTINFO_CMS_ALGORITHMPROTECTION_HASH );
+							( MESSAGE_CAST ) &hashAlgoValue, 
+							CRYPT_CERTINFO_CMS_ALGORITHMPROTECTION_HASH );
 		}
 #if 0	/* There's currently no way to pass the hash algorithm parameter 
 		   down through the various layers to get to writeAlgoIDex() because 
@@ -562,8 +601,8 @@ static int addAlgorithmProtection( IN_HANDLE const CRYPT_CERTIFICATE iCmsAttribu
 	if( cryptStatusOK( status ) )
 		{
 		status = krnlSendMessage( iCmsAttributes, IMESSAGE_SETATTRIBUTE, 
-								  ( MESSAGE_CAST ) &hashAlgoValue, 
-								  CRYPT_CERTINFO_CMS_ALGORITHMPROTECTION_HASHPARAM );
+							( MESSAGE_CAST ) &hashParam, 
+							CRYPT_CERTINFO_CMS_ALGORITHMPROTECTION_HASHPARAM );
 		}
 #endif /* 0 */
 
@@ -754,7 +793,13 @@ static int hashCmsAttributes( INOUT_PTR CMS_ATTRIBUTE_INFO *cmsAttributeInfo,
 	   present, and a failure to delete it will be detected immediately
 	   afterwards when we try and set it).  If we're doing a call just to 
 	   get the length of the exported data we use a dummy hash value since 
-	   the hashing may not have completed yet */
+	   the hashing may not have completed yet.
+	   
+	   Note that the opportunistic delete of the message digest will set the
+	   error locus and type in the CMS attributes if there's no digest
+	   present, but they'll both be reset by the setting of the digest
+	   attribute that follows and in essentially all cases will be coming
+	   from a cryptlib-internal call rather than cryptCreateSignatureEx() */
 	( void ) krnlSendMessage( cmsAttributeInfo->iCmsAttributes, 
 							  IMESSAGE_DELETEATTRIBUTE, NULL,
 							  CRYPT_CERTINFO_CMS_MESSAGEDIGEST );
@@ -886,7 +931,15 @@ static int createCmsAttributes( INOUT_PTR CMS_ATTRIBUTE_INFO *cmsAttributeInfo,
 								  ( MESSAGE_CAST ) &contentType, 
 								  CRYPT_CERTINFO_CMS_CONTENTTYPE );
 		if( cryptStatusError( status ) )
+			{
+			if( cmsAttributeInfo->useDefaultAttributes )
+				{
+				krnlSendNotifier( cmsAttributeInfo->iCmsAttributes, 
+								  IMESSAGE_DECREFCOUNT );
+				cmsAttributeInfo->iCmsAttributes = CRYPT_UNUSED;
+				}
 			return( status );
+			}
 		}
 	setMessageData( &msgData, &timeValue, sizeof( time_t ) );
 	status = krnlSendMessage( iCmsAttributes, IMESSAGE_GETATTRIBUTE_S, 
@@ -896,7 +949,15 @@ static int createCmsAttributes( INOUT_PTR CMS_ATTRIBUTE_INFO *cmsAttributeInfo,
 		status = addSigningTime( iCmsAttributes,
 								 cmsAttributeInfo->iTimeSource );
 		if( cryptStatusError( status ) )
+			{
+			if( cmsAttributeInfo->useDefaultAttributes )
+				{
+				krnlSendNotifier( cmsAttributeInfo->iCmsAttributes, 
+								  IMESSAGE_DECREFCOUNT );
+				cmsAttributeInfo->iCmsAttributes = CRYPT_UNUSED;
+				}
 			return( status );
+			}
 		}
 	setMessageData( &msgData, NULL, 0 );
 	status = krnlSendMessage( iCmsAttributes, IMESSAGE_GETATTRIBUTE_S, 
@@ -1024,7 +1085,7 @@ int createSignatureCMS( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 	int dataSignatureSize, length DUMMY_INIT, status;
 
 	assert( ( signature == NULL && sigMaxLength == 0 ) || \
-			isReadPtrDynamic( signature, sigMaxLength ) );
+			isWritePtrDynamic( signature, sigMaxLength ) );
 	assert( isWritePtr( signatureLength, sizeof( int ) ) );
 	assert( isReadPtr( sigDataInfo, sizeof( SIG_DATA_INFO ) ) );
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
@@ -1239,6 +1300,7 @@ int checkSignatureCMS( IN_BUFFER( signatureLength ) const void *signature,
 		{
 		/* A failed comparison is reported as a generic CRYPT_ERROR,
 		   convert it into a wrong-key error if necessary */
+		zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 		if( status != CRYPT_ERROR ) 
 			return( status );
 		if( isCertificate )
@@ -1255,8 +1317,10 @@ int checkSignatureCMS( IN_BUFFER( signatureLength ) const void *signature,
 				  "Wrong key provided for signature verification" ) );
 		}
 	if( queryInfo.hashAlgo != sigDataInfo->hashAlgo || \
-		queryInfo.hashParam != sigDataInfo->hashParam )
+		( isParameterisedHashAlgo( sigDataInfo->hashAlgo ) && \
+		  queryInfo.hashParam != sigDataInfo->hashParam ) )
 		{
+		zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 		retExt( CRYPT_ARGERROR_NUM2,
 				( CRYPT_ARGERROR_NUM2, errorInfo,
 				  "Hash algorithm %s used for data doesn't match hash "
@@ -1277,7 +1341,11 @@ int checkSignatureCMS( IN_BUFFER( signatureLength ) const void *signature,
 						( queryInfo.cryptAlgoEncoding == ALGOID_ENCODING_PSS ) ? \
 						  SIGNATURE_CMS_PSS : SIGNATURE_CMS, errorInfo );
 		if( cryptStatusError( status ) )
+			{
+			zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 			return( status );
+			}
+		zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 		CFI_CHECK_UPDATE( "checkSignature" );
 
 		ENSURES( CFI_CHECK_SEQUENCE_3( "IMESSAGE_GETATTRIBUTE", "queryAsn1Object", 
@@ -1294,7 +1362,10 @@ int checkSignatureCMS( IN_BUFFER( signatureLength ) const void *signature,
 							  IMESSAGE_DEV_CREATEOBJECT, &createInfo, 
 							  OBJECT_TYPE_CONTEXT );
 	if( cryptStatusError( status ) )
+		{
+		zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 		return( status );
+		}
 	if( isParameterisedHashAlgo( queryInfo.hashAlgo ) )
 		{
 		status = krnlSendMessage( createInfo.cryptHandle, 
@@ -1304,6 +1375,7 @@ int checkSignatureCMS( IN_BUFFER( signatureLength ) const void *signature,
 		if( cryptStatusError( status ) )
 			{
 			krnlSendNotifier( createInfo.cryptHandle, IMESSAGE_DECREFCOUNT );
+			zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 			return( status );
 			}
 		}
@@ -1328,6 +1400,7 @@ int checkSignatureCMS( IN_BUFFER( signatureLength ) const void *signature,
 		{
 		krnlSendNotifier( localSigDataInfo.hashContext, 
 						  IMESSAGE_DECREFCOUNT );
+		zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 		retExt( status,
 				( status, errorInfo,
 				  "Couldn't hash CMS signed attributes" ) );
@@ -1341,7 +1414,10 @@ int checkSignatureCMS( IN_BUFFER( signatureLength ) const void *signature,
 						  SIGNATURE_CMS_PSS : SIGNATURE_CMS, errorInfo );
 	krnlSendNotifier( localSigDataInfo.hashContext, IMESSAGE_DECREFCOUNT );
 	if( cryptStatusError( status ) )
+		{
+		zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 		return( status );
+		}
 	CFI_CHECK_UPDATE( "checkSignature" );
 
 	/* Import the attributes and make sure that the data hash value given in
@@ -1358,6 +1434,7 @@ int checkSignatureCMS( IN_BUFFER( signatureLength ) const void *signature,
 							  &createInfo, OBJECT_TYPE_CERTIFICATE );
 	if( cryptStatusError( status ) )
 		{
+		zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 		retExtErr( status,
 				   ( status, errorInfo, &localErrorInfo,
 					 "Couldn't import CMS signed attributes" ) );
@@ -1377,6 +1454,7 @@ int checkSignatureCMS( IN_BUFFER( signatureLength ) const void *signature,
 	if( cryptStatusError( status ) )
 		{
 		krnlSendNotifier( iLocalExtraData, IMESSAGE_DECREFCOUNT );
+		zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 		retExt( status,
 				( status, errorInfo,
 				  "%s hash of CMS signed attributes doesn't match stored "
@@ -1389,13 +1467,20 @@ int checkSignatureCMS( IN_BUFFER( signatureLength ) const void *signature,
 	/* If there's a signingCertificate identifier present, make sure that it
 	   matches the certificate that we're using */
 	status = krnlSendMessage( iLocalExtraData, IMESSAGE_GETATTRIBUTE, 
-							  &value, CRYPT_CERTINFO_CMS_SIGNINGCERTIFICATEV2 );
+							  &value, CRYPT_CERTINFO_CMS_SIGNINGCERTIFICATE );
+	if( cryptStatusError( status ) )
+		{
+		status = krnlSendMessage( iLocalExtraData, IMESSAGE_GETATTRIBUTE, 
+								  &value, 
+								  CRYPT_CERTINFO_CMS_SIGNINGCERTIFICATEV2 );
+		}
 	if( cryptStatusOK( status ) )
 		{
 		status = checkSigningCertificate( iLocalExtraData, iSigCheckKey );
 		if( cryptStatusError( status ) )
 			{
 			krnlSendNotifier( iLocalExtraData, IMESSAGE_DECREFCOUNT );
+			zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 			if( isCertificate )
 				{
 				retExt( status,
@@ -1426,12 +1511,14 @@ int checkSignatureCMS( IN_BUFFER( signatureLength ) const void *signature,
 		if( cryptStatusError( status ) )
 			{
 			krnlSendNotifier( iLocalExtraData, IMESSAGE_DECREFCOUNT );
+			zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 			retExt( status,
 					( status, errorInfo,
 					  "CMSAlgorithmProtection identifier doesn't match the "
 					  "algorithms used to verify the signature" ) );
 			}
 		}	
+	zeroise( &queryInfo, sizeof( QUERY_INFO ) );
 	CFI_CHECK_UPDATE( "checkContentProtection" );
 
 	/* If the user wants to look at the authenticated attributes, make them

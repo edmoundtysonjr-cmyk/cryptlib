@@ -55,7 +55,8 @@
 
 /* Technically, ECDSA can be used with any hash function, including ones 
    with a block size larger than the subgroup order (although in practice
-   the hash function is always matched to the subgroup size).  To handle the 
+   the hash function is always matched to the subgroup size because to not
+   do so would miss making the required fashion statement).  To handle the 
    (theoretical) possibility of a mismatched size we use the following 
    custom conversion function, which applies the conversion rules for 
    transforming the hash value into an integer from X9.62.  
@@ -90,7 +91,8 @@ static int hashToBignum( INOUT_PTR BIGNUM *bignum,
 	REQUIRES( sanityCheckBignum( bignum ) );
 	REQUIRES( hashLength >= max( 20, MIN_HASHSIZE ) && \
 			  hashLength <= CRYPT_MAX_HASHSIZE );
-	REQUIRES( nLen >= 20 && nLen <= bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
+	REQUIRES( nLen >= bytesToBits( 20 ) && \
+			  nLen <= bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
 
 	/* Convert the hash value into a bignum.  We have to be careful when
 	   we specify the bounds because, with increasingly smaller 
@@ -161,7 +163,12 @@ static const BYTE shaM[] = {
    fixed k with P256 should be:
 
 	r = D73CD3722BAE6CC0B39065BB4003D8ECE1EF2F7A8A55BFD677234B0B3B902650
-	s = D9C88297FEFED8441E08DDA69554A6452B8A0BD4A0EA1DDB750499F0C2298C2F */
+	s = D9C88297FEFED8441E08DDA69554A6452B8A0BD4A0EA1DDB750499F0C2298C2F 
+
+   Note though that with cryptlib's canonicalisation of the result the s 
+   value will actually be:
+   
+	s = 26377D67010127BCE1F722596AAB59BA915CEED9062D80A97EB530D23A399922 */
 
 static const BYTE kVal[] = {
 	0xA0, 0x64, 0x0D, 0x49, 0x57, 0xF2, 0x7D, 0x09,
@@ -175,7 +182,9 @@ static const BYTE kVal[] = {
 /* Perform a pairwise consistency test on a public/private key pair */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-static BOOLEAN pairwiseConsistencyTest( CONTEXT_INFO *contextInfoPtr )
+static BOOLEAN pairwiseConsistencyTest( INOUT_PTR \
+											CONTEXT_INFO *contextInfoPtr, 
+										IN_BOOL const BOOLEAN isSelftest )
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
@@ -186,21 +195,29 @@ static BOOLEAN pairwiseConsistencyTest( CONTEXT_INFO *contextInfoPtr )
 
 	REQUIRES_B( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES_B( capabilityInfoPtr != NULL );
+	REQUIRES_B( isBooleanValue( isSelftest ) );
 
-	/* Generate a signature with the private key */
+	/* Generate a signature with the private key.  If it's a self-test we 
+	   indicate that we use a fixed k value for signing, which means we 
+	   don't stall waiting for random data during the self-test process */
 	initDLPParamsSign( &dlpParamsSign, shaM, 32 );
-	dlpParamsSign.inLen2 = -999;
+	if( isSelftest )
+		dlpParamsSign.inLen2 = -999;
 	status = capabilityInfoPtr->signFunction( contextInfoPtr,
 						( BYTE * ) &dlpParamsSign, sizeof( DLP_PARAMS ) );
-	if( cryptStatusError( status ) )
-		return( FALSE );
+	if( cryptStatusOK( status ) )
+		{
+		/* Verify the signature with the public key */
+		initDLPParamsSigCheck( &dlpParamsSigCheck, shaM, 32, 
+							   dlpParamsSign.outParam, 
+							   dlpParamsSign.outLen );
+		status = capabilityInfoPtr->sigCheckFunction( contextInfoPtr,
+								( BYTE * ) &dlpParamsSigCheck, 
+								sizeof( DLP_PARAMS ) );
+		}
+	zeroise( &dlpParamsSign, sizeof( DLP_PARAMS ) );
+	zeroise( &dlpParamsSigCheck, sizeof( DLP_PARAMS ) );
 
-	/* Verify the signature with the public key */
-	initDLPParamsSigCheck( &dlpParamsSigCheck, shaM, 32, 
-						   dlpParamsSign.outParam, 
-						   dlpParamsSign.outLen );
-	status = capabilityInfoPtr->sigCheckFunction( contextInfoPtr,
-						( BYTE * ) &dlpParamsSigCheck, sizeof( DLP_PARAMS ) );
 	return( cryptStatusOK( status ) ? TRUE : FALSE );
 	}
 
@@ -291,7 +308,7 @@ static int selfTest( void )
 	/* Perform the test sign/sig.check of the X9.62 test values */
 	status = capabilityInfoPtr->initKeyFunction( &contextInfo, NULL, 0 );
 	if( cryptStatusError( status ) || \
-		!pairwiseConsistencyTest( &contextInfo ) )
+		!pairwiseConsistencyTest( &contextInfo, TRUE ) )
 		{
 		staticDestroyContext( &contextInfo );
 		return( CRYPT_ERROR_FAILED );
@@ -299,7 +316,7 @@ static int selfTest( void )
 
 	/* Try it again with side-channel protection enabled */
 	SET_FLAG( contextInfo.flags, CONTEXT_FLAG_SIDECHANNELPROTECTION );
-	if( !pairwiseConsistencyTest( &contextInfo ) )
+	if( !pairwiseConsistencyTest( &contextInfo, TRUE ) )
 		{
 		staticDestroyContext( &contextInfo );
 		return( CRYPT_ERROR_FAILED );
@@ -332,6 +349,8 @@ static int selfTest( void )
 	status = checksumContextData( pkcInfo, TRUE );
 	if( !cryptStatusError( status ) )
 		{
+		/* If the check didn't return an error status due to corrupted data,
+		   this is a test failure */
 		staticDestroyContext( &contextInfo );
 		return( CRYPT_ERROR_FAILED );
 		}
@@ -425,29 +444,36 @@ static int sign( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 				DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	DLP_PARAMS *eccParams = ( DLP_PARAMS * ) buffer;
-	const ECC_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
-	const BIGNUM *n = &domainParams->n;
-	BIGNUM *hash = &pkcInfo->tmp1, *x = &pkcInfo->tmp2;
-	BIGNUM *k = &pkcInfo->tmp3, *r = &pkcInfo->eccParam_tmp4;
-	BIGNUM *s = &pkcInfo->eccParam_tmp5;
-	const EC_GROUP *ecCTX = pkcInfo->ecCTX;
-	EC_POINT *kg = pkcInfo->tmpPoint;
-	const int nLen = BN_num_bytes( n );
-	int bnStatus = BN_STATUS, status = CRYPT_OK;
+	const ECC_DOMAINPARAMS *domainParams;
+	const BIGNUM *n;
+	BIGNUM *hash, *x, *k, *r, *s;
+	const EC_GROUP *ecCTX;
+	EC_POINT *kg;
+	int nLen, bnStatus = BN_STATUS, status = CRYPT_OK;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( eccParams, sizeof( DLP_PARAMS ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( pkcInfo->domainParams != NULL );
 	REQUIRES( noBytes == sizeof( DLP_PARAMS ) );
 	REQUIRES( eccParams->inLen1 >= max( 20, MIN_HASHSIZE ) && \
 			  eccParams->inLen1 <= CRYPT_MAX_HASHSIZE );
 	REQUIRES( eccParams->inLen2 == 0 || eccParams->inLen2 == -999 );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	domainParams = pkcInfo->domainParams;
+	REQUIRES( domainParams != NULL );
+	n = &domainParams->n;
+	nLen = BN_num_bytes( n );
 	REQUIRES( nLen >= ECCPARAM_MIN_N && nLen <= ECCPARAM_MAX_N );
+	hash = &pkcInfo->tmp1; x = &pkcInfo->tmp2; k = &pkcInfo->tmp3;
+	r = &pkcInfo->eccParam_tmp4; s = &pkcInfo->eccParam_tmp5;
+	ecCTX = &pkcInfo->ecCTX; kg = &pkcInfo->tmpPoint;
 
 	/* Clear return values */
 	REQUIRES( rangeCheck( DLP_DATA_SIZE, 1, DLP_DATA_SIZE ) ); 
@@ -623,24 +649,32 @@ static int sigCheck( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 				DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	DLP_PARAMS *eccParams = ( DLP_PARAMS * ) buffer;
-	const ECC_DOMAINPARAMS *domainParams = pkcInfo->domainParams;
-	const BIGNUM *n = &domainParams->n;
-	const BIGNUM *qx = &pkcInfo->eccParam_qx, *qy = &pkcInfo->eccParam_qy;
-	BIGNUM *u1 = &pkcInfo->tmp1, *u2 = &pkcInfo->tmp2;
-	BIGNUM *r = &pkcInfo->tmp3, *s = &pkcInfo->eccParam_tmp4;
-	const EC_GROUP *ecCTX = pkcInfo->ecCTX;
-	EC_POINT *u1gu2q = pkcInfo->tmpPoint, *u2q DUMMY_INIT_PTR;
+	const ECC_DOMAINPARAMS *domainParams;
+	const BIGNUM *qx, *qy, *n;
+	BIGNUM *u1, *u2, *r, *s;
+	const EC_GROUP *ecCTX;
+	EC_POINT *u1gu2q, u2q;
 	int bnStatus = BN_STATUS, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( eccParams, sizeof( DLP_PARAMS ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( pkcInfo->domainParams != NULL );
 	REQUIRES( noBytes == sizeof( DLP_PARAMS ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	domainParams = pkcInfo->domainParams;
+	REQUIRES( domainParams != NULL );
+	n = &domainParams->n;
+	qx = &pkcInfo->eccParam_qx; qy = &pkcInfo->eccParam_qy;
+	u1 = &pkcInfo->tmp1; u2 = &pkcInfo->tmp2; r = &pkcInfo->tmp3;
+	s = &pkcInfo->eccParam_tmp4; ecCTX = &pkcInfo->ecCTX;
+	u1gu2q = &pkcInfo->tmpPoint;
 
 	/* Decode the values from a DL data block and make sure that r and s are
 	   valid, i.e. r, s = [1...n-1] */
@@ -669,12 +703,6 @@ static int sigCheck( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	if( cryptStatusError( status ) )
 		return( status );
 
-	/* We've got all the data that we need, allocate the EC points working 
-	   variable */
-	CKPTR( u2q = EC_POINT_new( ecCTX ) );
-	if( bnStatusError( bnStatus ) )
-		return( getBnStatus( bnStatus ) );
-
 	/* w = s^-1 mod G.r */
 	CKPTR( BN_mod_inverse( u2, s, n, &pkcInfo->bnCTX ) );
 
@@ -691,14 +719,16 @@ static int sigCheck( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   optimizations (also known as "Shamir's trick", according to the 
 	   "Guide to Elliptic Curve Cryptography") which computes nG + mQ faster 
 	   than if both point multiplications were done separately */
-	CK( EC_POINT_set_affine_coordinates_GFp( ecCTX, u2q, qx, qy, 
+	EC_POINT_init( &u2q , ecCTX );
+	CK( EC_POINT_set_affine_coordinates_GFp( ecCTX, &u2q, qx, qy, 
 											 &pkcInfo->bnCTX ) );
-	CK( EC_POINT_mul( ecCTX, u1gu2q, u1, u2q, u2, &pkcInfo->bnCTX ) );
+	CK( EC_POINT_mul( ecCTX, u1gu2q, u1, &u2q, u2, &pkcInfo->bnCTX ) );
 	if( bnStatusError( bnStatus ) )
 		{
-		EC_POINT_free( u2q );
+		EC_POINT_clear( &u2q );
 		return( getBnStatus( bnStatus ) );
 		}
+	EC_POINT_clear( &u2q );
 
 	/* Convert point (x1, y1) to an integer r':
 
@@ -708,13 +738,7 @@ static int sigCheck( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 											 &pkcInfo->bnCTX ) );
 	CK( BN_mod( u1, u1, n, &pkcInfo->bnCTX ) );
 	if( bnStatusError( bnStatus ) )
-		{
-		EC_POINT_free( u2q );
 		return( getBnStatus( bnStatus ) );
-		}
-
-	/* Clean up */
-	EC_POINT_free( u2q );
 
 	/* If r == r' then the signature is good */
 	if( BN_cmp( r, u1 ) )
@@ -752,9 +776,11 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   internal bignums unless we're doing an internal load */
 	if( key != NULL )
 		{
-		PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+		PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 		const CRYPT_PKCINFO_ECC *eccKey = ( CRYPT_PKCINFO_ECC * ) key;
 		int status;
+
+		REQUIRES( pkcInfo != NULL );
 
 		if( eccKey->isPublicKey )
 			SET_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_ISPUBLICKEY );
@@ -846,7 +872,8 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr, 
-						IN_LENGTH_SHORT_MIN( MIN_PKCSIZE_ECC * 8 ) \
+						IN_RANGE( bytesToBits( MIN_PKCSIZE_ECC ),
+								  bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) ) \
 							const int keySizeBits )
 	{
 	int status;
@@ -858,12 +885,8 @@ static int generateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			  keySizeBits <= bytesToBits( CRYPT_MAX_PKCSIZE_ECC ) );
 
 	status = generateECCkey( contextInfoPtr, keySizeBits );
-	if( cryptStatusOK( status ) &&
-#ifndef USE_FIPS140
-		TEST_FLAG( contextInfoPtr->flags, 
-				   CONTEXT_FLAG_SIDECHANNELPROTECTION ) &&
-#endif /* USE_FIPS140 */
-		!pairwiseConsistencyTest( contextInfoPtr ) )
+	if( cryptStatusOK( status ) && \
+		!pairwiseConsistencyTest( contextInfoPtr, FALSE ) )
 		{
 		DEBUG_DIAG(( "Consistency check of freshly-generated ECDSA key "
 					 "failed" ));

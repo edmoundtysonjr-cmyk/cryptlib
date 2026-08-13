@@ -635,7 +635,8 @@ static int processEncryptionHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int processHashHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr, 
-							  INOUT_PTR STREAM *stream )
+							  INOUT_PTR STREAM *stream,
+							  IN_BOOL const BOOLEAN isHash )
 	{
 	CRYPT_CONTEXT iHashContext;
 	LOOP_INDEX_PTR ACTION_LIST *actionListPtr;
@@ -644,10 +645,13 @@ static int processHashHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
+	
+	REQUIRES( isBooleanValue( isHash ) );
 
 	/* Create the hash/MAC object from the data */
 	status = readContextAlgoID( stream, &iHashContext, NULL, DEFAULT_TAG,
-								ALGOID_CLASS_HASH );
+								isHash ? ALGOID_CLASS_HASH : \
+										 ALGOID_CLASS_MAC );
 	if( cryptStatusError( status ) )
 		return( status );
 	status = krnlSendMessage( iHashContext, IMESSAGE_GETATTRIBUTE,
@@ -1291,7 +1295,7 @@ static int processPreamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 			/* Read and remember a MAC object from a MACAlgorithmIdentifier
 			   record */
 			case DEENVSTATE_MAC:
-				status = processHashHeader( envelopeInfoPtr, &stream );
+				status = processHashHeader( envelopeInfoPtr, &stream, FALSE );
 				if( cryptStatusError( status ) )
 					{
 					setErrorString( ENVELOPE_ERRINFO, 
@@ -1327,7 +1331,7 @@ static int processPreamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 			/* Read and remember a hash object from a 
 			   DigestAlgorithmIdentifier record */
 			case DEENVSTATE_HASH:
-				status = processHashHeader( envelopeInfoPtr, &stream );
+				status = processHashHeader( envelopeInfoPtr, &stream, TRUE );
 				if( cryptStatusError( status ) )
 					{
 					setErrorString( ENVELOPE_ERRINFO, 

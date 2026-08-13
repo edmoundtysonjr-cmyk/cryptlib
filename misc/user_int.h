@@ -83,8 +83,8 @@ CHECK_RETVAL_PTR \
 const BUILTIN_OPTION_INFO *getBuiltinOptionInfoByCode( IN_RANGE( 0, LAST_OPTION_INDEX ) \
 														const int optionCode );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN checkConfigChanged( IN_ARRAY( configOptionsCount ) \
-								const OPTION_INFO *optionList,
+BOOLEAN checkConfigChanged( INOUT_ARRAY( configOptionsCount ) \
+								OPTION_INFO *optionList,
 							IN_INT_SHORT const int configOptionsCount );
 
 #endif /* _USER_INT_DEFINED */

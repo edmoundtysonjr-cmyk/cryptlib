@@ -441,15 +441,16 @@ int readPkiStatusInfo( INOUT_PTR STREAM *stream,
 						"(bit %d): %s, with additional text: %s" : \
 				  "%s returned error code %X (bit %d): %s, with additional "
 				  "text: %s", isServer ? "Client" : "Server", 
-				  bitString, bitPos, failureString, errorMessage ) );
+				  ( unsigned int ) bitString, bitPos, failureString, 
+				  errorMessage ) );
 		}
 	retExt( failureStatus,
 			( failureStatus, errorInfo, isUnauthenticated ? \
 			  "%s returned non-authenticated response: Error code %X "
 					"(bit %d): %s" : \
 			  "%s returned error code %X (bit %d): %s",
-			  isServer ? "Client" : "Server", bitString, bitPos, 
-			  failureString ) );
+			  isServer ? "Client" : "Server", ( unsigned int ) bitString, 
+			  bitPos, failureString ) );
 	}
 
 /****************************************************************************

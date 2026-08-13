@@ -5,8 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>
-#include <stdarg.h>
 #include "crypt.h"
 #ifdef INC_ALL
   #include "asn1.h"
@@ -49,9 +47,12 @@ BOOLEAN sanityCheckSession( const SESSION_INFO *sessionInfoPtr )
 	{
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
-	/* Check general session data */
+	/* Check general session data.  Version 4 is TLS 1.3, the highest-
+	   versioned protocol.  We don't check protocolFlags alongside flags
+	   because each set is protocol-specific so they're checked by the
+	   protocol-specific handlers */
 	if( !isEnumRange( sessionInfoPtr->type, CRYPT_SESSION ) || \
-		sessionInfoPtr->version < 0 || sessionInfoPtr->version > 5 
+		sessionInfoPtr->version < 0 || sessionInfoPtr->version > 4 
 #if defined( USE_WEBSOCKETS ) || defined( USE_EAP )
 		|| !isEnumRangeOpt( sessionInfoPtr->subProtocol, CRYPT_SUBPROTOCOL ) 
 #endif /* USE_WEBSOCKETS || USE_EAP */
@@ -191,7 +192,8 @@ static BOOLEAN sanityCheckProtocolInfo( const PROTOCOL_INFO *protocolInfo )
 	{
 	assert( isReadPtr( protocolInfo, sizeof( PROTOCOL_INFO ) ) );
 
-	/* Check general information */
+	/* Check general information.  Version 4 is TLS 1.3, the highest-
+	   versioned protocol */
 	if( !isFlagRangeZ( protocolInfo->flags, SESSION_PROTOCOL ) )
 		{
 		DEBUG_PUTS(( "sanityCheckProtocolInfo: Protocol flags" ));
@@ -203,14 +205,14 @@ static BOOLEAN sanityCheckProtocolInfo( const PROTOCOL_INFO *protocolInfo )
 		DEBUG_PUTS(( "sanityCheckProtocolInfo: Required-attribute flags" ));
 		return( FALSE );
 		}
-	if( protocolInfo->version < 0 || protocolInfo->version >= 5 )
+	if( protocolInfo->version < 0 || protocolInfo->version > 4 )
 		{
 		DEBUG_PUTS(( "sanityCheckProtocolInfo: Protocol version" ));
 		return( FALSE );
 		}
 
 	/* Check buffer/packet size information */
-	if( protocolInfo->isReqResp != TRUE && protocolInfo->isReqResp != FALSE )
+	if( !isBooleanValue( protocolInfo->isReqResp ) )
 		{
 		DEBUG_PUTS(( "sanityCheckProtocolInfo: Request/response indicator" ));
 		return( FALSE );
@@ -228,7 +230,7 @@ static BOOLEAN sanityCheckProtocolInfo( const PROTOCOL_INFO *protocolInfo )
 	else
 		{
 		if( !isBufsizeRangeMin( protocolInfo->bufSize, MIN_BUFFER_SIZE ) || \
-			protocolInfo->sendBufStartOfs < 5 || 
+			protocolInfo->sendBufStartOfs < FIXED_HEADER_MIN || 
 			protocolInfo->sendBufStartOfs >= protocolInfo->maxPacketSize || \
 			protocolInfo->maxPacketSize > protocolInfo->bufSize )
 			{
@@ -238,7 +240,7 @@ static BOOLEAN sanityCheckProtocolInfo( const PROTOCOL_INFO *protocolInfo )
 		}
 
 	/* Check network information */
-	if( protocolInfo->port <= MIN_PORT_NUMBER || \
+	if( protocolInfo->port < MIN_PORT_NUMBER || \
 		protocolInfo->port > MAX_DEST_PORT_NUMBER || \
 		( ( protocolInfo->flags & SESSION_PROTOCOL_HTTPTRANSPORT ) && \
 			protocolInfo->port != 80 ) || \
@@ -299,6 +301,13 @@ static BOOLEAN checkSessionFunctions( IN_PTR const SESSION_INFO *sessionInfoPtr 
 
 	return( TRUE );
 	}
+#else
+
+BOOLEAN sanityCheckSession( const SESSION_INFO *sessionInfoPtr )
+	{
+	return( TRUE );
+	}
+#define sanityCheckProtocolInfo( x )	TRUE
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 /****************************************************************************
@@ -526,7 +535,7 @@ static int sessionMessageFunction( INOUT_PTR TYPECAST( SESSION_INFO * ) \
 		{
 		MESSAGE_DATA *msgData = ( MESSAGE_DATA * ) messageDataPtr;
 		const int length = msgData->length;
-		int bytesCopied;
+		int bytesCopied = 0;
 
 		/* Unless we're told otherwise, we've copied zero bytes */
 		msgData->length = 0;
@@ -626,42 +635,74 @@ static int openSession( OUT_HANDLE_OPT CRYPT_SESSION *iCryptSession,
 	SESSION_INFO *sessionInfoPtr;
 	const PROTOCOL_INFO *protocolInfo;
 	static const MAP_TABLE subtypeMapTbl[] = {
+#ifdef USE_SSH
 		{ CRYPT_SESSION_SSH, SUBTYPE_SESSION_SSH },
 		{ CRYPT_SESSION_SSH_SERVER, SUBTYPE_SESSION_SSH_SVR },
+#endif /* USE_SSH */
+#ifdef USE_TLS
 		{ CRYPT_SESSION_TLS, SUBTYPE_SESSION_TLS },
 		{ CRYPT_SESSION_TLS_SERVER, SUBTYPE_SESSION_TLS_SVR },
+#endif /* USE_TLS */
+#ifdef USE_RTCS
 		{ CRYPT_SESSION_RTCS, SUBTYPE_SESSION_RTCS },
 		{ CRYPT_SESSION_RTCS_SERVER, SUBTYPE_SESSION_RTCS_SVR },
+#endif /* USE_RTCS */
+#ifdef USE_SCVP
 		{ CRYPT_SESSION_SCVP, SUBTYPE_SESSION_SCVP },
 		{ CRYPT_SESSION_SCVP_SERVER, SUBTYPE_SESSION_SCVP_SVR },
+#endif /* USE_SCVP */
+#ifdef USE_OCSP
 		{ CRYPT_SESSION_OCSP, SUBTYPE_SESSION_OCSP },
 		{ CRYPT_SESSION_OCSP_SERVER, SUBTYPE_SESSION_OCSP_SVR },
+#endif /* USE_OCSP */
+#ifdef USE_TSP
 		{ CRYPT_SESSION_TSP, SUBTYPE_SESSION_TSP },
 		{ CRYPT_SESSION_TSP_SERVER, SUBTYPE_SESSION_TSP_SVR },
+#endif /* USE_TSP */
+#ifdef USE_CMP
 		{ CRYPT_SESSION_CMP, SUBTYPE_SESSION_CMP },
 		{ CRYPT_SESSION_CMP_SERVER, SUBTYPE_SESSION_CMP_SVR },
+#endif /* USE_CMP */
+#ifdef USE_SCEP
 		{ CRYPT_SESSION_SCEP, SUBTYPE_SESSION_SCEP },
 		{ CRYPT_SESSION_SCEP_SERVER, SUBTYPE_SESSION_SCEP_SVR },
+#endif /* USE_SCEP */
 		{ CRYPT_SESSION_CERTSTORE_SERVER, SUBTYPE_SESSION_CERT_SVR },
 		{ CRYPT_ERROR, CRYPT_ERROR }, { CRYPT_ERROR, CRYPT_ERROR }
 		};
 	static const MAP_TABLE basetypeMapTbl[] = {
+#ifdef USE_SSH
 		{ CRYPT_SESSION_SSH, CRYPT_SESSION_SSH },
 		{ CRYPT_SESSION_SSH_SERVER, CRYPT_SESSION_SSH },
+#endif /* USE_SSH */
+#ifdef USE_TLS
 		{ CRYPT_SESSION_TLS, CRYPT_SESSION_TLS },
 		{ CRYPT_SESSION_TLS_SERVER, CRYPT_SESSION_TLS },
+#endif /* USE_TLS */
+#ifdef USE_RTCS
 		{ CRYPT_SESSION_RTCS, CRYPT_SESSION_RTCS },
 		{ CRYPT_SESSION_RTCS_SERVER, CRYPT_SESSION_RTCS },
+#endif /* USE_RTCS */
+#ifdef USE_SCVP
 		{ CRYPT_SESSION_SCVP, CRYPT_SESSION_SCVP },
 		{ CRYPT_SESSION_SCVP_SERVER, CRYPT_SESSION_SCVP },
+#endif /* USE_SCVP */
+#ifdef USE_OCSP
 		{ CRYPT_SESSION_OCSP, CRYPT_SESSION_OCSP },
 		{ CRYPT_SESSION_OCSP_SERVER, CRYPT_SESSION_OCSP },
+#endif /* USE_OCSP */
+#ifdef USE_TSP
 		{ CRYPT_SESSION_TSP, CRYPT_SESSION_TSP },
 		{ CRYPT_SESSION_TSP_SERVER, CRYPT_SESSION_TSP },
+#endif /* USE_TSP */
+#ifdef USE_CMP
 		{ CRYPT_SESSION_CMP, CRYPT_SESSION_CMP },
 		{ CRYPT_SESSION_CMP_SERVER, CRYPT_SESSION_CMP },
+#endif /* USE_CMP */
+#ifdef USE_SCEP
 		{ CRYPT_SESSION_SCEP, CRYPT_SESSION_SCEP },
 		{ CRYPT_SESSION_SCEP_SERVER, CRYPT_SESSION_SCEP },
+#endif /* USE_SCEP */
 		{ CRYPT_SESSION_CERTSTORE_SERVER, CRYPT_SESSION_CERTSTORE_SERVER },
 		{ CRYPT_ERROR, CRYPT_ERROR }, { CRYPT_ERROR, CRYPT_ERROR }
 		};
@@ -683,7 +724,8 @@ static int openSession( OUT_HANDLE_OPT CRYPT_SESSION *iCryptSession,
 	   subtype */
 	status = mapValue( sessionType, &value, subtypeMapTbl, 
 					   FAILSAFE_ARRAYSIZE( subtypeMapTbl, MAP_TABLE ) );
-	ENSURES( cryptStatusOK( status ) );
+	if( cryptStatusError( status ) )
+		return( CRYPT_ARGERROR_NUM1 );
 	subType = value;
 	status = mapValue( sessionType, &value, basetypeMapTbl, 
 					   FAILSAFE_ARRAYSIZE( basetypeMapTbl, MAP_TABLE ) );
@@ -693,6 +735,31 @@ static int openSession( OUT_HANDLE_OPT CRYPT_SESSION *iCryptSession,
 	/* Set up subtype-specific information */
 	switch( sessionBaseType )
 		{
+#ifdef USE_CMP
+		case CRYPT_SESSION_CMP:
+			storageSize = sizeof( CMP_INFO );
+			break;
+#endif /* USE_CMP */
+
+#ifdef USE_OCSP
+		case CRYPT_SESSION_OCSP:
+#endif /* USE_OCSP */
+#ifdef USE_RTCS
+		case CRYPT_SESSION_RTCS:
+#endif /* USE_RTCS */
+#ifdef USE_SCVP
+		case CRYPT_SESSION_SCVP:
+#endif /* USE_SCVP */
+		case CRYPT_SESSION_CERTSTORE_SERVER:
+			storageSize = 0;
+			break;
+
+#ifdef USE_SCEP
+		case CRYPT_SESSION_SCEP:
+			storageSize = sizeof( SCEP_INFO );
+			break;
+#endif /* USE_SCEP */
+		
 #ifdef USE_SSH
 		case CRYPT_SESSION_SSH:
 			storageSize = sizeof( SSH_INFO );
@@ -710,25 +777,6 @@ static int openSession( OUT_HANDLE_OPT CRYPT_SESSION *iCryptSession,
 			storageSize = sizeof( TSP_INFO );
 			break;
 #endif /* USE_TSP */
-
-#ifdef USE_CMP
-		case CRYPT_SESSION_CMP:
-			storageSize = sizeof( CMP_INFO );
-			break;
-#endif /* USE_CMP */
-
-#ifdef USE_SCEP
-		case CRYPT_SESSION_SCEP:
-			storageSize = sizeof( SCEP_INFO );
-			break;
-#endif /* USE_SCEP */
-		
-		case CRYPT_SESSION_RTCS:
-		case CRYPT_SESSION_SCVP:
-		case CRYPT_SESSION_OCSP:
-		case CRYPT_SESSION_CERTSTORE_SERVER:
-			storageSize = 0;
-			break;
 
 		default:
 			retIntError();
@@ -761,8 +809,23 @@ static int openSession( OUT_HANDLE_OPT CRYPT_SESSION *iCryptSession,
 	DATAPTR_SET( sessionInfoPtr->attributeListCurrent, NULL );
 	if( storageSize > 0 )
 		{
+		sessionInfoPtr->storageSize = storageSize;
 		switch( sessionBaseType )
 			{
+#ifdef USE_CMP
+			case CRYPT_SESSION_CMP:
+				sessionInfoPtr->sessionCMP = \
+								( CMP_INFO * ) sessionInfoPtr->storage;
+				break;
+#endif /* USE_CMP */
+
+#ifdef USE_SCEP
+			case CRYPT_SESSION_SCEP:
+				sessionInfoPtr->sessionSCEP = \
+								( SCEP_INFO * ) sessionInfoPtr->storage;
+				break;
+#endif /* USE_SCEP */
+
 #ifdef USE_SSH
 			case CRYPT_SESSION_SSH:
 				sessionInfoPtr->sessionSSH = \
@@ -784,25 +847,10 @@ static int openSession( OUT_HANDLE_OPT CRYPT_SESSION *iCryptSession,
 				break;
 #endif /* USE_TSP */
 
-#ifdef USE_CMP
-			case CRYPT_SESSION_CMP:
-				sessionInfoPtr->sessionCMP = \
-								( CMP_INFO * ) sessionInfoPtr->storage;
-				break;
-#endif /* USE_CMP */
-
-#ifdef USE_SCEP
-			case CRYPT_SESSION_SCEP:
-				sessionInfoPtr->sessionSCEP = \
-								( SCEP_INFO * ) sessionInfoPtr->storage;
-				break;
-#endif /* USE_SCEP */
-
 			default:
 				retIntError();
 			}
 		}
-	sessionInfoPtr->storageSize = storageSize;
 
 	/* Set up any internal objects to contain invalid handles */
 	sessionInfoPtr->iKeyexCryptContext = \
@@ -841,41 +889,59 @@ static int openSession( OUT_HANDLE_OPT CRYPT_SESSION *iCryptSession,
 	/* Set up the access information for the session and initialise it */
 	switch( sessionBaseType )
 		{
+#ifdef USE_CERTSTORE
 		case CRYPT_SESSION_CERTSTORE_SERVER:
 			status = setAccessMethodCertstore( sessionInfoPtr );
 			break;
+#endif /* USE_CERTSTORE */
 
+#ifdef USE_CMP
 		case CRYPT_SESSION_CMP:
 			status = setAccessMethodCMP( sessionInfoPtr );
 			break;
+#endif /* USE_CMP */
 
-		case CRYPT_SESSION_RTCS:
-			status = setAccessMethodRTCS( sessionInfoPtr );
-			break;
-
-		case CRYPT_SESSION_SCVP:
-			status = setAccessMethodSCVP( sessionInfoPtr );
-			break;
-
+#ifdef USE_OCSP
 		case CRYPT_SESSION_OCSP:
 			status = setAccessMethodOCSP( sessionInfoPtr );
 			break;
+#endif /* USE_OCSP */
 
+#ifdef USE_RTCS
+		case CRYPT_SESSION_RTCS:
+			status = setAccessMethodRTCS( sessionInfoPtr );
+			break;
+#endif /* USE_RTCS */
+
+#ifdef USE_SCEP
 		case CRYPT_SESSION_SCEP:
 			status = setAccessMethodSCEP( sessionInfoPtr );
 			break;
+#endif /* USE_SCEP */
 
+#ifdef USE_SCVP
+		case CRYPT_SESSION_SCVP:
+			status = setAccessMethodSCVP( sessionInfoPtr );
+			break;
+#endif /* USE_SCVP */
+
+#ifdef USE_SSH
 		case CRYPT_SESSION_SSH:
 			status = setAccessMethodSSH( sessionInfoPtr );
 			break;
+#endif /* USE_SSH */
 
+#ifdef USE_TLS
 		case CRYPT_SESSION_TLS:
 			status = setAccessMethodTLS( sessionInfoPtr );
 			break;
+#endif /* USE_TLS */
 
+#ifdef USE_TSP
 		case CRYPT_SESSION_TSP:
 			status = setAccessMethodTSP( sessionInfoPtr );
 			break;
+#endif /* USE_TSP */
 
 		default:
 			retIntError();
@@ -958,9 +1024,9 @@ int createSession( INOUT_PTR MESSAGE_CREATEOBJECT_INFO *createInfo,
 		if( sessionInfoPtr == NULL )
 			return( initStatus );
 
-		/* Since no object has been created there's nothing to get a 
-		   detailed error string from, but we can at least send the 
-		   information to the debug output */
+		/* Since no object has been created there's nothing for the caller 
+		   to get a detailed error string from, but we can at least send 
+		   the information to the debug output */
 		DEBUG_PRINT(( "Session create error: %s.\n",
 					  ( sessionInfoPtr->errorInfo.errorStringLength > 0 ) ? \
 					    sessionInfoPtr->errorInfo.errorString : \
@@ -1029,8 +1095,10 @@ int sessionManagementFunction( IN_ENUM( MANAGEMENT_ACTION ) \
 			return( CRYPT_OK );
 
 		case MANAGEMENT_ACTION_SHUTDOWN:
+#ifdef USE_TLS
 			if( initLevel > 1 )
 				endScoreboard();
+#endif /* USE_TLS */
 			if( initLevel > 0 )
 				netEndTCP();
 			initLevel = 0;

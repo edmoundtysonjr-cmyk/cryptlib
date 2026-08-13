@@ -987,7 +987,8 @@ static int initFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 			   purposes */
 #ifdef USE_ERRMSGS
 			keysetInfoPtr->errorInfo.errorString[ \
-					keysetInfoPtr->errorInfo.errorStringLength ] = '\0';
+					min( keysetInfoPtr->errorInfo.errorStringLength,
+						 MAX_ERRMSG_SIZE - 1 ) ] = '\0';
 #endif /* USE_ERRMSGS */
 			}
 		return( status );

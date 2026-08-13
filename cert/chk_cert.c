@@ -14,6 +14,20 @@
   #include "enc_dec/asn1_ext.h"
 #endif /* Compiler-specific includes */
 
+/* Many of the checks applied here don't work, and in some cases were known
+   not to work even as the standard was being written, an example being
+   excludedSubtrees.  includedSubtrees are also bypassable with a bit of
+   creativity, and the various policy constraints are both so complex and
+   have so many booby-traps built into them, for example path-kludge
+   certificates in the presence of policy constraints where even the 
+   standards authors (PKIX) didn't know about the effect they had until 
+   someone from the standard they'd been copied from (X.509) told them about
+   it, that there's no way they should be relied on.  Because of this we 
+   only enable them at USE_CERTLEVEL_PKIX_FULL in order to say that we're 
+   compliant with at least one guess at what's required, and the manual 
+   warns against both their use and relying on them and has recommendations
+   for what to do to provide effective controls */
+
 #ifdef USE_CERTIFICATES
 
 /* Size check for MAX_POLICY_SIZE, which corresponds to MAX_OID_SIZE but
@@ -728,6 +742,72 @@ int checkNameConstraints( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 
 	return( CRYPT_OK );
 	}
+
+/* Check that the name-matching functions are working as expected */
+
+#ifndef CONFIG_CONSERVE_MEMORY_EXTRA 
+
+typedef struct {
+	const char *constrainedString;
+	const int constrainedstringLength;
+	const char *constrainingString;
+	const int constraingStringLength;
+	const MATCH_TYPE matchType;
+	const int matchResult;
+	} MATCH_TEST_INFO;
+
+static const MATCH_TEST_INFO matchTestInfo[] = {
+	{ "a@b.com", 7, "*@b.com", 7, MATCH_EMAIL },
+		{ NULL, 0 }, { NULL, 0 }
+	};
+
+CHECK_RETVAL_BOOL \
+BOOLEAN checkNameMatch( void )
+	{
+	ERROR_INFO errorInfo;
+	CRYPT_ATTRIBUTE_TYPE errorLocus;
+	CRYPT_ERRTYPE_TYPE errorType;
+	LOOP_INDEX i;
+	int status;
+	
+	clearErrorInfo( &errorInfo );
+	LOOP_SMALL( i = 0, i < FAILSAFE_ARRAYSIZE( matchTestInfo, \
+											   MATCH_TEST_INFO ) && \
+					   matchTestInfo[ i ].constrainedString != NULL, i++ )
+		{
+		DATAPTR constrainedName, constrainingName;
+		BOOLEAN matchStatus;
+		
+		ENSURES( LOOP_INVARIANT_SMALL( i, 0, 
+									   FAILSAFE_ARRAYSIZE( matchTestInfo, \
+														   MATCH_TEST_INFO ) ) );
+
+		DATAPTR_SET( constrainedName, NULL );
+		status = addAttributeFieldString( &constrainedName, 
+					CRYPT_CERTINFO_SUBJECTKEYIDENTIFIER, CRYPT_ATTRIBUTE_NONE,
+					"a@b.com", 7, ATTR_FLAG_NONE, FALSE, &errorInfo,
+					&errorLocus, &errorType  );
+		ENSURES( cryptStatusOK( status ) );
+		DATAPTR_SET( constrainingName, NULL );
+		status = addAttributeFieldString( &constrainingName, 
+					CRYPT_CERTINFO_SUBJECTKEYIDENTIFIER, CRYPT_ATTRIBUTE_NONE,
+					"*@b.com", 7, ATTR_FLAG_NONE, FALSE, &errorInfo,
+					&errorLocus, &errorType  );
+		ENSURES( cryptStatusOK( status ) );
+		matchStatus = wildcardMatch( constrainedName, constrainingName, 
+									 MATCH_EMAIL );
+		status = deleteAttributeField( &constrainedName, NULL, 
+									   constrainedName, NULL );
+		ENSURES( cryptStatusOK( status ) );
+		status = deleteAttributeField( &constrainingName, NULL, 
+									   constrainingName, NULL );
+		ENSURES( cryptStatusOK( status ) );
+		}
+	ENSURES( LOOP_BOUND_OK );
+
+	return( TRUE );
+	}
+#endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 #endif /* USE_CERTLEVEL_PKIX_FULL */
 
 /****************************************************************************

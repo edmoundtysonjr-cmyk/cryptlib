@@ -1241,7 +1241,8 @@ static int initFunction( DEVICE_INFO *deviceInfo, const char *name,
 	int driverNameLength = nameLength, status;
 
 	/* Check whether a keyset name has been specified */
-	strlcpy_s( keysetNameBuffer, CRYPT_MAX_TEXTSIZE, "MY" );/* Default keyset */
+	status = strlcpy_s( keysetNameBuffer, CRYPT_MAX_TEXTSIZE, "MY" );/* Default keyset */
+	ENSURES( cryptStatusOK( status ) );
 	LOOP_LARGE( i = 1, i < nameLength - 1, i++ )
 		{
 		ENSURES( LOOP_INVARIANT_LARGE( i, 1, nameLength - 2 ) );
@@ -1450,7 +1451,8 @@ static int getItemFunction( DEVICE_INFO *deviceInfo,
 		   key usage as a form of pseudo-label */
 		if( flags & KEYMGMT_FLAG_LABEL_ONLY )
 			{
-			strlcpy_s( auxInfo, *auxInfoLength, label );
+			status = strlcpy_s( auxInfo, *auxInfoLength, label );
+			ENSURES( cryptStatusOK( status ) );
 			*auxInfoLength = strnlen_s( label, CRYPT_MAX_TEXTSIZE );
 			pCryptDestroyKey( hKey ); 
 			return( CRYPT_OK );
@@ -2479,6 +2481,7 @@ static int rsaSign( CONTEXT_INFO *contextInfoPtr, void *buffer, int length )
 			{
 			const int delta = length - resultLength;
 	
+			REQUIRES( isShortIntegerRange( resultLength ) );
 			memmove( ( BYTE * ) buffer + delta, tempBuffer, resultLength );
 			memset( buffer, 0, delta );
 			}
@@ -2995,9 +2998,11 @@ static int cipherInitKey( CONTEXT_INFO *contextInfoPtr, const void *key,
 	HCRYPTKEY hSessionKey;
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	int keySize = keyLength, status;
 
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( convInfo != NULL );
 
 	/* Get the information for the device associated with this context */
 	status = getContextDeviceInfo( contextInfoPtr->objectHandle, 
@@ -3006,9 +3011,9 @@ static int cipherInitKey( CONTEXT_INFO *contextInfoPtr, const void *key,
 		return( status );
 
 	/* Copy the key to internal storage */
-	if( contextInfoPtr->ctxConv->userKey != key )
-		memcpy( contextInfoPtr->ctxConv->userKey, key, keyLength );
-	contextInfoPtr->ctxConv->userKeyLength = keyLength;
+	if( convInfo->userKey != key )
+		memcpy( convInfo->userKey, key, keyLength );
+	convInfo->userKeyLength = keyLength;
 
 	/* Special-case handling for 2-key vs.3-key 3DES */
 	if( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_3DES )
@@ -3018,8 +3023,10 @@ static int cipherInitKey( CONTEXT_INFO *contextInfoPtr, const void *key,
 		   nominal keysize is for 2-key 3DES, we have to make the actual size
 		   the maximum size, corresponding to 3-key 3DES */
 		if( keyLength <= bitsToBytes( 64 * 2 ) )
-			memcpy( contextInfoPtr->ctxConv->userKey + bitsToBytes( 64 * 2 ),
-					contextInfoPtr->ctxConv->userKey, bitsToBytes( 64 ) );
+			{
+			memcpy( convInfo->userKey + bitsToBytes( 64 * 2 ),
+					convInfo->userKey, bitsToBytes( 64 ) );
+			}
 		keySize = capabilityInfoPtr->maxKeySize;
 		}
 
@@ -3050,12 +3057,16 @@ static int initCryptParams( CONTEXT_INFO *contextInfoPtr )
 	enum { CAPI_CRYPT_MODE_NONE, CAPI_CRYPT_MODE_CBC, 
 		   CAPI_CRYPT_MODE_ECB, CAPI_CRYPT_MODE_CTR,
 		   CAPI_CRYPT_MODE_CFB };
-	const CRYPT_MODE_TYPE mode = contextInfoPtr->ctxConv->mode;
+	const CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+	CRYPT_MODE_TYPE mode;
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
 	DWORD dwMode;
 
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( convInfo != NULL );
+
+	mode = convInfo->mode;
 
 	/* If it's a native stream cipher (rather than a block cipher being run
 	   in stream cipher mode), there's nothing to do */
@@ -3108,7 +3119,7 @@ static int initCryptParams( CONTEXT_INFO *contextInfoPtr )
 
 	/* Set the IV parameter for the CryptoAPI object */
 	if( !CryptSetKeyParam( contextInfoPtr->deviceObject, KP_IV,
-						   contextInfoPtr->ctxConv->currentIV, 0 ) )
+						   convInfo->currentIV, 0 ) )
 		return( mapDeviceError( contextInfoPtr, CRYPT_ERROR_FAILED ) );
 
 	return( CRYPT_OK );

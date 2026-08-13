@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							cryptlib Prime Sieve							*
-*						Copyright Peter Gutmann 2012-2014					*
+*						Copyright Peter Gutmann 2012-2025					*
 *																			*
 ****************************************************************************/
 
@@ -316,6 +316,7 @@ int initSieve( IN_ARRAY( sieveSize ) BOOLEAN *sieveArray,
 
 		/* Determine the correct start index for this value */
 		step = primeTbl[ i ];
+		REQUIRES( isIntegerRangeNZ( step ) );
 		CK( BN_mod_word( &sieveIndex, candidate, step ) );
 		if( bnStatusError( bnStatus ) )
 			return( getBnStatus( bnStatus ) );
@@ -347,6 +348,9 @@ int initSieve( IN_ARRAY( sieveSize ) BOOLEAN *sieveArray,
 							   sieveIndex += step ) 
 			{
 			ENSURES( LOOP_INVARIANT_MAX_XXX_ALT( sieveIndex, 0, sieveSize - 1 ) );
+					 /* We have to use LOOP_INVARIANT_MAX_XXX_ALT() here 
+					    because the loop index is advanced by an unknown 
+					    value */
 
 			sieveArray[ sieveIndex ] = TRUE;
 			}
@@ -368,7 +372,7 @@ int initSieve( IN_ARRAY( sieveSize ) BOOLEAN *sieveArray,
 #define LFSR_POLYNOMIAL		0x1053
 #define LFSR_MASK			0x1000
 
-CHECK_RETVAL_RANGE( 0, SIEVE_SIZE ) \
+CHECK_RETVAL_RANGE( 1, SIEVE_SIZE - 1 ) \
 int nextSievePosition( IN_INT_SHORT int value )
 	{
 	static_assert( LFSR_MASK == SIEVE_SIZE, "LFSR size" );
@@ -376,6 +380,7 @@ int nextSievePosition( IN_INT_SHORT int value )
 	REQUIRES( value > 0 && value < SIEVE_SIZE );
 
 	/* Get the next value: Multiply by x and reduce by the polynomial */
+	REQUIRES( !checkOverflowShift( value, 1 ) );
 	value <<= 1;
 	if( value & LFSR_MASK )
 		value ^= LFSR_POLYNOMIAL;
@@ -398,9 +403,10 @@ int getSieveEntry( IN_RANGE( 0, PRIME_TABLE_SIZE - 1 ) int position )
 	}
 
 /* A one-off quick check for when we're evaluating whether an allegedly prime
-   value seems kosher.  This is used in locations where someone is giving us
-   what should be a prime, or at least something that shouldn't have small 
-   prime factors, so it should be as quick as possible */
+   value seems kosher, which checks whether it has small prime factors.  This 
+   is used in locations where someone is giving us what should be a prime, or 
+   at least something that shouldn't have small prime factors, so it should be 
+   as quick as possible */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN primeCheckQuick( const BIGNUM *candidate )

@@ -707,7 +707,7 @@ int checkHSPacketHeader( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		
 		/* Some servers may send insanely-long certificate request packets
 		   containing every known CA in existence, which end up being so big 
-		   that the're fragmented across multiple TLS packets (see the 
+		   that they're fragmented across multiple TLS packets (see the 
 		   comment in processCertRequest() in tls_cli.c).  If we encounter 
 		   one of these then we allow up to a full extra encapsulated packet 
 		   and let the caller know that something odd is going on */

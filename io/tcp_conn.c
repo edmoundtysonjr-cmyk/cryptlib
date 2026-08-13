@@ -5,6 +5,13 @@
 *																			*
 ****************************************************************************/
 
+/* Define the following to force IPv4 use, which fixes problems with setups
+   that really, really want to use IPv6 for everything even when it's not 
+   enabled or configured.  Note that this must be defined before the include
+   of tcp.h since it modifies the behaviour of macros in that file */
+
+/* #define USE_IPV4_ONLY */
+
 #include <ctype.h>
 #if defined( INC_ALL )
   #include "crypt.h"
@@ -1173,6 +1180,7 @@ static int openServerSocket( INOUT_PTR NET_STREAM_INFO *netStream,
 							   &netStream->clientAddressLen, 
 							   &netStream->clientPort );
 	( void ) getSocketAddressBinary( ( const struct sockaddr * ) &clientAddr,
+									 clientAddrLen, 
 									 netStream->clientAddressBinary,
 									 IP6_ADDR_SIZE, 
 									 &netStream->clientAddressBinaryLen );

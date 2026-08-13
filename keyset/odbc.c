@@ -935,7 +935,7 @@ static int getBlobInfo( INOUT_PTR DBMS_STATE_INFO *dbmsInfo,
 	{
 	const SQLHSTMT hStmt = dbmsInfo->hStmt[ DBMS_CACHEDQUERY_NONE ];
 	SQLRETURN sqlStatus;
-	SQLINTEGER count;
+	SQLINTEGER count DUMMY_INIT;
 	SQLLEN blobNameLength, dummy;
 
 	assert( isWritePtr( dbmsInfo, sizeof( DBMS_STATE_INFO ) ) );
@@ -957,12 +957,14 @@ static int getBlobInfo( INOUT_PTR DBMS_STATE_INFO *dbmsInfo,
 		}
 
 	/* Get the type name (result column 1) and column size (= maximum
-	   possible field length, result column 3).  We only check the second
-	   return code since they both apply to the same row */
-	SQLGetData( hStmt, 1, SQL_C_CHAR, dbmsInfo->blobName,
-				CRYPT_MAX_TEXTSIZE, &blobNameLength );
-	sqlStatus = SQLGetData( hStmt, 3, SQL_C_SLONG, &count,
-							sizeof( SQLINTEGER ), &dummy );
+	   possible field length, result column 3) */
+	sqlStatus = SQLGetData( hStmt, 1, SQL_C_CHAR, dbmsInfo->blobName,
+							CRYPT_MAX_TEXTSIZE, &blobNameLength );
+	if( sqlStatusOK( sqlStatus ) )
+		{
+		sqlStatus = SQLGetData( hStmt, 3, SQL_C_SLONG, &count,
+								sizeof( SQLINTEGER ), &dummy );
+		}
 	SQLCloseCursor( hStmt );
 	if( !sqlStatusOK( sqlStatus ) )
 		return( CRYPT_ERROR );

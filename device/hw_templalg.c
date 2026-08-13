@@ -159,7 +159,7 @@ static int completeInitKeyAES( CONTEXT_INFO *contextInfoPtr,
 							   const int keyHandle, const void *key, 
 							   const int keySize )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -167,6 +167,7 @@ static int completeInitKeyAES( CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( keyHandle >= 0 && keyHandle < NO_PERSONALITIES );
 	REQUIRES( keySize >= MIN_KEYSIZE && keySize <= CRYPT_MAX_KEYSIZE );
+	REQUIRES( convInfo != NULL );
 
 	/* This personality is now active and in use, initialise the metadata 
 	   and set up the mapping from the crypto hardware personality to the
@@ -845,13 +846,15 @@ static int ecdsaInitKey( CONTEXT_INFO *contextInfoPtr, const void *key,
 	if( TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_STATICCONTEXT | \
 										  CONTEXT_FLAG_ISPUBLICKEY ) )
 		{
+		PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 		int keySizeBits;
 
-		status = getECCFieldSize( contextInfoPtr->ctxPKC->curveType, 
-								  &keySizeBits, TRUE );
+		REQUIRES( pkcInfo != NULL );
+
+		status = getECCFieldSize( pkcInfo->curveType, &keySizeBits, TRUE );
 		if( cryptStatusError( status ) )
 			return( status );
-		contextInfoPtr->ctxPKC->keySizeBits = keySizeBits;
+		pkcInfo->keySizeBits = keySizeBits;
 
 		return( CRYPT_OK );
 		}
@@ -1036,11 +1039,11 @@ static int sha2SelfTest( void )
 
 /* Return context subtype-specific information */
 
-static int sha2GetInfo( const CAPABILITY_INFO_TYPE type,
+static int sha2GetInfo( const CONTEXT_INFO_TYPE type,
 						CONTEXT_INFO *contextInfoPtr, 
 						void *data, const int length )
 	{
-	if( type == CAPABILITY_INFO_STATESIZE )
+	if( type == CONTEXT_INFO_STATESIZE )
 		{
 		int *valuePtr = ( int * ) data;
 
@@ -1082,14 +1085,16 @@ static int sha2Hash( CONTEXT_INFO *contextInfoPtr, BYTE *buffer,
 		{
 		const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
+		HASH_INFO *hashInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 
 		REQUIRES( capabilityInfoPtr != NULL );
+		REQUIRES( hashInfo != NULL );
 
 		/* Wrap up the hashing from the state information in 
 		   contextInfoPtr->ctxHash->hashInfo, with the result placed in 
 		   contextInfoPtr->ctxHash->hash */
 		/* ... */
-		memset( contextInfoPtr->ctxHash->hash, 'X',	/* Dummy hash val.*/
+		memset( hashInfo->hash, 'X',	/* Dummy hash val.*/
 				capabilityInfoPtr->blockSize );
 		}
 
@@ -1108,17 +1113,17 @@ static int hmacSha2SelfTest( void )
 
 /* Return context subtype-specific information */
 
-static int hmacSha2GetInfo( const CAPABILITY_INFO_TYPE type,
+static int hmacSha2GetInfo( const CONTEXT_INFO_TYPE type,
 							CONTEXT_INFO *contextInfoPtr, 
 							void *data, const int length )
 	{
-	if( type == CAPABILITY_INFO_STATESIZE )
+	if( type == CONTEXT_INFO_STATESIZE )
 		{
 		int *valuePtr = ( int * ) data;
 
 		/* Return the amount of MAC-state storage needed by the HMAC-SHA2 
 		   routines.  This will be allocated by cryptlib and made available
-		   as contextInfoPtr->ctxMAC->macInfo */
+		   as contextInfoPtr->keyingInfo->macInfo */
 		/* ... */
 		*valuePtr = 0;	/* Dummy version doesn't need storage */
 
@@ -1140,28 +1145,30 @@ static int hmacSha2Hash( CONTEXT_INFO *contextInfoPtr, BYTE *buffer,
 	   reinitialise things */
 	if( !TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_HASH_INITED ) )
 		{
-		/* Initialise MAC state in contextInfoPtr->ctxMAC->macInfo */
+		/* Initialise MAC state in contextInfoPtr->keyingInfo->macInfo */
 		/* ... */
 		}
 
 	if( length > 0 )
 		{
 		/* Perform the MACing using the MAC state information in 
-		   contextInfoPtr->ctxMAC->macInfo */
+		   contextInfoPtr->keyingInfo->macInfo */
 		/* ... */
 		}
 	else
 		{
 		const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
+		MAC_INFO *macInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 
 		REQUIRES( capabilityInfoPtr != NULL );
+		REQUIRES( macInfo != NULL );
 
 		/* Wrap up the MACing from the state information in 
-		   contextInfoPtr->ctxMAC->macInfo, with the result placed in 
-		   contextInfoPtr->ctxMAC->mac */
+		   contextInfoPtr->keyingInfo->macInfo, with the result placed in 
+		   contextInfoPtr->keyingInfo->mac */
 		/* ... */
-		memset( contextInfoPtr->ctxMAC->mac, 'Z',	/* Dummy MAC val.*/
+		memset( macInfo->mac, 'Z',	/* Dummy MAC value */
 				capabilityInfoPtr->blockSize );
 		}
 
@@ -1173,7 +1180,7 @@ static int hmacSha2Hash( CONTEXT_INFO *contextInfoPtr, BYTE *buffer,
 static int hmacSha2InitKey( CONTEXT_INFO *contextInfoPtr, const void *key, 
 							const int keyLength )
 	{
-	MAC_INFO *macInfo = contextInfoPtr->ctxMAC;
+	MAC_INFO *macInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	PERSONALITY_INFO *personalityInfoPtr;
 	int keyHandle, status;
 
@@ -1181,6 +1188,7 @@ static int hmacSha2InitKey( CONTEXT_INFO *contextInfoPtr, const void *key,
 	assert( isReadPtrDynamic( key, keyLength ) );
 
 	REQUIRES( keyLength >= 1 && keyLength <= CRYPT_MAX_KEYSIZE );
+	REQUIRES( macInfo != NULL );
 
 	/* Find a free personality slot to store the key */
 	status = findFreePersonality( &keyHandle );
@@ -1453,8 +1461,7 @@ static const CAPABILITY_INFO capabilities[] = {
 		ecdsaSelfTest, getDefaultInfo, cleanupHardwareContext, NULL, 
 		ecdsaInitKey, ecdsaGenerateKey,
 		NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 
-		ecdsaSign, ecdsaSigCheck, readPublicKey25519Function, writePublicKey25519Function,
-		writeDLValues, readDLValues },
+		ecdsaSign, ecdsaSigCheck, readPublicKey25519Function, writePublicKey25519Function },
 #endif /* USE_ED25519 */
 
 	/* The AES capabilities */

@@ -92,12 +92,10 @@ static int readConfigOption( INOUT_PTR STREAM *stream,
 
 		case OPTION_STRING:
 			status = readGenericHole( stream, &length, 1, BER_STRING_UTF8 );
-			if( cryptStatusOK( status ) && \
-				( !isShortIntegerRangeNZ( length ) || \
-				  length > MAX_ATTRIBUTE_SIZE ) )
-				status = CRYPT_ERROR_BADDATA;
 			if( cryptStatusError( status ) )
 				return( status );
+			if( !rangeCheck( length, 1, MAX_ATTRIBUTE_SIZE ) )
+				return( CRYPT_ERROR_BADDATA );
 
 			/* Get the string data in-place */
 			status = sMemGetDataBlock( stream, &dataPtr, length );
@@ -281,7 +279,7 @@ static int writeConfigData( INOUT_PTR STREAM *stream,
 				continue;
 			writeSequence( stream,
 						   sizeofShortInteger( builtinOptionInfoPtr->index ) + \
-						   sizeofObject( optionInfoPtr->intValue ) );
+						   sizeofShortObject( optionInfoPtr->intValue ) );
 			writeShortInteger( stream, builtinOptionInfoPtr->index,
 							   DEFAULT_TAG );
 			status = writeCharacterString( stream, optionInfoPtr->strValue,
@@ -500,8 +498,8 @@ int getConfigDisposition( INOUT_ARRAY( configOptionsCount ) \
 #endif /* USE_CERTIFICATES */
 	int length, status;
 
-	assert( isReadPtrDynamic( configOptions, 
-							  sizeof( OPTION_INFO ) * configOptionsCount ) );
+	assert( isWritePtrDynamic( configOptions, 
+							   sizeof( OPTION_INFO ) * configOptionsCount ) );
 	assert( isWritePtr( disposition, sizeof( CONFIG_DISPOSITION_TYPE ) ) );
 
 	REQUIRES( isShortIntegerRangeNZ( configOptionsCount ) );
@@ -552,8 +550,8 @@ int prepareConfigData( INOUT_ARRAY( configOptionsCount ) \
 	void *dataPtr;
 	int length, status;
 
-	assert( isReadPtrDynamic( configOptions, 
-							  sizeof( OPTION_INFO ) * configOptionsCount ) );
+	assert( isWritePtrDynamic( configOptions, 
+							   sizeof( OPTION_INFO ) * configOptionsCount ) );
 	assert( isWritePtr( dataPtrPtr, sizeof( void * ) ) );
 	assert( isWritePtr( dataLength, sizeof( int ) ) );
 
@@ -616,6 +614,7 @@ int commitConfigData( IN_STRING const char *fileName,
 				isHandleRangeValid( iTrustedCertUserObject ) ) );
 	REQUIRES( ( data == NULL && dataLength == 0 ) || \
 			  ( data != NULL && isBufsizeRangeNZ( dataLength ) ) );
+	REQUIRES( dataLength > 0 || iTrustedCertUserObject != CRYPT_UNUSED );
 
 	/* Build the path to the configuration file and try and create it */
 	status = fileBuildCryptlibPath( configFilePath, MAX_PATH_LENGTH, 
@@ -685,13 +684,12 @@ int commitConfigData( IN_STRING const char *fileName,
 *																			*
 ****************************************************************************/
 
-/* Delete the configuration file.  This always returns an OK status even if
-   the delete fails since it's not certain what we should do in this case */
+/* Delete the configuration file */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int deleteConfig( IN_STRING const char *fileName )
 	{
-	char configFilePath[ MAX_PATH_LENGTH + 1 + 8 ];
+	char configFilePath[ MAX_PATH_LENGTH + 8 ];
 	int configFilePathLen, status;
 
 	assert( isReadPtr( fileName, 2 ) );
@@ -702,8 +700,10 @@ int deleteConfig( IN_STRING const char *fileName )
 									&configFilePathLen, fileName, 
 									strnlen_s( fileName, MAX_PATH_LENGTH ), 
 									BUILDPATH_GETPATH );
-	if( cryptStatusOK( status ) )
-		fileErase( configFilePath );
+	if( cryptStatusError( status ) )
+		return( status );
+	fileErase( configFilePath );	/* void function, no status to return */
+
 	return( CRYPT_OK );
 	}
 #endif /* USE_KEYSETS */

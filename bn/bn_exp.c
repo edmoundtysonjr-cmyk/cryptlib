@@ -628,6 +628,18 @@ static int MOD_EXP_CTIME_COPY_TO_PREBUF(const BIGNUM *b, int top,
     return 1;
 }
 
+#if 0	/* Changes for cryptlib - pcg */
+
+/* This older version of MOD_EXP_CTIME_COPY_FROM_PREBUF() is vulnerable to
+   CVE-2016-0702 "CacheBleed", a.k.a. the stunt-cryptography attack that no 
+   attacker in recorded history has ever used (see also the cryptlib threat 
+   model documentation).  However in order to deal with potential 
+   CVEnhancement reports we substitute a Frankencode version of the original
+   function updated with parts of the later OpenSSL countermeasures... for 
+   an attack that will never occur.  Note also the performance-killing
+   volatile cast that's required to ensure that the compiler generates the 
+   most inefficient code possible - pcg */
+
 static int MOD_EXP_CTIME_COPY_FROM_PREBUF(BIGNUM *b, int top,
                                           unsigned char *buf, int idx,
                                           int width)
@@ -645,6 +657,47 @@ static int MOD_EXP_CTIME_COPY_FROM_PREBUF(BIGNUM *b, int top,
     bn_correct_top(b);
     return 1;
 }
+
+#else
+
+/* a == b -> 0xFF, else 0x00, computed without a data-dependent branch */
+static unsigned char constant_time_eq_byte(int a, int b)
+{
+    unsigned int x = (unsigned int)(a ^ b);   /* 0 iff a == b            */
+    x = ~x & (x - 1);                          /* MSB set iff x == 0      */
+    return (unsigned char)(0U - (x >> (sizeof(unsigned int) * 8 - 1)));
+}
+
+static int MOD_EXP_CTIME_COPY_FROM_PREBUF(BIGNUM *b, int top,
+                                          unsigned char *buf, int idx,
+                                          int width)
+{
+    int i, j;
+    volatile unsigned char *table = (volatile unsigned char *)buf;
+    const int nbytes = top * (int)sizeof(b->d[0]);
+
+    if (bn_wexpand(b, top) == NULL)
+        return 0;
+
+    /* Byte i of slot 'idx' lives in block i at buf[i*width + idx].  Scan
+       every slot in each block and select with a constant-time mask so the
+       set of addresses touched (0 .. powerbufLen-1, in order) does not
+       depend on the secret window value 'idx'. */
+    for (i = 0; i < nbytes; i++) {
+        unsigned char acc = 0;
+        const int base = i * width;
+
+        for (j = 0; j < width; j++)
+            acc |= table[base + j] & constant_time_eq_byte(j, idx);
+
+        ((unsigned char *)b->d)[i] = acc;
+    }
+
+    b->top = top;
+    bn_correct_top(b);
+    return 1;
+}
+#endif /* End changes for cryptlib - pcg */
 
 /*
  * Given a pointer value, compute the next address that is a cache line

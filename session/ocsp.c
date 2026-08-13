@@ -5,7 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>
 #if defined( INC_ALL )
   #include "crypt.h"
   #include "asn1.h"

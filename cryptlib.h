@@ -97,11 +97,6 @@
 	  #define C_RET	__declspec( dllimport ) int	__stdcall	/* DLL import ret.val.*/
 	#endif /* CRYPT_DEFINED */
   #endif /* BC++ vs.VC++ DLL functions */
-#elif defined( _WINDOWS ) && !defined( STATIC_LIB )
-  #define C_PTR	FAR *				/* DLL pointer */
-  #define C_CHR char
-  #define C_STR C_CHR FAR *			/* DLL string pointer */
-  #define C_RET	int FAR PASCAL _export	/* DLL return value */
 #elif defined( __BEOS__ )
 /* #include <BeBuild.h>				// _EXPORT/_IMPORT defines */
   #define C_PTR *
@@ -116,12 +111,15 @@
 	  #define C_RET	__declspec( dllimport ) int	/* Shared lib import ret.val.*/
 	#endif /* CRYPT_DEFINED */
   #endif /* Static vs. shared lib */
-#elif defined( __SYMBIAN32__ )
-  #ifdef _CRYPT_DEFINED
-	#define C_RET	EXPORT_C					/* DLL export ret.val.*/
-  #else
-	#define C_RET	IMPORT_C					/* DLL import ret.val.*/
-  #endif /* CRYPT_DEFINED */
+#elif ( defined( __GNUC__ ) && ( __GNUC__ >= 4 ) ) || defined( __clang__ )
+  /* For these compilers we build with -fvisibility=hidden to avoid exposing 
+     every possible symbol in cryptlib, so we need to mark the actual API 
+     symbols as explicitly visible.  Use 'nm -D libcl.so*' to display what's
+     in the final .so */
+  #define C_PTR	*
+  #define C_CHR char
+  #define C_STR C_CHR *
+  #define C_RET	__attribute__((__visibility__("default"))) int
 #else
   #define C_PTR	*
   #define C_CHR char

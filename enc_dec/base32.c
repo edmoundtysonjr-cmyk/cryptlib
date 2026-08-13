@@ -1,15 +1,11 @@
 /****************************************************************************
 *																			*
-*					 cryptlib Base32 En/Decoding Routines					*
+*							cryptlib Base32 Routines						*
 *						Copyright Peter Gutmann 1998-2025					*
 *																			*
 ****************************************************************************/
 
-#if defined( INC_ALL )
-  #include "crypt.h"
-#else
-  #include "crypt.h"
-#endif /* Compiler-specific includes */
+#include "crypt.h"
 
 #if defined( USE_TLS ) || defined( USE_SSH )
 
@@ -45,15 +41,15 @@ BOOLEAN isBase32Value( IN_BUFFER( encValLength ) const char *encVal,
 	REQUIRES_B( isShortIntegerRangeMin( encValLength, 16 ) );
 
 	/* Check whether an input string is a valid Base32 value.  Since this is
-	   being used for TOTP, it has to be an even multiple of 8 characters,
+	   being used for TOTP, it has to be a multiple of 8 characters, 
 	   corresponding to 40 bits, and a minimum of 80 bits */
 	if( encValLength != 16 && encValLength != 24 && encValLength != 32 )
 		return( FALSE );
-	LOOP_MED( i = 0, i < encValLength, i++ )
+	LOOP_LARGE( i = 0, i < encValLength, i++ )
 		{
 		const int ch = byteToInt( encVal[ i ] );
 
-		ENSURES_B( LOOP_INVARIANT_MED( i, 0, encValLength - 1 ) );
+		ENSURES_B( LOOP_INVARIANT_LARGE( i, 0, encValLength - 1 ) );
 
 		if( !isAlnum( ch ) || ch == '0' || ch == '1' || ch == '8' || \
 			ch == '9' )
@@ -82,7 +78,7 @@ int decodeBase32Value( OUT_BUFFER( valueMaxLen, *valueLen ) BYTE *value,
 
 	REQUIRES( isShortIntegerRangeMin( valueMaxLen, 32 ) );
 	REQUIRES( isShortIntegerRangeMin( encValLength, 16 ) && \
-			  valueMaxLen > ( ( encValLength  * 5 ) / 8 ) );
+			  valueMaxLen > ( ( encValLength * 5 ) / 8 ) );
 
 	/* Clear return values */
 	REQUIRES( isShortIntegerRangeNZ( valueMaxLen ) ); 
@@ -90,11 +86,11 @@ int decodeBase32Value( OUT_BUFFER( valueMaxLen, *valueLen ) BYTE *value,
 	*valueLen = 0;
 
 	/* Make sure that the input has a reasonable length (this should have 
-	   been checked by the caller using isBase32Value(), so we throw an
-	   exception if the check fails).  We return CRYPT_ERROR_BADDATA rather 
-	   than the more obvious CRYPT_ERROR_OVERFLOW since something returned 
-	   from this low a level should be a consistent error code indicating 
-	   that there's a problem with the Base32 value as a whole */
+	   already been checked by the caller using isBase32Value(), so we throw 
+	   an exception if the check fails).  We return CRYPT_ERROR_BADDATA 
+	   rather than the more obvious CRYPT_ERROR_OVERFLOW since something 
+	   returned from this low a level should be a consistent error code 
+	   indicating that there's a problem with the Base32 value as a whole */
 	if( encValLength != 16 && encValLength != 24 && encValLength != 32 )
 		{
 		DEBUG_DIAG(( "Base32 value has invalid length" ));

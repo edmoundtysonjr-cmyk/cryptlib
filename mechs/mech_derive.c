@@ -48,7 +48,6 @@ static int prfInit( IN_PTR const HASH_FUNCTION hashFunction,
 					IN_BUFFER( keyLength ) const void *key, 
 					IN_LENGTH_SHORT const int keyLength )
 	{
-	const BYTE *keyPtr = processedKey;
 	BYTE hashBuffer[ HMAC_MAX_DATASIZE + 8 ];
 	LOOP_INDEX i;
 
@@ -62,6 +61,7 @@ static int prfInit( IN_PTR const HASH_FUNCTION hashFunction,
 	REQUIRES( hashBlockSize >= HMAC_MIN_DATASIZE && \
 			  hashBlockSize <= HMAC_MAX_DATASIZE );
 	REQUIRES( processedKeyMaxLength >= HMAC_MIN_DATASIZE && \
+			  processedKeyMaxLength >= hashBlockSize && \
 			  processedKeyMaxLength <= HMAC_MAX_DATASIZE );
 	REQUIRES( isShortIntegerRangeNZ( keyLength ) );
 
@@ -98,7 +98,7 @@ static int prfInit( IN_PTR const HASH_FUNCTION hashFunction,
 	   but the following sequence of operations minimises timing channels 
 	   leaking the key length */
 	REQUIRES( rangeCheck( *processedKeyLength, 1, HMAC_MAX_DATASIZE ) );
-	memcpy( hashBuffer, keyPtr, *processedKeyLength );
+	memcpy( hashBuffer, processedKey, *processedKeyLength );
 	if( *processedKeyLength < hashBlockSize )
 		{
 		REQUIRES( rangeCheck( *processedKeyLength, 1, hashBlockSize - 1 ) );
@@ -238,7 +238,7 @@ static int pbkdf2Hash( OUT_BUFFER_FIXED( outLength ) BYTE *out,
 	   last few bits set (8 bits = 5100 bytes of key) so we only change the
 	   last byte */
 	memset( countBuffer, 0, 4 );
-	countBuffer[ 3 ] = ( BYTE ) blockCount;
+	countBuffer[ 3 ] = intToByte( blockCount );
 
 	/* Calculate T0 = HMAC( salt || counter ) */
 	memcpy( hashInfo, initialHashState, sizeof( HASHINFO ) );
@@ -302,7 +302,6 @@ int derivePBKDF2( STDC_UNUSED void *dummy,
 	HASH_FUNCTION hashFunction;
 	HASHINFO initialHashInfo;
 	BYTE processedKey[ HMAC_MAX_DATASIZE + 8 ];
-	BYTE *dataOutPtr = mechanismInfo->dataOut;
 	static const MAP_TABLE mapTbl[] = {
 		{ CRYPT_ALGO_HMAC_SHA1, CRYPT_ALGO_SHA1 },
 		{ CRYPT_ALGO_HMAC_SHA2, CRYPT_ALGO_SHA2 },
@@ -351,13 +350,13 @@ int derivePBKDF2( STDC_UNUSED void *dummy,
 
 	/* Produce enough blocks of output to fill the key (nil sine magno 
 	   labore) */
-	LOOP_MED( keyIndex = 0, 
-			  keyIndex < mechanismInfo->dataOutLength,
-			  ( keyIndex += hashSize, dataOutPtr += hashSize ) )
+	LOOP_MED( keyIndex = 0, keyIndex < mechanismInfo->dataOutLength,
+			  keyIndex += hashSize )
 		{
 		const int noKeyBytes = \
 			( mechanismInfo->dataOutLength - keyIndex > hashSize ) ? \
 			hashSize : mechanismInfo->dataOutLength - keyIndex;
+		BYTE *dataOutPtr = ( BYTE * ) mechanismInfo->dataOut + keyIndex;
 
 		ENSURES( LOOP_INVARIANT_MED_XXX( keyIndex, 0, 
 										 mechanismInfo->dataOutLength - 1 ) );
@@ -365,7 +364,7 @@ int derivePBKDF2( STDC_UNUSED void *dummy,
 		REQUIRES( !checkOverflowSub( mechanismInfo->dataOutLength, 
 									 keyIndex ) );
 
-		REQUIRES( !checkOverflowInc( blockCount ) );
+		REQUIRES( rangeCheck( blockCount, 1, 255 ) );
 		status = pbkdf2Hash( dataOutPtr, noKeyBytes, 
 							 hashFunction, initialHashInfo, hashSize,
 							 hashBlockSize, processedKey, processedKeyLength,
@@ -400,7 +399,7 @@ int kdfPBKDF2( STDC_UNUSED void *dummy,
 	int masterSecretSize, keySize DUMMY_INIT, status;
 
 	UNUSED_ARG_OPT( dummy );
-	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_DERIVE_INFO ) ) );
+	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_KDF_INFO ) ) );
 
 	/* Get the key payload details from the key contexts */
 	status = krnlSendMessage( mechanismInfo->masterKeyContext, 
@@ -423,6 +422,7 @@ int kdfPBKDF2( STDC_UNUSED void *dummy,
 							 "keydata", 7 );
 	if( cryptStatusError( status ) )
 		return( status );
+	REQUIRES( rangeCheck( keySize, 1, CRYPT_MAX_KEYSIZE ) );
 	setMechanismDeriveInfo( &mechanismDeriveInfo, keyBuffer, keySize,
 							masterSecretBuffer, masterSecretSize,
 							mechanismInfo->hashAlgo, mechanismInfo->salt,
@@ -467,14 +467,14 @@ static int deriveHKDF( STDC_UNUSED void *dummy,
 	BYTE processedKey[ HMAC_MAX_DATASIZE + 8 ];
 	BYTE hkdfKey[ CRYPT_MAX_HASHSIZE + 8 ];
 	BYTE block[ CRYPT_MAX_HASHSIZE + 8 ];
-	BYTE *dataOutPtr = mechanismInfo->dataOut, counter = 1;
 	static const MAP_TABLE mapTbl[] = {
 		{ CRYPT_ALGO_HMAC_SHA1, CRYPT_ALGO_SHA1 },
 		{ CRYPT_ALGO_HMAC_SHA2, CRYPT_ALGO_SHA2 },
 		{ CRYPT_ALGO_HMAC_SHAng, CRYPT_ALGO_SHAng },
 		{ CRYPT_ERROR, CRYPT_ERROR }, { CRYPT_ERROR, CRYPT_ERROR }
 		};
-	int hashSize, hashBlockSize, processedKeyLength, value, status;
+	int hashSize, hashBlockSize, processedKeyLength, counter = 1;
+	int value, status;
 	LOOP_INDEX keyIndex;
 
 	UNUSED_ARG_OPT( dummy );
@@ -552,13 +552,14 @@ static int deriveHKDF( STDC_UNUSED void *dummy,
 		T1 = HMAC( T0 || info || 0x01 )
 		T2 = HMAC( T1 || info || 0x02 )
 		Tn = HMAC( Tn-1 || info || 0x0n ) */
-	LOOP_MED( keyIndex = 0, 
-			  keyIndex < mechanismInfo->dataOutLength,
-			  ( keyIndex += hashSize, dataOutPtr += hashSize ) )
+	LOOP_MED( keyIndex = 0, keyIndex < mechanismInfo->dataOutLength,
+			  keyIndex += hashSize )
 		{
 		const int noKeyBytes = \
 			( mechanismInfo->dataOutLength - keyIndex > hashSize ) ? \
 			hashSize : mechanismInfo->dataOutLength - keyIndex;
+		const BYTE byteValue = intToByte( counter );
+		BYTE *dataOutPtr = ( BYTE * ) mechanismInfo->dataOut + keyIndex;
 
 		ENSURES( LOOP_INVARIANT_MED_XXX( keyIndex, 0, 
 										 mechanismInfo->dataOutLength - 1 ) );
@@ -578,14 +579,15 @@ static int deriveHKDF( STDC_UNUSED void *dummy,
 			hashFunction( hashInfo, NULL, 0, infoString, infoStringLen, 
 						  HASH_STATE_CONTINUE );
 			}
-		hashFunction( hashInfo, NULL, 0, &counter, 1, 
+		hashFunction( hashInfo, NULL, 0, &byteValue, 1, 
 					  HASH_STATE_CONTINUE );
 		status = prfEnd( hashFunction, hashInfo, hashSize, hashBlockSize, 
 						 block, CRYPT_MAX_HASHSIZE, processedKey, 
 						 processedKeyLength );
 		if( cryptStatusError( status ) )
 			break;
-		counter++;		/* Byte counter, no checkOverflowInc() */
+		REQUIRES( rangeCheck( counter, 0, 255 ) );
+		counter++;
 		memcpy( dataOutPtr, block, noKeyBytes );
 		}
 	ENSURES( LOOP_BOUND_OK );
@@ -615,7 +617,7 @@ int kdfHKDF( STDC_UNUSED void *dummy,
 	int masterSecretSize, keySize DUMMY_INIT, status;
 
 	UNUSED_ARG_OPT( dummy );
-	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_DERIVE_INFO ) ) );
+	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_KDF_INFO ) ) );
 
 	/* This code currently isn't used, the only protocol that uses HKDF is 
 	   TLS 1.3 for which session/tls13_crypt.c synthesises it directly from
@@ -674,8 +676,8 @@ int kdfHKDF( STDC_UNUSED void *dummy,
 
 #ifdef USE_PKCS12
 
-/* The nominal block size for PKCS #12 derivation, based on the MD5/SHA-1 
-   input size of 512 bits */
+/* The nominal block size for PKCS #12 derivation, based on the SHA-1 input 
+   size of 512 bits */
 
 #define P12_BLOCKSIZE		64
 
@@ -691,7 +693,7 @@ int kdfHKDF( STDC_UNUSED void *dummy,
 
 /* Add two P12_BLOCKSIZE-byte blocks as 64-byte big-endian values:
 
-	dest = (dest + src + 1) mod 2^P12_BLOCKSIZE */
+	dest = (dest + src + 1) mod 2^512 */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 static int add64( INOUT_BUFFER_FIXED( destLen ) BYTE *dest,
@@ -859,7 +861,10 @@ static int initDSP( OUT_BUFFER( dspMaxLen, *dspLen ) BYTE *dsp,
 	return( CRYPT_OK );
 	}
 
-/* Perform PKCS #12 derivation */
+/* Perform PKCS #12 derivation.  This is the original Microsoft dog's-
+   breakfast KDF using SHA-1 that's been more or less universally replaced
+   by PBKDF2, so it's unlikely that it'll ever be updated to anything other
+   than SHA-1 */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
 int derivePKCS12( STDC_UNUSED void *dummy, 
@@ -876,16 +881,24 @@ int derivePKCS12( STDC_UNUSED void *dummy,
 	UNUSED_ARG_OPT( dummy );
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_DERIVE_INFO ) ) );
 
+	static_assert( P12_BLOCKSIZE == CRYPT_MAX_HASHSIZE,
+				   "PKCS #12 block size exceeds CRYPT_MAX_HASHSIZE" );
+				   /* Required for the salt length, which is restricted by
+				      the kernel to CRYPT_MAX_HASHSIZE */
+
 	/* Clear return value */
 	REQUIRES( isShortIntegerRangeNZ( mechanismInfo->dataOutLength ) ); 
 	memset( mechanismInfo->dataOut, 0, mechanismInfo->dataOutLength );
 
-	getHashAtomicParameters( mechanismInfo->hashAlgo, 0, &hashFunctionAtomic, 
+	getHashAtomicParameters( mechanismInfo->hashAlgo, 
+							 mechanismInfo->hashParam, &hashFunctionAtomic, 
 							 &hashSize );
 
 	/* Set up the diversifier/salt/password (DSP) string.  The first byte of 
-	   the PKCS #12 salt acts as a diversifier so we separate this out from 
-	   the rest of the salt data */
+	   the PKCS #12 salt acts as a diversifier set by the caller to 
+	   distinguish encryption from MAC keys (specified in keyset/pkcs12.h) 
+	   so we separate this out from the rest of the salt data */
+	REQUIRES( !checkOverflowSub( mechanismInfo->saltLength, 1 ) );
 	status = initDSP( p12_DSP, P12_DSPSIZE, &dspLen, mechanismInfo->dataIn,
 					  mechanismInfo->dataInLength, saltPtr + 1,
 					  mechanismInfo->saltLength - 1, byteToInt( *saltPtr ) );
@@ -894,7 +907,8 @@ int derivePKCS12( STDC_UNUSED void *dummy,
 
 	/* Produce enough blocks of output to fill the key */
 	LOOP_MED( keyIndex = 0, 
-			  keyIndex < mechanismInfo->dataOutLength, 
+			  ( keyIndex < mechanismInfo->dataOutLength && \
+			    cryptStatusOK( status ) ), 
 			  keyIndex += hashSize )
 		{
 		const int noKeyBytes = \
@@ -994,7 +1008,7 @@ static int tlsPrfInit( INOUT_PTR TLS_PRF_INFO *prfInfo,
 					   IN_BUFFER( keyLength ) const void *key, 
 					   IN_LENGTH_SHORT const int keyLength,
 					   IN_BUFFER( saltLength ) const void *salt, 
-					   IN_LENGTH_SHORT const int saltLength )
+					   IN_LENGTH_SHORT_MIN( 13 ) const int saltLength )
 	{
 	int status;
 
@@ -1003,7 +1017,8 @@ static int tlsPrfInit( INOUT_PTR TLS_PRF_INFO *prfInfo,
 	assert( isReadPtrDynamic( salt, saltLength ) );
 
 	REQUIRES( isShortIntegerRangeNZ( keyLength ) );
-	REQUIRES( isShortIntegerRangeNZ( saltLength ) );
+	REQUIRES( isShortIntegerRangeMin( saltLength, 13 ) );
+			  /* Diversifier string from the TLS RFC */
 
 	/* Initialise the hash information with the keying info.  This is
 	   reused for any future hashing since it's constant */
@@ -1046,6 +1061,7 @@ static int tlsPrfHash( INOUT_BUFFER_FIXED( outLength ) BYTE *out,
 	REQUIRES( outLength > 0 && outLength <= prfInfo->hashSize && \
 			  outLength <= CRYPT_MAX_HASHSIZE );
 	REQUIRES( saltLength >= 13 && saltLength <= 512 );
+			  /* Diversifier string from the TLS RFC */
 
 	/* The result of the hashing is XORd to the output so we don't clear the 
 	   return value like usual */
@@ -1294,7 +1310,10 @@ int deriveTLS12( STDC_UNUSED void *dummy,
 
 #if defined( USE_PGP ) || defined( USE_PGPKEYS )
 
-/* Implement one round of the OpenPGP PRF */
+/* Implement one round of the OpenPGP PRF.  Note that this only writes to 
+   the output at the conclusion of the hashing (see the comment in 
+   derivePGP() for the explanation), intermediate rounds keep the state in 
+   the hashInfo */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 4, 6, 8, 10 ) ) \
 static int pgpPrfHash( OUT_BUFFER_FIXED( outLength ) BYTE *out, 
@@ -1326,9 +1345,10 @@ static int pgpPrfHash( OUT_BUFFER_FIXED( outLength ) BYTE *out,
 			  ( preloadLength >= 0 && preloadLength <= 1 ) );
 	REQUIRES( isIntegerRangeNZ( count ) );
 
-	/* Clear return value */
-	REQUIRES( isShortIntegerRangeNZ( outLength ) ); 
-	memset( out, 0, outLength );
+	/* Normally we'd clear the return value here, but we're being called
+	   repeatedly in a tight loop and the return value isn't touched until
+	   we get to the last round which overwrites it with the hash value,
+	   so we leave it alone */
 
 	/* If it's a subsequent round of hashing, preload the hash with zero 
 	   bytes.  If it's the first round (preloadLength == 0) it's handled
@@ -1381,17 +1401,24 @@ int derivePGP( STDC_UNUSED void *dummy,
 	{
 	HASH_FUNCTION hashFunction;
 	HASHINFO hashInfo;
+	BYTE hash[ CRYPT_MAX_HASHSIZE + 8 ], hash2[ CRYPT_MAX_HASHSIZE + 8 ];
 	int byteCount = mechanismInfo->iterations << 6;
 	int secondByteCount = 0, hashSize, status = CRYPT_OK;
 	LOOP_INDEX i;
 
+	UNUSED_ARG_OPT( dummy );
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_DERIVE_INFO ) ) );
+
+	static_assert( MAX_WORKING_KEYSIZE <= 2 * 20,
+				   "MAX_WORKING_KEYSIZE is bigger than two sets of SHA-1 "
+				   "output" );
 
 	/* The checks below are a bit complex, see the long comment in 
 	   misc/consts.h for the bizarro way that the S2K processing-complexity
 	   specifier works.  In brief the count, once shifted/multiplied by 64,
 	   is capped at 65,011,712 so we don't have to worry about an overflow 
 	   in the shift */
+	REQUIRES( !checkOverflowShift( mechanismInfo->iterations, 6 ) );
 	REQUIRES( mechanismInfo->iterations >= 0 && \
 			  mechanismInfo->iterations <= MAX_KEYSETUP_HASHSPECIFIER );
 	REQUIRES( isBufsizeRange( byteCount ) );
@@ -1405,7 +1432,9 @@ int derivePGP( STDC_UNUSED void *dummy,
 					   &hashFunction, &hashSize, NULL );
 	memset( hashInfo, 0, sizeof( HASHINFO ) );
 
-	REQUIRES( mechanismInfo->dataOutLength < 2 * hashSize );
+	/* This should never occur since the biggest keysize and smallest hash
+	   size are 256 (MAX_WORKING_KEYSIZE) bits and 160 bits (SHA-1) */
+	REQUIRES( mechanismInfo->dataOutLength <= 2 * hashSize );
 
 	/* If it's a non-iterated hash or the count won't allow even a single
 	   pass over the 8-byte salt and password, adjust it to make sure that 
@@ -1465,9 +1494,8 @@ int derivePGP( STDC_UNUSED void *dummy,
 		   really just a boolean value indicating when we can stop */
 		ENSURES( LOOP_INVARIANT_EXT_GENERIC( GPG_FAILSAFE_ITERATIONS_MAX + 1 ) );
 
-		status = pgpPrfHash( mechanismInfo->dataOut, 
-							 hashSize, hashFunction, hashInfo, hashSize, 
-							 mechanismInfo->dataIn,
+		status = pgpPrfHash( hash, hashSize, hashFunction, hashInfo, 
+							 hashSize, mechanismInfo->dataIn,
 							 mechanismInfo->dataInLength,
 							 mechanismInfo->salt, 
 							 mechanismInfo->saltLength, &byteCount, 
@@ -1483,9 +1511,8 @@ int derivePGP( STDC_UNUSED void *dummy,
 			   for this case */
 			ENSURES( LOOP_INVARIANT_EXT_GENERIC( GPG_FAILSAFE_ITERATIONS_MAX + 1 ) );
 
-			status = pgpPrfHash( ( BYTE * ) mechanismInfo->dataOut + hashSize, 
-								 hashSize, hashFunction, hashInfo, hashSize, 
-								 mechanismInfo->dataIn, 
+			status = pgpPrfHash( hash2, hashSize, hashFunction, hashInfo, 
+								 hashSize, mechanismInfo->dataIn, 
 								 mechanismInfo->dataInLength,
 								 mechanismInfo->salt, 
 								 mechanismInfo->saltLength, &secondByteCount, 
@@ -1496,11 +1523,35 @@ int derivePGP( STDC_UNUSED void *dummy,
 	zeroise( hashInfo, sizeof( HASHINFO ) );
 	if( cryptStatusError( status ) )
 		{
+		zeroise( hash, CRYPT_MAX_HASHSIZE );
+		zeroise( hash2, CRYPT_MAX_HASHSIZE );
 		REQUIRES( isShortIntegerRangeNZ( mechanismInfo->dataOutLength ) ); 
 		zeroise( mechanismInfo->dataOut, mechanismInfo->dataOutLength );
 		return( status );
 		}
 
+	/* Copy as many bytes as required to the output */
+	if( mechanismInfo->dataOutLength <= hashSize )
+		{
+		REQUIRES( rangeCheck( mechanismInfo->dataOutLength, 1, 
+							  mechanismInfo->dataOutLength ) );
+		memcpy( mechanismInfo->dataOut, hash, mechanismInfo->dataOutLength );
+		}
+	else
+		{
+		const int delta = mechanismInfo->dataOutLength - hashSize;
+		
+		REQUIRES( !checkOverflowSub( mechanismInfo->dataOutLength, 
+									 hashSize ) );
+		REQUIRES( rangeCheck( hashSize, 1, mechanismInfo->dataOutLength ) );
+		memcpy( mechanismInfo->dataOut, hash, hashSize );
+		REQUIRES( rangeCheck( hashSize + delta, 1, 
+							  mechanismInfo->dataOutLength ) );
+		memcpy( ( BYTE * ) mechanismInfo->dataOut + hashSize, hash2, delta );
+		}
+	zeroise( hash, CRYPT_MAX_HASHSIZE );
+	zeroise( hash2, CRYPT_MAX_HASHSIZE );
+	
 	return( CRYPT_OK );
 	}
 #endif /* USE_PGP || USE_PGPKEYS */
@@ -1622,6 +1673,7 @@ int deriveHOTP( STDC_UNUSED void *dummy,
 	   location */
 	index = byteToInt( hash[ hashSize - 1 ] ) & 0x0F;
 	ENSURES( rangeCheck( index, 0, hashSize - 4 ) );
+	REQUIRES( !checkOverflowShift( byteToInt( hash[ index ] & 0x7F ), 24 ) );
 	totpValue = ( byteToInt( hash[ index ] & 0x7F ) << 24 ) | \
 				( byteToInt( hash[ index + 1 ] ) << 16 ) | \
 				( byteToInt( hash[ index + 2 ] ) << 8 ) | \
@@ -1718,11 +1770,11 @@ static const MECHANISM_TEST_INFO deriveMechanismTestInfo[] = {
 	{ { MESSAGE_DEV_DERIVE, MECHANISM_DERIVE_HOTP, ( FUNCTION_CAST ) deriveHOTP },
 	  { MKDATA( "755224" ), 6,
 		MKDATA( "12345678901234567890" ), 20, CRYPT_ALGO_SHA1, 0, 
-		"\x00\x00\x00\x00\x00\x00\x00\x00", 8, 1 } },
+		MKDATA( "\x00\x00\x00\x00\x00\x00\x00\x00" ), 8, 1 } },
 	{ { MESSAGE_DEV_DERIVE, MECHANISM_DERIVE_HOTP, ( FUNCTION_CAST ) deriveHOTP },
 	  { MKDATA( "287082" ), 6,
 		MKDATA( "12345678901234567890" ), 20, CRYPT_ALGO_SHA1, 0, 
-		"\x00\x00\x00\x00\x00\x00\x00\x01", 8, 1 } },
+		MKDATA( "\x00\x00\x00\x00\x00\x00\x00\x01" ), 8, 1 } },
   #if 0		/* Additional HOTP tests that don't add anything to the above tests */
 	{ { MESSAGE_DEV_DERIVE, MECHANISM_DERIVE_HOTP, ( FUNCTION_CAST ) deriveHOTP },
 	  { MKDATA( "359152" ), 6,
@@ -1772,7 +1824,8 @@ static const MECHANISM_TEST_INFO deriveMechanismTestInfo[] = {
 	{ { MESSAGE_DEV_DERIVE, MECHANISM_DERIVE_TLS, ( FUNCTION_CAST ) deriveTLS },
 	  { MKDATA( "\xD3\xD4\x2F\xD6\xE3\x7D\xC0\x3C\xA6\x9F\x92\xDF\x3E\x40\x0A\x64"
 				"\x49\xB4\x0E\xC4\x14\x04\x2F\xC8\xDD\x27\xD5\x1C\x62\xD2\x2C\x97"
-				"\x90\xAE\x08\x4B\xEE\xF4\x8D\x22\xF0\x2A\x1E\x38\x2D\x31\xCB\x68" ), MECHANISM_OUTPUT_SIZE_TLS,
+				"\x90\xAE\x08\x4B\xEE\xF4\x8D\x22\xF0\x2A\x1E\x38\x2D\x31\xCB\x68" ), 
+				MECHANISM_OUTPUT_SIZE_TLS,
 		inputValue, MECHANISM_INPUT_SIZE_TLS, ( CRYPT_ALGO_TYPE ) CRYPT_USE_DEFAULT, 0,
 		saltValue, MECHANISM_SALT_SIZE_TLS, 1 } },				  /* Both MD5 and SHA1 */
 #endif /* USE_TLS */
@@ -1800,7 +1853,8 @@ static const MECHANISM_TEST_INFO deriveMechanismTestInfo[] = {
   #endif /* 0 */
 	{ { MESSAGE_DEV_DERIVE, MECHANISM_DERIVE_PKCS12, ( FUNCTION_CAST ) derivePKCS12 },
 	  { MKDATA( "\x8B\xFB\x1D\x77\xFE\x78\xFF\xE8\xE9\x69\x76\xE0\xC5\x0A\xB6\xD2"
-				"\x64\xEC\xA3\x01\xE9\xD2\xE0\xC0\xBC\x60\x3D\x63\xB2\x4A\xB2\x63" ), MECHANISM_OUTPUT_SIZE,
+				"\x64\xEC\xA3\x01\xE9\xD2\xE0\xC0\xBC\x60\x3D\x63\xB2\x4A\xB2\x63" ), 
+				MECHANISM_OUTPUT_SIZE,
 		inputValue, MECHANISM_INPUT_SIZE, CRYPT_ALGO_SHA1, 0,
 		pkcs12saltValue, 1 + MECHANISM_SALT_SIZE, 10 } },
 #endif /* USE_PKCS12 */
@@ -1834,6 +1888,8 @@ int deriveSelftest( STDC_UNUSED void *dummy,
 
 		mechanismFunctionInfo = &deriveMechanismTestInfo[ i ].mechanismFunctionInfo;
 		mechanismTestInfoPtr = &deriveMechanismTestInfo[ i ];
+		REQUIRES( mechanismTestInfoPtr->mechanismInfo.dataOutLength <= \
+												MECHANISM_OUTPUT_SIZE_TLS );
 		memcpy( &testMechanismInfo, &mechanismTestInfoPtr->mechanismInfo, 
 				sizeof( MECHANISM_DERIVE_INFO ) );
 		testMechanismInfo.dataOut = buffer;
@@ -1872,8 +1928,9 @@ static const MECHANISM_TEST_INFO kdfMechanismTestInfo[] = {
 	   latter works directly on encryption contexts rather than on user-
 	   supplied input data */
 	{ { MESSAGE_DEV_KDF, MECHANISM_DERIVE_PBKDF2, ( FUNCTION_CAST ) derivePBKDF2 },
-	  { "\x46\x9D\x41\x22\x45\x10\x28\x4A\xF9\x80\x62\xCF\xD6\x4F\x4D\x66"
-		"\x4B\x76\xEC\x7E\xF0\x48\x7A\xC3\x9A\xDB\x2E\xAE\x56\x94\x65\x01", MECHANISM_OUTPUT_SIZE,
+	  { MKDATA( "\x46\x9D\x41\x22\x45\x10\x28\x4A\xF9\x80\x62\xCF\xD6\x4F\x4D\x66"
+				"\x4B\x76\xEC\x7E\xF0\x48\x7A\xC3\x9A\xDB\x2E\xAE\x56\x94\x65\x01" ), 
+				MECHANISM_OUTPUT_SIZE,
 		inputValue, MECHANISM_INPUT_SIZE, CRYPT_ALGO_HMAC_SHA2, 0,
 		saltValue, MECHANISM_SALT_SIZE, 1 } },
 #if 1	/* RFC 5869 Test 1 needs 'info' value */
@@ -1898,7 +1955,7 @@ static const MECHANISM_TEST_INFO kdfMechanismTestInfo[] = {
 		/* RFC 5869 Test 5 exceeds CRYPT_MAX_HASHSIZE */
 		/* RFC 5869 Test 6 zero-length salt */
 		/* RFC 5869 Test 7 same as Test 6 */
-#endif /* 0 */
+#endif /* 1 */
 	{ { MESSAGE_NONE } }, { { MESSAGE_NONE } }
 	};
 
@@ -1929,6 +1986,8 @@ int kdfSelftest( STDC_UNUSED void *dummy,
 
 		mechanismFunctionInfo = &kdfMechanismTestInfo[ i ].mechanismFunctionInfo;
 		mechanismTestInfoPtr = &kdfMechanismTestInfo[ i ];
+		REQUIRES( mechanismTestInfoPtr->mechanismInfo.dataOutLength <= \
+												MECHANISM_OUTPUT_SIZE_TLS );
 		memcpy( &testMechanismInfo, &mechanismTestInfoPtr->mechanismInfo, 
 				sizeof( MECHANISM_DERIVE_INFO ) );
 		testMechanismInfo.dataOut = buffer;

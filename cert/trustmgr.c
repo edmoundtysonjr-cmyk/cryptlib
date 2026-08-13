@@ -814,7 +814,6 @@ int deleteTrustEntry( IN_DATAPTR const DATAPTR trustInfo,
 		REQUIRES( isShortIntegerRangeNZ( entryToDelete->certObjectLength ) ); 
 		zeroise( certObjectPtr, entryToDelete->certObjectLength );
 		clFree( "deleteTrustEntry", certObjectPtr );
-		certObjectPtr = NULL;
 		}
 
 	/* Remove the trust entry from the list */

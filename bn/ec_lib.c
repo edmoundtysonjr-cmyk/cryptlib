@@ -262,6 +262,8 @@ int EC_GROUP_copy(EC_GROUP *dest, const EC_GROUP *src)
     return dest->meth->group_copy(dest, src);
 }
 
+#if 0	/* pcg */
+
 EC_GROUP *EC_GROUP_dup(const EC_GROUP *a)
 {
     EC_GROUP *t = NULL;
@@ -295,6 +297,7 @@ int EC_METHOD_get_field_type(const EC_METHOD *meth)
 {
     return meth->field_type;
 }
+#endif /* pcg */
 
 int EC_GROUP_set_generator(EC_GROUP *group, const EC_POINT *generator,
                            const BIGNUM *order, const BIGNUM *cofactor)
@@ -339,10 +342,13 @@ const EC_POINT *EC_GROUP_get0_generator(const EC_GROUP *group)
     return group->generator;
 }
 
+#if 0	/* pcg */
+
 BN_MONT_CTX *EC_GROUP_get_mont_data(const EC_GROUP *group)
 {
     return EC_GROUP_VERSION(group) ? group->mont_data : NULL;
 }
+#endif /* pcg */
 
 int EC_GROUP_get_order(const EC_GROUP *group, BIGNUM *order, BN_CTX *ctx)
 {
@@ -352,7 +358,9 @@ int EC_GROUP_get_order(const EC_GROUP *group, BIGNUM *order, BN_CTX *ctx)
     return !BN_is_zero(order);
 }
 
-int EC_GROUP_get_cofactor(const EC_GROUP *group, BIGNUM *cofactor,
+#if 0	/* pcg */
+
+int EC_GROUP_get_cofactor_(const EC_GROUP *group, BIGNUM *cofactor,
                           BN_CTX *ctx)
 {
     if (!BN_copy(cofactor, &group->cofactor))
@@ -422,6 +430,7 @@ size_t EC_GROUP_get_seed_len(const EC_GROUP *group)
 {
     return group->seed_len;
 }
+#endif /* pcg */
 
 int EC_GROUP_set_curve_GFp(EC_GROUP *group, const BIGNUM *p, const BIGNUM *a,
                            const BIGNUM *b, BN_CTX *ctx)
@@ -432,6 +441,8 @@ int EC_GROUP_set_curve_GFp(EC_GROUP *group, const BIGNUM *p, const BIGNUM *a,
     }
     return group->meth->group_set_curve(group, p, a, b, ctx);
 }
+
+#if 0	/* pcg */
 
 int EC_GROUP_get_curve_GFp(const EC_GROUP *group, BIGNUM *p, BIGNUM *a,
                            BIGNUM *b, BN_CTX *ctx)
@@ -532,6 +543,10 @@ int EC_GROUP_cmp(const EC_GROUP *a, const EC_GROUP *b, BN_CTX *ctx)
         r = 1;
 
     /* XXX EC_POINT_cmp() assumes that the methods are equal */
+    /* Note that this is a weird tri-state boolean compare, 0 = same, 1 = 
+       different, -1 = FILE_NOT_FOUND, so both 'different' and 'error' 
+       result in a return value from this function of 'different'.  This 
+       appears to be the intended design - pcg */
     if (r || EC_POINT_cmp(a, EC_GROUP_get0_generator(a),
                           EC_GROUP_get0_generator(b), ctx))
         r = 1;
@@ -557,6 +572,7 @@ int EC_GROUP_cmp(const EC_GROUP *a, const EC_GROUP *b, BN_CTX *ctx)
 
     return r;
 }
+#endif	/* pcg */
 
 /* this has 'package' visibility */
 int EC_EX_DATA_set_data(EC_EXTRA_DATA **ex_data, void *data,
@@ -773,6 +789,8 @@ int EC_POINT_copy(EC_POINT *dest, const EC_POINT *src)
     return dest->meth->point_copy(dest, src);
 }
 
+#if 0	/* pcg */
+
 EC_POINT *EC_POINT_dup(const EC_POINT *a, const EC_GROUP *group)
 {
     EC_POINT *t;
@@ -796,6 +814,7 @@ const EC_METHOD *EC_POINT_method_of(const EC_POINT *point)
 {
     return point->meth;
 }
+#endif	/* pcg */
 
 int EC_POINT_set_to_infinity(const EC_GROUP *group, EC_POINT *point)
 {
@@ -866,6 +885,7 @@ int EC_POINT_set_affine_coordinates_GFp(const EC_GROUP *group,
     return group->meth->point_set_affine_coordinates(group, point, x, y, ctx);
 }
 
+#if 0	/* pcg */
 #ifndef OPENSSL_NO_EC2M
 int EC_POINT_set_affine_coordinates_GF2m(const EC_GROUP *group,
                                          EC_POINT *point, const BIGNUM *x,
@@ -884,6 +904,7 @@ int EC_POINT_set_affine_coordinates_GF2m(const EC_GROUP *group,
     return group->meth->point_set_affine_coordinates(group, point, x, y, ctx);
 }
 #endif
+#endif	/* pcg */
 
 int EC_POINT_get_affine_coordinates_GFp(const EC_GROUP *group,
                                         const EC_POINT *point, BIGNUM *x,
@@ -902,6 +923,7 @@ int EC_POINT_get_affine_coordinates_GFp(const EC_GROUP *group,
     return group->meth->point_get_affine_coordinates(group, point, x, y, ctx);
 }
 
+#if 0	/* pcg */
 #ifndef OPENSSL_NO_EC2M
 int EC_POINT_get_affine_coordinates_GF2m(const EC_GROUP *group,
                                          const EC_POINT *point, BIGNUM *x,
@@ -920,6 +942,7 @@ int EC_POINT_get_affine_coordinates_GF2m(const EC_GROUP *group,
     return group->meth->point_get_affine_coordinates(group, point, x, y, ctx);
 }
 #endif
+#endif	/* pcg */
 
 int EC_POINT_add(const EC_GROUP *group, EC_POINT *r, const EC_POINT *a,
                  const EC_POINT *b, BN_CTX *ctx)
@@ -1001,6 +1024,12 @@ int EC_POINT_is_on_curve(const EC_GROUP *group, const EC_POINT *point,
 int EC_POINT_cmp(const EC_GROUP *group, const EC_POINT *a, const EC_POINT *b,
                  BN_CTX *ctx)
 {
+	/* Code that calls this function directly passes in return values from 
+	   functions that can return NULL on error, to fix this we explicitly 
+	   check for the problem here - pcg */
+	if( a == NULL || b == NULL ) 
+		return( ( a == b ) ? 0 : 1 );
+	
     if (group->meth->point_cmp == 0) {
         ECerr(EC_F_EC_POINT_CMP, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
         return -1;
@@ -1011,6 +1040,8 @@ int EC_POINT_cmp(const EC_GROUP *group, const EC_POINT *a, const EC_POINT *b,
     }
     return group->meth->point_cmp(group, a, b, ctx);
 }
+
+#if 0	/* pcg */
 
 int EC_POINT_make_affine(const EC_GROUP *group, EC_POINT *point, BN_CTX *ctx)
 {
@@ -1024,6 +1055,7 @@ int EC_POINT_make_affine(const EC_GROUP *group, EC_POINT *point, BN_CTX *ctx)
     }
     return group->meth->make_affine(group, point, ctx);
 }
+#endif	/* pcg */
 
 int EC_POINTs_make_affine(const EC_GROUP *group, size_t num,
                           EC_POINT *points[], BN_CTX *ctx)
@@ -1076,6 +1108,8 @@ int EC_POINT_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *g_scalar,
                           && p_scalar != NULL), points, scalars, ctx);
 }
 
+#if 0	/* pcg */
+
 int EC_GROUP_precompute_mult(EC_GROUP *group, BN_CTX *ctx)
 {
     if (group->meth->mul == 0)
@@ -1100,6 +1134,7 @@ int EC_GROUP_have_precompute_mult(const EC_GROUP *group)
         return 0;               /* cannot tell whether precomputation has
                                  * been performed */
 }
+#endif	/* pcg */
 
 /*
  * ec_precompute_mont_data sets |group->mont_data| from |group->order| and

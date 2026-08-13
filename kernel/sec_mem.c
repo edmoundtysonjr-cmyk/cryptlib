@@ -5,6 +5,11 @@
 *																			*
 ****************************************************************************/
 
+#if defined( __STDC__ ) || defined( _MSC_VER )
+  /* Needed for offsetof(), VC++ wasn't __STDC__ for a long time so we need 
+     an explicit exception for that case */
+  #include <stddef.h>
+#endif /* __STDC__ || Visual Studio */
 #if defined( INC_ALL )
   #include "crypt.h"
   #include "acl.h"
@@ -16,9 +21,8 @@
 #endif /* Compiler-specific includes */
 
 /* The minimum and maximum amount of secure memory that we can ever 
-   allocate.  A more normal upper bound is 1K, however the TLS session cache 
-   constitutes a single large chunk of secure memory that goes way over this 
-   limit */
+   allocate.  Contexts can include storage for scheduled keys so they
+   can get quite large */
 
 #define MIN_ALLOC_SIZE			8
 #define MAX_ALLOC_SIZE			8192
@@ -27,15 +31,11 @@
 
 	FLAG_LOCKED: The memory block has been page-locked to prevent it from 
 			being swapped to disk and will need to be unlocked when it's 
-			freed.
-
-	FLAG_PROTECTED: The memory is read-only, enforced by running a checksum
-			over it that's stored at the end of the user-visible block */
+			freed */
 
 #define MEM_FLAG_NONE			0x00	/* No memory flag */
 #define MEM_FLAG_LOCKED			0x01	/* Memory block is page-locked */
-#define MEM_FLAG_PROTECTED		0x02	/* Memory block can't be changed */
-#define MEM_FLAG_MAX			0x03	/* Maximum possible flag value */
+#define MEM_FLAG_MAX			0x01	/* Maximum possible flag value */
 
 /* To support page locking and other administration tasks we need to store 
    some additional information with the memory block.  We do this by 
@@ -211,16 +211,10 @@ static void chorusFree( void *memPtr )
 /* Calculate the checksum for a memory header block */
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-static int checksumMemHdr( INOUT_PTR MEM_INFO_HEADER *memHdrPtr )
+static int checksumMemHdr( IN_PTR const MEM_INFO_HEADER *memHdrPtr )
 	{
-	const int memHdrChecksum = memHdrPtr->checksum;
-	int checksum;
-
-	memHdrPtr->checksum = 0;
-	checksum = checksumData( memHdrPtr, MEM_INFO_HEADERSIZE );
-	memHdrPtr->checksum = memHdrChecksum;
-
-	return( checksum );
+	return( \
+		checksumData( memHdrPtr, offsetof( MEM_INFO_HEADER, checksum ) ) );
 	}
 
 /* Set the checksum for a block of memory */
@@ -230,10 +224,9 @@ static void setMemChecksum( INOUT_PTR MEM_INFO_HEADER *memHdrPtr )
 	{
 	MEM_INFO_TRAILER *memTrlPtr;
 
-	assert( isWritePtr( memHdrPtr, sizeof( MEM_INFO_HEADER * ) ) );
+	assert( isWritePtr( memHdrPtr, sizeof( MEM_INFO_HEADER ) ) );
 
-	memHdrPtr->checksum = 0;	/* Set mutable members to zero */
-	memHdrPtr->checksum = checksumData( memHdrPtr, MEM_INFO_HEADERSIZE );
+	memHdrPtr->checksum = checksumMemHdr( memHdrPtr );
 	memTrlPtr = ( MEM_INFO_TRAILER * ) \
 				( ( BYTE * ) memHdrPtr + memHdrPtr->size - MEM_INFO_TRAILERSIZE );
 	memTrlPtr->checksum = memHdrPtr->checksum;
@@ -242,12 +235,12 @@ static void setMemChecksum( INOUT_PTR MEM_INFO_HEADER *memHdrPtr )
 /* Sanity-check a memory block */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-static BOOLEAN sanityCheckMemBlockHdr( INOUT_PTR MEM_INFO_HEADER *memHdrPtr )
+static BOOLEAN sanityCheckMemBlockHdr( IN_PTR const MEM_INFO_HEADER *memHdrPtr )
 	{
 	const MEM_INFO_TRAILER *memTrlPtr;
 	int checksum;
 
-	assert( isWritePtr( memHdrPtr, sizeof( MEM_INFO_HEADER * ) ) );
+	assert( isReadPtr( memHdrPtr, sizeof( MEM_INFO_HEADER ) ) );
 
 	/* Make sure that the general header information is valid.  This is a 
 	   quick check for obviously-invalid blocks, as well as ensuring that a 
@@ -271,7 +264,7 @@ static BOOLEAN sanityCheckMemBlockHdr( INOUT_PTR MEM_INFO_HEADER *memHdrPtr )
 	/* Check that the trailer hasn't been altered */
 	memTrlPtr = ( MEM_INFO_TRAILER * ) \
 				( ( BYTE * ) memHdrPtr + memHdrPtr->size - MEM_INFO_TRAILERSIZE );
-	if( memHdrPtr->checksum != memTrlPtr->checksum )
+	if( checksum != memTrlPtr->checksum )
 		return( FALSE );
 	
 	return( TRUE );
@@ -301,7 +294,7 @@ static int insertMemBlock( INOUT_PTR MEM_INFO_HEADER **allocatedListHeadPtr,
 	assert( isWritePtr( allocatedListTailPtr, sizeof( MEM_INFO_HEADER * ) ) );
 	assert( allocatedListTail == NULL || \
 			isWritePtr( allocatedListTail, sizeof( MEM_INFO_HEADER ) ) );
-	assert( isWritePtr( memHdrPtr, sizeof( MEM_INFO_HEADER * ) ) );
+	assert( isWritePtr( memHdrPtr, sizeof( MEM_INFO_HEADER ) ) );
 
 	/* Precondition: The memory block list is empty, or there's at least a 
 	   one-entry list present */
@@ -362,10 +355,25 @@ static int unlinkMemBlock( INOUT_PTR MEM_INFO_HEADER **allocatedListHeadPtr,
 	assert( isWritePtr( allocatedListTailPtr, sizeof( MEM_INFO_HEADER * ) ) );
 	assert( allocatedListTail == NULL || \
 			isWritePtr( allocatedListTail, sizeof( MEM_INFO_HEADER ) ) );
-	assert( isWritePtr( memHdrPtr, sizeof( MEM_INFO_HEADER * ) ) );
+	assert( isWritePtr( memHdrPtr, sizeof( MEM_INFO_HEADER ) ) );
 
 	REQUIRES( DATAPTR_ISVALID( memHdrPtr->next ) );
 	REQUIRES( DATAPTR_ISVALID( memHdrPtr->prev ) );
+
+	/* Pre-validate everything (it's checked again below on a case-by-case 
+	   basis to make what's going on explicit) before we try and modify 
+	   things, so that a failure can't leave the list in an inconsistent 
+	   state */
+	if( prevBlockPtr != NULL )
+		{
+		REQUIRES( sanityCheckMemBlockHdr( prevBlockPtr ) );
+		REQUIRES( DATAPTR_GET( prevBlockPtr->next ) == memHdrPtr );
+		}
+	if( nextBlockPtr != NULL )
+		{
+		REQUIRES( sanityCheckMemBlockHdr( nextBlockPtr ) );
+		REQUIRES( DATAPTR_GET( nextBlockPtr->prev ) == memHdrPtr );
+		}
 
 	/* If we're removing the block from the start of the list, make the
 	   start the next block */
@@ -414,12 +422,16 @@ static int unlinkMemBlock( INOUT_PTR MEM_INFO_HEADER **allocatedListHeadPtr,
    page with another block of locked memory which would also be unlocked.
    The following helper function retrieves the size and address of each
    allocated block of memory to allow its presence in an about-to-be-
-   unlocked page to be checked.
+   unlocked page to be checked.  Note that one of these will be the address
+   being unlocked, which has to be filtered out by the caller.
    
-   If used, this is called from krnlMemfree() via unlockMemory(), which 
-   means that the allocation mutex is held throughout by krnlMemfree() */
+   If used, this is called from krnlMemfree() via 
+   misc/os_spec.c:unlockMemory(), which means that the allocation mutex is 
+   held throughout by krnlMemfree().  
+   
+   Currently only Windows uses this function */
 
-#if defined( __WIN32__ )
+#if defined( MEM_UNLOCK_REQUIRES_BLOCKLIST )
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 2, 3 ) ) \
 int getBlockListInfo( IN_PTR_OPT const void *currentBlockPtr, 
@@ -435,6 +447,8 @@ int getBlockListInfo( IN_PTR_OPT const void *currentBlockPtr,
 	assert( isWritePtr( size, sizeof( int ) ) );
 
 	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
+	REQUIRES( currentBlock == NULL || \
+			  sanityCheckMemBlockHdr( currentBlock ) );
 
 	/* Clear return values */
 	*address = NULL;
@@ -447,73 +461,14 @@ int getBlockListInfo( IN_PTR_OPT const void *currentBlockPtr,
 		currentBlock = DATAPTR_GET( currentBlock->next );
 	if( currentBlock == NULL )
 		return( CRYPT_ERROR_NOTFOUND );
+	ENSURES( sanityCheckMemBlockHdr( currentBlock ) );
 
 	*address = currentBlock;
 	*size = currentBlock->size;
 
 	return( CRYPT_OK );
 	}
-#endif /* Windows */
-
-#if 0	/* Currently unused, in practice would be called from a worker thread
-		   that periodically touches all secure-data pages */
-
-/* Walk the allocated block list touching each page.  In most cases we don't
-   need to explicitly touch the page since the allocated blocks are almost
-   always smaller than the MMU's page size and simply walking the list
-   touches them, but in some rare cases we need to explicitly touch each
-   page */
-
-static void touchAllocatedPages( void )
-	{
-	KERNEL_DATA *krnlData = getSystemStorage( SYSTEM_STORAGE_KRNLDATA );
-	LOOP_INDEX_PTR MEM_INFO_HEADER *memHdrPtr;
-	const int pageSize = getSysVar( SYSVAR_PAGESIZE );
-
-	REQUIRES_V( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
-
-	/* Lock the allocation object to ensure that other threads don't try to
-	   access them */
-	MUTEX_LOCK( allocation );
-
-	/* Walk down the list (which implicitly touches each page).  If the
-	   allocated region is larger than the page size, explicitly touch each 
-	   additional page */
-	LOOP_LARGE( memHdrPtr = krnlData->allocatedListHead, memHdrPtr != NULL,
-				memHdrPtr = memHdrPtr->next )
-		{
-		ENSURES( LOOP_INVARIANT_LARGE_GENERIC() );
-
-		/* If the allocated region has pages beyond the first one (which 
-		   we've already touched by accessing the header), explicitly
-		   touch those pages as well */
-		if( memHdrPtr->size > pageSize )
-			{
-			BYTE *memPtr = ( BYTE * ) memHdrPtr + pageSize;
-			int memSize = memHdrPtr->size;
-
-			/* Touch each page.  The rather convoluted expression in the loop
-			   body is to try and stop it from being optimised away - it 
-			   always evaluates to true since we only get here if 
-			   allocatedListHead != NULL, but hopefully the compiler won't 
-			   be able to figure that out */
-			LOOP_LARGE_ALT( memSize = memHdrPtr->size, memSize > pageSize, 
-						memSize -= pageSize )
-				{
-				ENSURES( LOOP_INVARIANT_LARGE_ALT_GENERIC() );
-
-				if( *memPtr || krnlData->allocatedListHead != NULL )
-					memPtr += pageSize;
-				}
-			ENSURES( LOOP_BOUND_ALT_OK );
-			}
-		}
-	ENSURES( LOOP_BOUND_OK );
-
-	/* Unlock the allocation object to allow access by other threads */
-	MUTEX_UNLOCK( allocation );
-	}
-#endif /* 0 */
+#endif /* MEM_UNLOCK_REQUIRES_BLOCKLIST */
 
 /****************************************************************************
 *																			*
@@ -551,6 +506,14 @@ void endAllocation( void )
 
 	REQUIRES_V( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
 
+	/* Warn if there's still allocated memory blocks */
+	if( DATAPTR_ISSET( krnlData->allocatedListHead ) || \
+		DATAPTR_ISSET( krnlData->allocatedListTail ) )
+		{
+		DEBUG_DIAG(( "Kernel memory list still contains allocated blocks" ));
+		assert( DEBUG_WARN );
+		}
+
 	/* Destroy any data structures required to make the allocation thread-
 	   safe */
 	MUTEX_DESTROY( allocation );
@@ -573,10 +536,7 @@ int krnlMemalloc( OUT_BUFFER_ALLOC_OPT( size ) void **pointer,
 	MEM_INFO_HEADER *memHdrPtr;
 	BYTE *memPtr;
 	BOOLEAN isLocked = FALSE;
-	const int alignedSize = roundUp( size, MEM_ROUNDSIZE );
-	const int memSize = MEM_INFO_HEADERSIZE + alignedSize + \
-						MEM_INFO_TRAILERSIZE;
-	int status;
+	int alignedSize, memSize, status;
 
 	static_assert( MEM_INFO_HEADERSIZE >= sizeof( MEM_INFO_HEADER ), \
 				   "Memlock header size" );
@@ -585,9 +545,14 @@ int krnlMemalloc( OUT_BUFFER_ALLOC_OPT( size ) void **pointer,
 	
 	REQUIRES( checkBuiltinStorage( SYSTEM_STORAGE_KRNLDATA ) );
 	REQUIRES( size >= MIN_ALLOC_SIZE && size <= MAX_ALLOC_SIZE );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
 	REQUIRES( !checkOverflowRoundup( size, MEM_ROUNDSIZE ) );
+	alignedSize = roundUp( size, MEM_ROUNDSIZE );
 	REQUIRES( !checkOverflowAdd( alignedSize, MEM_INFO_HEADERSIZE + \
 											  MEM_INFO_TRAILERSIZE ) );
+	memSize = MEM_INFO_HEADERSIZE + alignedSize + MEM_INFO_TRAILERSIZE;
 
 	/* Clear return values */
 	*pointer = NULL;
@@ -638,14 +603,20 @@ int krnlMemalloc( OUT_BUFFER_ALLOC_OPT( size ) void **pointer,
 							 memHdrPtr );
 	if( cryptStatusError( status ) )
 		{
-		/* Since the block list isn't valid, we can only unlock the
-		   memory block if it doesn't require the block list */
-#ifndef MEM_UNLOCK_REQUIRES_BLOCKLIST
+		/* The insert failed in some way, the block list may or may not be 
+		   valid but since the new block wasn't inserted we can just unlock
+		   the memory block and free it again.  On systems where we need to
+		   check getBlockListInfo() (only Windows) before unlocking this can 
+		   in theory unlock another memory block on the same page, but 
+		   that's better than slowly shrinking the working set over time.
+		   In any case this is a should-not-occur condition so shouldn't
+		   actually be an issue */
 		if( isLocked )
 			unlockMemory( memHdrPtr, memSize, TRUE );
-#endif /* MEM_UNLOCK_REQUIRES_BLOCKLIST */
 		MUTEX_UNLOCK( allocation );
 		clFree( "krnlMemAlloc", memPtr );
+		DEBUG_DIAG(( "Kernel memory block insertion failed, status %d",
+					 status ));
 		retIntError();
 		}
 	DATAPTR_SET( krnlData->allocatedListHead, allocatedListHeadPtr );
@@ -738,15 +709,6 @@ int krnlMemfree( INOUT_PTR_PTR void **pointer )
 			   TRUE : FALSE;
 	size = memHdrPtr->size;
 
-	/* Some OSes enforce page-size locking constraints that mean that we 
-	   have to have the memory block that we're locking/unlocking present in 
-	   the memory block list.  This creates a very minor race condition of a 
-	   few clock cycles, but it's unlikely we'll be paged out in that time */
-#ifdef MEM_UNLOCK_REQUIRES_BLOCKLIST
-	if( isLocked )
-		unlockMemory( memHdrPtr, size, TRUE );
-#endif /* MEM_UNLOCK_REQUIRES_BLOCKLIST */
-
 	/* Unlink the memory block from the list.  We continue if there's a 
 	   problem with the unlink, which would indicate corruption in the block
 	   list, because zeroising sensitive material takes precedence.  The
@@ -756,23 +718,58 @@ int krnlMemfree( INOUT_PTR_PTR void **pointer )
 	allocatedListTailPtr = DATAPTR_GET( krnlData->allocatedListTail );
 	status = unlinkMemBlock( &allocatedListHeadPtr, &allocatedListTailPtr, 
 							 memHdrPtr );
-	if( cryptStatusOK( status ) )
+	if( cryptStatusError( status ) )
+		{
+		DEBUG_DIAG(( "Kernel memory block corruption detected" ));
+		assert( DEBUG_WARN );
+		if( allocatedListHeadPtr == memHdrPtr )
+			{
+			/* If the block that we've failed to unlink is the one at the 
+			   start of the list, the best that we can do is clear the list 
+			   since we're about to zeroise it which means that all further
+			   accesses would fail */
+			DATAPTR_SET( krnlData->allocatedListHead, NULL );
+			DATAPTR_SET( krnlData->allocatedListTail, NULL );
+			}
+		}
+	else
 		{
 		DATAPTR_SET( krnlData->allocatedListHead, allocatedListHeadPtr );
 		DATAPTR_SET( krnlData->allocatedListTail, allocatedListTailPtr );
 		}
 
+	/* If we need the block list locked for unlockMemory(), we have to 
+	   perform the unlock now.  This introduces a minute chance of a race
+	   condition between the unlock and the zeroise below, but it's 
+	   unlikely that we'll get paged out across three lines of code */
+#ifdef MEM_UNLOCK_REQUIRES_BLOCKLIST
+	if( isLocked )
+		unlockMemory( memHdrPtr, size, TRUE );
+#endif /* MEM_UNLOCK_REQUIRES_BLOCKLIST */
+
 	MUTEX_UNLOCK( allocation );
 
 	/* Zeroise the memory (including the memlock info), free it, and zero
-	   the pointer */
+	   the pointer.  There is one case where we can't free it and that's
+	   when there's corruption in the memory block list, meaning that we
+	   couldn't unlink the block from the list.  This is another can't-
+	   occur condition because if the list has been corrupted then we can't
+	   follow it any more so it won't matter if a link that we can't get
+	   to is left pointing to freed memory, but overall it seems safer to
+	   not free the memory (that the link doesn't reliably point to) than
+	   to free it.
+	   
+	   Another option would be to set allocatedListHead and 
+	   allocatedListTail to NULL, effectively clearing the memory block 
+	   list */
 	REQUIRES( isIntegerRangeNZ( size ) ); 
 	zeroise( memPtr, size );
 #ifndef MEM_UNLOCK_REQUIRES_BLOCKLIST
 	if( isLocked )
 		unlockMemory( memHdrPtr, size, TRUE );
-#endif /* !MEM_UNLOCK_REQUIRES_BLOCKLIST */
-	clFree( "krnlMemFree", memPtr );
+#endif /* MEM_UNLOCK_REQUIRES_BLOCKLIST */
+	if( cryptStatusOK( status ) )
+		clFree( "krnlMemFree", memPtr );
 	*pointer = NULL;
 
 	return( status );

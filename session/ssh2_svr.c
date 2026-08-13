@@ -556,13 +556,11 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   any guessed ECC keyex but this never caused any problems so it's
 		   unlikely it was ever encountered */
 		status = readHSPacketSSH2( sessionInfoPtr, 
-								   ( handshakeInfo->isFixedDH || \
-								     handshakeInfo->isECDH ) ?
-									SSH_MSG_KEXDH_INIT : \
-									SSH_MSG_KEX_DH_GEX_INIT,
-								   handshakeInfo->isECDH ? \
-									ID_SIZE + sizeofString32( MIN_PKCSIZE_ECC ) : \
-									ID_SIZE + sizeofString32( MIN_PKCSIZE ) );
+					( handshakeInfo->isFixedDH || handshakeInfo->isECDH ) ? \
+					  SSH_MSG_KEXDH_INIT : SSH_MSG_KEX_DH_GEX_INIT, 
+					handshakeInfo->isECDH ? \
+						ID_SIZE + sizeofString32( MIN_PKCSIZE_BERNSTEIN ) : \
+						ID_SIZE + sizeofString32( MIN_PKCSIZE ) );
 		}
 	if( !cryptStatusError( status ) )	/* readHSPSSH2() returns a length */
 		{

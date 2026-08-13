@@ -201,6 +201,24 @@ static int readEncryptedCert( INOUT_PTR STREAM *stream,
 	}
 #endif /* 0 */
 
+/* A general handler for protocol-state errors */
+
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+static int reportStateError( INOUT_PTR SESSION_INFO *sessionInfoPtr,
+							 IN_ENUM_OPT( CMP_MESSAGE ) \
+								const CMP_MESSAGE_TYPE messageType )
+	{
+	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
+	
+	REQUIRES( isEnumRange( messageType, CMP_MESSAGE ) );
+
+	retExt( CRYPT_ERROR_INVALID, 
+			( CRYPT_ERROR_INVALID, SESSION_ERRINFO, 
+			  "%s sent %s message which isn't valid at this point",
+			  isServer( sessionInfoPtr ) ? "Client" : "Server",
+			  getCMPMessageName( messageType ) ) );
+	}
+
 /* Process a request that's (supposedly) been authorised by an RA rather 
    than coming directly from a user */
 
@@ -299,6 +317,12 @@ static int readRequestBody( INOUT_PTR STREAM *stream,
 	/* If we're fuzzing the input then we're reading static data for which 
 	   we can't go beyond this point */
 	FUZZ_SKIP_REMAINDER();
+
+	/* If we're the client then we shouldn't be seeing request messages.  
+	   These are just belt-and-suspenders checks on top of the message-
+	   type checks already performed by the caller */
+	if( !isServer( sessionInfoPtr ) )
+		return( reportStateError( sessionInfoPtr, messageType ) );
 
 	/* Import the CRMF request */
 	if( !isShortIntegerRangeMin( messageLength, MIN_CRYPT_OBJECTSIZE ) )
@@ -464,6 +488,12 @@ static int readResponseBody( INOUT_PTR STREAM *stream,
 	REQUIRES( messageType == CTAG_PB_IP || messageType == CTAG_PB_CP || \
 			  messageType == CTAG_PB_KUP || messageType == CTAG_PB_RP );
 
+	/* If we're the server then we shouldn't be seeing response messages.
+	   These are just belt-and-suspenders checks on top of the message-
+	   type checks already performed by the caller */
+	if( isServer( sessionInfoPtr ) )
+		return( reportStateError( sessionInfoPtr, messageType ) );
+
 	/* Skip any noise before the payload if necessary.  The only field that
 	   could be present here is caPubs, a field that's never defined in the
 	   standard (it literally exists purely as a named field in an ASN.1
@@ -492,7 +522,7 @@ static int readResponseBody( INOUT_PTR STREAM *stream,
 			}
 		}
 	if( cryptStatusError( status ) )
-		return( status );	/* Residual error from checkStatusPeekTag() */
+		return( status );	/* Residual error from peekTag() */
 
 	/* If it's a revocation response then the only returned data is the 
 	   status value */
@@ -692,6 +722,12 @@ static int readConfBody( INOUT_PTR STREAM *stream,
 	REQUIRES( messageType == CTAG_PB_CERTCONF );
 	REQUIRES( isShortIntegerRange( messageLength ) );
 
+	/* If we're the client then we shouldn't be seeing conf messages.
+	   These are just belt-and-suspenders checks on top of the message-
+	   type checks already performed by the caller */
+	if( !isServer( sessionInfoPtr ) )
+		return( reportStateError( sessionInfoPtr, messageType ) );
+
 	/* If there's no certStatus then the client has rejected the 
 	   certificate.  This isn't an explicit error since it's a valid 
 	   protocol outcome so we return an OK status but set the overall 
@@ -788,6 +824,10 @@ static int readGenMsgBody( INOUT_PTR STREAM *stream,
 		{
 		int length, endPos;
 
+		/* If we're the client then we shouldn't be seeing GenM requests */
+		if( !isServer( sessionInfoPtr ) )
+			return( reportStateError( sessionInfoPtr, messageType ) );
+
 		/* Read the type-and-value information */
 		status = readSequence( stream, &length );
 		if( cryptStatusError( status ) )
@@ -811,18 +851,40 @@ static int readGenMsgBody( INOUT_PTR STREAM *stream,
 					  getCMPMessageName( messageType ) ) );
 			}
 
-		/* If it's something that we don't recognise, skip it */
+		/* In yet another RFC-created booby trap, instead of providing for 
+		   some no-data-available response to unknown GenM content the spec
+		   requires (section 4.5) that "The CA must respond to the request 
+		   by providing (at least) all of the information requested by the 
+		   requester.  If some of the information cannot be provided then an 
+		   error must be conveyed to the requester", turning GenM into 
+		   Russian roulette for the client since the minute it requests 
+		   something the CA isn't aware of it triggers an error response.
+		   The RFC then contradicts itself (section 3.3.18) with "The 
+		   receiver is free to ignore any contained OBJ. IDs that it does 
+		   not recognize", so it can actually ignore them rather than 
+		   having to return an error for information it doesn't know how
+		   to provide.
+		   
+		   In practice GenM appears to never be used so we take the error-
+		   if-not-available interpretation and assume that if it's present it
+		   has to be a PKIBoot request */
 		if( value != 0 )
 			{
-			DEBUG_PRINT(( "%s: Skipping unknown %s information "
-						  "length %d.\n", 
-						  isServer( sessionInfoPtr ) ? "SVR" : "CLI", 
-						  getCMPMessageName( messageType ), length ));
-			return( CRYPT_OK );
+			DEBUG_PRINT(( "SVR: Received unknown %s information request, "
+						  "length %d.\n", getCMPMessageName( messageType ), 
+						  length ));
+
+			return( CRYPT_ERROR_INVALID );
 			}
 
+		/* We're performing a pkiBoot operation, indicated by the non-error
+		   return value for the GenM read */
 		return( CRYPT_OK );
 		}
+
+	/* If we're the server then we shouldn't be seeing GenP responses */
+	if( isServer( sessionInfoPtr ) )
+		return( reportStateError( sessionInfoPtr, messageType ) );
 
 	/* It's a response GenMsg containing a PKIBoot response with the 
 	   InfoTypeAndValue handled as CMS content (see the comment for 

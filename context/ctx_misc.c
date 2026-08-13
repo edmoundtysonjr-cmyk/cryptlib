@@ -171,7 +171,7 @@ static BOOLEAN sanityCheckFunctionality( const CAPABILITY_INFO *capabilityInfoPt
 			return( FALSE );
 			}
 		if( ( isDlpAlgo( cryptAlgo ) || isEccAlgo( cryptAlgo ) ) && \
-			!isKeyexAlgo( cryptAlgo ) )
+			!isKeyexAlgo( cryptAlgo ) && !isBernsteinAlgo( cryptAlgo ) )
 			{
 			if( capabilityInfoPtr->encodeDLValuesFunction == NULL || \
 				capabilityInfoPtr->decodeDLValuesFunction == NULL )
@@ -317,10 +317,14 @@ BOOLEAN sanityCheckCapability( const CAPABILITY_INFO *capabilityInfoPtr )
 	/* Check any remaining algorithm types */
 	if( isPkcAlgo( cryptAlgo ) )
 		{
-		const int minKeySize = isEccAlgo( cryptAlgo ) ? \
+		const int minKeySize = isPqcAlgo( cryptAlgo ) ? \
+							   MIN_PKCSIZE_PQC : \
+							   isEccAlgo( cryptAlgo ) ? \
 							   MIN_PKCSIZE_ECC : MIN_PKCSIZE;
 		const int maxKeySize = isPqcAlgo( cryptAlgo ) ? \
-							   1536 : CRYPT_MAX_PKCSIZE;
+							   MAX_PKCSIZE_PQC : \
+							   isEccAlgo( cryptAlgo ) ? \
+							   CRYPT_MAX_PKCSIZE_ECC : CRYPT_MAX_PKCSIZE;
 
 		if( capabilityInfoPtr->blockSize != 0 || \
 			capabilityInfoPtr->minKeySize < minKeySize || \
@@ -399,16 +403,16 @@ BOOLEAN sanityCheckCapability( const CAPABILITY_INFO *capabilityInfoPtr )
 
 /* Get information from a capability record */
 
-STDC_NONNULL_ARG( ( 1, 2 ) ) \
-void getCapabilityInfo( OUT_PTR CRYPT_QUERY_INFO *cryptQueryInfo,
+RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+int getCapabilityInfo( OUT_PTR CRYPT_QUERY_INFO *cryptQueryInfo,
 						IN_PTR const CAPABILITY_INFO *capabilityInfoPtr )
 	{
 	assert( isWritePtr( cryptQueryInfo, sizeof( CRYPT_QUERY_INFO ) ) );
 	assert( isReadPtr( capabilityInfoPtr, sizeof( CAPABILITY_INFO ) ) );
 
 	memset( cryptQueryInfo, 0, sizeof( CRYPT_QUERY_INFO ) );
-	REQUIRES_V( rangeCheck( capabilityInfoPtr->algoNameLen, 1, 
-							CRYPT_MAX_TEXTSIZE ) );
+	REQUIRES( rangeCheck( capabilityInfoPtr->algoNameLen, 1, 
+						  CRYPT_MAX_TEXTSIZE - 1 ) );
 	memcpy( cryptQueryInfo->algoName, capabilityInfoPtr->algoName,
 			capabilityInfoPtr->algoNameLen );
 	cryptQueryInfo->algoName[ capabilityInfoPtr->algoNameLen ] = '\0';
@@ -416,6 +420,8 @@ void getCapabilityInfo( OUT_PTR CRYPT_QUERY_INFO *cryptQueryInfo,
 	cryptQueryInfo->minKeySize = capabilityInfoPtr->minKeySize;
 	cryptQueryInfo->keySize = capabilityInfoPtr->keySize;
 	cryptQueryInfo->maxKeySize = capabilityInfoPtr->maxKeySize;
+	
+	return( CRYPT_OK );
 	}
 
 /* Find the capability record for a given encryption algorithm */
@@ -437,13 +443,15 @@ const CAPABILITY_INFO *findCapabilityInfo(
 		const CAPABILITY_INFO *capabilityInfoPtr = \
 						DATAPTR_GET( capabilityInfoListPtr->info );
 
-		REQUIRES_N( capabilityInfoPtr != NULL );
-		REQUIRES_N( sanityCheckCapability( capabilityInfoPtr ) );
-
 		ENSURES_N( LOOP_INVARIANT_MED_GENERIC() );
 
+		REQUIRES_N( capabilityInfoPtr != NULL );
+
 		if( capabilityInfoPtr->cryptAlgo == cryptAlgo )
+			{
+			ENSURES_N( sanityCheckCapability( capabilityInfoPtr ) );
 			return( capabilityInfoPtr );
+			}
 		}
 	ENSURES_N( LOOP_BOUND_OK );
 
@@ -461,8 +469,8 @@ const CAPABILITY_INFO *findCapabilityInfo(
    handler doesn't want to handle the query */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-int getDefaultInfo( IN_ENUM( CAPABILITY_INFO ) \
-						const CAPABILITY_INFO_TYPE type, 
+int getDefaultInfo( IN_ENUM( CONTEXT_INFO ) \
+						const CONTEXT_INFO_TYPE type, 
 					INOUT_PTR_OPT CONTEXT_INFO *contextInfoPtr,
 					OUT_PTR void *data, 
 					IN_INT_Z const int dataLength )
@@ -474,25 +482,27 @@ int getDefaultInfo( IN_ENUM( CAPABILITY_INFO ) \
 
 	REQUIRES( contextInfoPtr == NULL || \
 			  sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( isEnumRange( type, CAPABILITY_INFO ) );
+	REQUIRES( isEnumRange( type, CONTEXT_INFO ) );
 
 	switch( type )
 		{
-		case CAPABILITY_INFO_STATESIZE:
+		case CONTEXT_INFO_STATESIZE:
 			{
 			int *valuePtr = ( int * ) data;
 
 			/* If we're falling through to a default handler for this then 
 			   it's because the context has no state information */
+			REQUIRES( dataLength == sizeof( int ) );
 			*valuePtr = 0;
 
 			return( CRYPT_OK );
 			}
 
-		case CAPABILITY_INFO_STATEALIGNTYPE:
+		case CONTEXT_INFO_STATEALIGNTYPE:
 			{
 			int *valuePtr = ( int * ) data;
 
+			REQUIRES( dataLength == sizeof( int ) );
 			*valuePtr = CONTEXT_STORAGE_ALIGN_SIZE;
 
 			return( CRYPT_OK );
@@ -543,14 +553,21 @@ static int getHWAlgoID( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 		{ CRYPT_ERROR, CRYPT_ERROR },
 			{ CRYPT_ERROR, CRYPT_ERROR }
 		};
+	int value, status;	/* int vs. uint32_t */
 
 	assert( isWritePtr( hwAlgoID, sizeof( uint32_t ) ) );
 
 	REQUIRES( isEnumRange( cryptAlgo, CRYPT_ALGO ) );
+	
+	/* Clear return value */
+	*hwAlgoID = 0;
 
 	/* Map the cryptlib algorithm ID to the /dev/crypto equivalent value */
-	return( mapValue( cryptAlgo, hwAlgoID, hwCryptInfo, 
-					  FAILSAFE_ARRAYSIZE( hwCryptInfo, MAP_TABLE ) ) );
+	status = mapValue( cryptAlgo, &value, hwCryptInfo, 
+					   FAILSAFE_ARRAYSIZE( hwCryptInfo, MAP_TABLE ) );
+	if( cryptStatusOK( status ) )
+		*hwAlgoID = value;
+	return( status );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
@@ -558,7 +575,8 @@ int hwCryptoInit( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr;
 	struct session_op session;
-	int hwAlgoID, cryptoFD, status;
+	uint32_t hwAlgoID;
+	int cryptoFD, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
@@ -580,11 +598,13 @@ int hwCryptoInit( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 		close( cryptoFD );
 		return( CRYPT_ERROR_OPEN );
 		}
-	fcntl( cryptoFD, F_SETFD, FD_CLOEXEC );
+	( void ) fcntl( cryptoFD, F_SETFD, FD_CLOEXEC );
 	memset( &session, 0, sizeof( struct session_op ) );
 	if( isConvAlgo( capabilityInfoPtr->cryptAlgo ) )
 		{
-		CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+		CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+
+		REQUIRES( convInfo != NULL );
 
 		session.cipher = hwAlgoID;
 		session.key = convInfo->userKey;
@@ -643,9 +663,12 @@ int hwCryptoCloneState( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	struct session_op session;
 	const uint32_t oldSessionID = contextInfoPtr->sessionID;
 	const int oldCryptoFD = contextInfoPtr->cryptoFD;
-	int cryptoFD, hwAlgoID, status;
+	uint32_t hwAlgoID;
+	int cryptoFD, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
+
+	REQUIRES( TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_HWCRYPTO ) );
 
 	/* Since we're referencing the original context's crypto FD and session
 	   ID, we clear them before continuing to make sure that if any of the
@@ -670,7 +693,9 @@ int hwCryptoCloneState( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	   crypto, this probably isn't such a bad thing... */
 	if( isConvAlgo( capabilityInfoPtr->cryptAlgo ) )
 		{
-		CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+		CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+
+		REQUIRES( convInfo != NULL );
 
 		CLEAR_FLAGS( contextInfoPtr->flags, 
 					 CONTEXT_FLAG_DUMMY | CONTEXT_FLAG_DUMMY_INITED | \
@@ -698,7 +723,9 @@ int hwCryptoCloneState( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	memset( &session, 0, sizeof( struct session_op ) );
 	if( isConvAlgo( capabilityInfoPtr->cryptAlgo ) )
 		{
-		CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+		CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
+
+		REQUIRES( convInfo != NULL );
 
 		session.cipher = hwAlgoID;
 		session.key = convInfo->userKey;
@@ -719,10 +746,17 @@ int hwCryptoCloneState( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 		copyInfo.src_ses = oldSessionID;
 		copyInfo.dst_ses = session.ses;
 		status = ioctl( cryptoFD, CIOCCPHASH, &copyInfo );
+		if( status != 0 )
+			{
+			/* The session was created but the operation on it failed, close 
+			   the session before we exit */
+			( void ) ioctl( cryptoFD, CIOCFSESSION, &session.ses );
+			}
 		}
 	if( status != 0 )
 		{
-		DEBUG_DIAG(( "CIOCCPHASH ioctl failed, errno = %d", errno ));
+		DEBUG_DIAG(( "CIOCGSESSION/CIOCCPHASH ioctl failed, errno = %d", 
+					 errno ));
 		close( cryptoFD );
 
 		return( CRYPT_ERROR_FAILED );
@@ -750,12 +784,14 @@ int hwCryptoHash( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				  IN_BUFFER( noBytes ) BYTE *buffer, 
 				  IN_LENGTH_Z int noBytes )
 	{
+	HASH_INFO *hashInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	struct crypt_op cryptOpInfo;
 	int cryptoFlags = COP_FLAG_NONE;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_HWCRYPTO ) );
+	REQUIRES( hashInfo != NULL );
 
 	/* Set up the processing flags as required */
 #ifdef __linux__
@@ -775,7 +811,7 @@ int hwCryptoHash( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	cryptOpInfo.src = buffer;
 	cryptOpInfo.len = noBytes;
 	if( noBytes == 0 )
-		cryptOpInfo.mac = contextInfoPtr->ctxHash->hash;
+		cryptOpInfo.mac = hashInfo->hash;
 	clearErrno();
 	if( ioctl( contextInfoPtr->cryptoFD, CIOCCRYPT, &cryptOpInfo ) ) 
 		{
@@ -792,11 +828,13 @@ int hwCryptoCrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				   IN_LENGTH_Z int noBytes,
 				   IN_BOOL const BOOLEAN doEncrypt )
 	{
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	struct crypt_op cryptOpInfo;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_HWCRYPTO ) );
+	REQUIRES( convInfo != NULL );
 
 	/* Set up the crypto info and send it to the cryptologic */	
 	memset( &cryptOpInfo, 0, sizeof( struct crypt_op ) );
@@ -807,7 +845,7 @@ int hwCryptoCrypt( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 #endif /* __linux__ */
 	cryptOpInfo.src = cryptOpInfo.dst = buffer;
 	cryptOpInfo.len = noBytes;
-	cryptOpInfo.iv = contextInfoPtr->ctxConv->currentIV;
+	cryptOpInfo.iv = convInfo->currentIV;
 	clearErrno();
 	if( ioctl( contextInfoPtr->cryptoFD, CIOCCRYPT, &cryptOpInfo ) ) 
 		{
@@ -861,31 +899,50 @@ int staticInitContext( OUT_PTR CONTEXT_INFO *contextInfoPtr,
 	switch( type )
 		{
 		case CONTEXT_CONV:
+			{
+			CONV_INFO *convInfo = contextData;
+
 			REQUIRES( keyData == ptr_align( keyData, 8 ) || \
 					  keyData == ptr_align( keyData, 16 ) );
-			contextInfoPtr->ctxConv = ( CONV_INFO * ) contextData;
-			contextInfoPtr->ctxConv->key = ( void * ) keyData;
+					  /* 16 implies 8, this is to document the two 
+					     possibilities */
+
+			DATAPTR_SET( contextInfoPtr->keyingInfo, contextData );
+			convInfo->key = ( void * ) keyData;
 			break;
+			}
 
 		case CONTEXT_HASH:
-			contextInfoPtr->ctxHash = ( HASH_INFO * ) contextData;
-			contextInfoPtr->ctxHash->hashInfo = ( void * ) keyData;
+			{
+			HASH_INFO *hashInfo = contextData;
+			
+			DATAPTR_SET( contextInfoPtr->keyingInfo, contextData );
+			hashInfo->hashInfo = ( void * ) keyData;
 			break;
+			}
 
 		case CONTEXT_MAC:
-			contextInfoPtr->ctxMAC = ( MAC_INFO * ) contextData;
-			contextInfoPtr->ctxMAC->macInfo = ( void * ) keyData;
+			{
+			MAC_INFO *macInfo = contextData;
+
+			DATAPTR_SET( contextInfoPtr->keyingInfo, contextData );
+			macInfo->macInfo = ( void * ) keyData;
 			break;
+			}
 
 		case CONTEXT_PKC:
 			{
 			PKC_INFO *pkcInfo = contextData;
 
 			/* PKC context initialisation is a bit more complex because we
-			   have to set up all of the bignum values as well.  Since static
-			   contexts are only used for self-test operations we set the 
-			   side-channel protection level to zero */
-			contextInfoPtr->ctxPKC = pkcInfo;
+			   have to set up all of the PKC-related values as well.  The
+			   initContextBignums() function is slightly misnamed since a
+			   few algorithms don't actually use bignums, in which case it
+			   initialises equivalent non-bignum information.
+			   
+			   Since static contexts are only used for self-test operations 
+			   we set the side-channel protection level to zero */
+			DATAPTR_SET( contextInfoPtr->ctxPKC, contextData );
 			REQUIRES( rangeCheck( sizeof( PKC_INFO ), 32, 
 								  contextDataSize ) );
 			memset( pkcInfo, 0, sizeof( PKC_INFO ) );
@@ -910,8 +967,8 @@ void staticDestroyContext( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
-	ENSURES_V( TEST_FLAG( contextInfoPtr->flags, 
-						  CONTEXT_FLAG_STATICCONTEXT ) );
+	REQUIRES_V( TEST_FLAG( contextInfoPtr->flags, 
+						   CONTEXT_FLAG_STATICCONTEXT ) );
 
 	/* If this is a context that's implemented via built-in crypto hardware, 
 	   perform any required cleanup */
@@ -922,10 +979,16 @@ void staticDestroyContext( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 
 	if( contextInfoPtr->type == CONTEXT_PKC )
 		{
-		endContextBignums( contextInfoPtr->ctxPKC, 
-						   GET_FLAG( contextInfoPtr->flags, 
-									 CONTEXT_FLAG_DUMMY ) ? \
-								TRUE : FALSE );
+		PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+
+		assert( pkcInfo != NULL );	/* Warn on error */
+		if( pkcInfo != NULL )
+			{
+			endContextBignums( pkcInfo, 
+							   GET_FLAG( contextInfoPtr->flags, 
+										 CONTEXT_FLAG_DUMMY ) ? \
+									TRUE : FALSE );
+			}
 		}
 
 	memset( contextInfoPtr, 0, sizeof( CONTEXT_INFO ) );
@@ -1008,14 +1071,15 @@ int testHash( IN_PTR const CAPABILITY_INFO *capabilityInfo,
 			  IN_PTR const void *hashValue )
 	{
 	CONTEXT_INFO contextInfo;
-	HASH_INFO contextData;
+	HASH_INFO contextData, *hashInfo = &contextData;
 	int status;
 
 	assert( isReadPtr( capabilityInfo, sizeof( CAPABILITY_INFO ) ) );
 	assert( isReadPtr( hashDataStorage, 16 ) );
 	assert( ( data == NULL && dataLength == 0 ) || \
 			isReadPtrDynamic( data, dataLength ) );
-	assert( isReadPtrDynamic( hashValue, capabilityInfo->blockSize ) );
+	assert( isReadPtrDynamic( hashValue, ( hashSize == 0 ) ? \
+							  capabilityInfo->blockSize : hashSize ) );
 
 	REQUIRES( ( data == NULL && dataLength == 0 ) || \
 			  ( data != NULL && \
@@ -1053,8 +1117,8 @@ int testHash( IN_PTR const CAPABILITY_INFO *capabilityInfo,
 												  MKDATA( "" ), 0 );
 		}
 	if( cryptStatusOK( status ) && \
-		memcmp( contextInfo.ctxHash->hash, hashValue, 
-				capabilityInfo->blockSize ) )
+		memcmp( hashInfo->hash, hashValue, 
+				( hashSize == 0 ) ? capabilityInfo->blockSize : hashSize ) )
 		{
 		DEBUG_DIAG(( "%s hash test failed", capabilityInfo->algoName ));
 		status = CRYPT_ERROR_FAILED;
@@ -1069,24 +1133,27 @@ int testMAC( IN_PTR const CAPABILITY_INFO *capabilityInfo,
 			 IN_LENGTH_HASH_Z const int macSize,
 			 IN_PTR const void *macDataStorage,
 			 IN_BUFFER( keySize ) const void *key, 
-			 IN_LENGTH_SHORT_MIN( MIN_KEYSIZE ) const int keySize, 
+			 IN_LENGTH_SHORT_MIN( 4 ) const int keySize, 
 			 IN_BUFFER( dataLength ) const void *data, 
 			 IN_LENGTH_SHORT_MIN( 8 ) const int dataLength,
 			 IN_PTR const void *hashValue )
 	{
 	CONTEXT_INFO contextInfo;
-	MAC_INFO contextData;
+	MAC_INFO contextData, *macInfo = &contextData;
 	int status;
 
 	assert( isReadPtr( capabilityInfo, sizeof( CAPABILITY_INFO ) ) );
 	assert( isReadPtr( macDataStorage, 16 ) );
 	assert( isReadPtrDynamic( key, keySize ) );
 	assert( isReadPtrDynamic( data, dataLength ) );
-	assert( isReadPtrDynamic( hashValue, capabilityInfo->blockSize ) );
+	assert( isReadPtrDynamic( hashValue, ( macSize == 0 ) ? \
+							  capabilityInfo->blockSize : macSize ) );
 
 	REQUIRES( macSize == 0 || \
 			  ( macSize >= MIN_HASHSIZE && macSize <= CRYPT_MAX_HASHSIZE ) );
 	REQUIRES( isShortIntegerRangeMin( keySize, 4 ) );
+			  /* The very short key is required by some of the test 
+			     vectors */
 	REQUIRES( isShortIntegerRangeMin( dataLength, 8 ) );
 
 	status = staticInitContext( &contextInfo, CONTEXT_MAC, capabilityInfo,
@@ -1120,8 +1187,8 @@ int testMAC( IN_PTR const CAPABILITY_INFO *capabilityInfo,
 												  MKDATA( "" ), 0 );
 		}
 	if( cryptStatusOK( status ) && \
-		memcmp( contextInfo.ctxMAC->mac, hashValue, 
-				capabilityInfo->blockSize ) )
+		memcmp( macInfo->mac, hashValue, 
+				( macSize == 0 ) ? capabilityInfo->blockSize : macSize ) )
 		{
 		DEBUG_DIAG(( "%s MAC test failed", capabilityInfo->algoName ));
 		status = CRYPT_ERROR_FAILED;

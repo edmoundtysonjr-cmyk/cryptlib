@@ -17,7 +17,7 @@
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int attributeCopy( INOUT_PTR MESSAGE_DATA *msgData, 
 				   IN_BUFFER( attributeLength ) const void *attribute, 
-				   IN_LENGTH_SHORT_Z const int attributeLength );
+				   IN_LENGTH_SHORT const int attributeLength );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
 int attributeCopyParams( OUT_BUFFER_OPT( destMaxLength, \
 										 *destLength ) void *dest, 
@@ -130,7 +130,7 @@ struct ST;
 typedef enum {
 	READTEXT_NONE,			/* No readtext option */
 	READTEXT_MULTILINE,		/* Allow multi-line continuations */
-	READTEXT_RAW,			/* Return raw, non-canonicalised input */
+	READTEXT_RAW,			/* Return non-canonicalised input */
 	READTEXT_LAST			/* Last valid readtext option type */
 	} READTEXT_TYPE;
 
@@ -197,9 +197,9 @@ int getSysVar( IN_ENUM( SYSVAR ) const SYSVAR_TYPE type );
 #define HWINTRINS_FLAG_XSHA			0x008	/* VIA XSHA instruction support */
 #define HWINTRINS_FLAG_MONTMUL		0x010	/* VIA bignum instruction support */
 #define HWINTRINS_FLAG_TRNG			0x020	/* AMD Geode LX TRNG MSR support */
-#define HWINTRINS_FLAG_AES			0x040	/* Intel AES instruction support */
-#define HWINTRINS_FLAG_RDRAND		0x080	/* Intel RDRAND instruction support */
-#define HWINTRINS_FLAG_RDSEED		0x100	/* Intel RDSEED instruction support */
+#define HWINTRINS_FLAG_AES			0x040	/* AES instruction support */
+#define HWINTRINS_FLAG_RDRAND		0x080	/* RDRAND instruction support */
+#define HWINTRINS_FLAG_RDSEED		0x100	/* RDSEED instruction support */
 #define HWINTRINS_FLAG_MAX			0x1FF	/* Maximum possible flag value */
 
 #define HWINTRINS_FLAG_LAST			HWINTRINS_FLAG_MAX	/* Define for source code analyser */
@@ -278,7 +278,7 @@ int getSysVar( IN_ENUM( SYSVAR ) const SYSVAR_TYPE type );
    headaches */
 					
 STDC_NONNULL_ARG( ( 1 ) ) \
-char *sanitiseString( INOUT_BUFFER( strMaxLen, strLen ) void *string, 
+char *sanitiseString( INOUT_BUFFER_FIXED( strMaxLen ) void *string, 
 					  IN_LENGTH_SHORT const int strMaxLen, 
 					  IN_LENGTH_SHORT const int strLen );
 
@@ -320,7 +320,7 @@ int strParseNumeric( IN_BUFFER( strLen ) const char *str,
 					 OUT_INT_Z int *numericValue, 
 					 IN_RANGE( 0, 100 ) const int minValue, 
 					 IN_RANGE( minValue, MAX_INTLENGTH ) const int maxValue );
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int strGetHex( IN_BUFFER( strLen ) const char *str, 
 			   IN_LENGTH_SHORT const int strLen, 
 			   OUT_INT_Z int *numericValue, 
@@ -1179,13 +1179,16 @@ void freeMemPool( INOUT_PTR void *statePtr, IN_PTR void *memblock );
    actually produces warnings, although they tell you nothing about what
    the problem is, and then it outputs code that crashes when run).
    
-   We have to insert an additional dummy value before the storage 
-   declaration to ensure the correct alignment for the storage itself, in
-   particular on 64-bit platforms with the LLP64/LP64 memory model (which 
-   means most current systems) the storage block may end up 32-bit aligned 
-   if the compiler aligns to, at most, the nearest 32-bit integer value.  We 
-   can't declare the storage as a long since under LLP64 it's only 32 bits 
-   while a pointer is still 64 bits */
+   For some older compilers that don't support ALIGN_SPECIFIER() we have 
+   to insert an additional dummy value before the storage declaration to 
+   ensure the correct alignment for the storage itself, in particular on 
+   64-bit platforms with the LLP64/LP64 memory model (which means most 
+   current systems) the storage block may end up 32-bit aligned if the 
+   compiler aligns to, at most, the nearest 32-bit integer value.
+   
+   On systems that do support ALIGN_SPECIFIER(), which in practice is almost 
+   all of them, we have to align to the largest possible pointer size, 
+   128 bits for capability-architecture pointers */
 
 #ifdef HAS_STDC_FLEXARRAY
   /* Non-clang versions of IBM's xlc have erratic flexarray support, using
@@ -1204,16 +1207,14 @@ void freeMemPool( INOUT_PTR void *statePtr, IN_PTR void *memblock );
   #else
 	#define DECLARE_VARSTRUCT_VARS \
 			int storageSize; \
-			void *_align_value; \
 			BUFFER_FIXED( storageSize ) \
-			BYTE storage[] FLEXARRAY_COUNT( storageSize )
+			ALIGN_SPECIFIER( 16 ) BYTE storage[] FLEXARRAY_COUNT( storageSize )
   #endif /* IBM C vs. everything else */
 #else
   #define DECLARE_VARSTRUCT_VARS \
 		  int storageSize; \
-		  void *_align_value; \
 		  BUFFER_FIXED( storageSize ) \
-		  BYTE storage[ 1 ]
+		  ALIGN_SPECIFIER( 16 ) BYTE storage[ 1 ]
 #endif /* HAS_STDC_FLEXARRAY */
 
 #define initVarStruct( structure, structureType, size, valueName ) \
@@ -1348,16 +1349,24 @@ void getMacAtomicFunction( IN_ALGO const CRYPT_ALGO_TYPE macAlgorithm,
 						   OUT_PTR_PTR \
 								MAC_FUNCTION_ATOMIC *macFunctionAtomic );
 
-/* Sometimes all that we need is a quick-reject check, usually performed to 
-   lighten the load before we do a full hash check.  The following function 
-   returns an integer checksum that can be used to weed out non-matches.  If 
-   the checksum matches, we use the more heavyweight full hash of the data */
+/* Checksum a block of memory using FNV1-a.  This is used for two things, as
+   an actual checksum, and as a quick-reject check to lighten the load before 
+   we do a full (heavyweight) hash check.  For the continuing-checksum
+   form checksumDataExt(), the first call passes in CHECKSUMDATA_INIT_VALUE
+   as an indicator to reset the checksum, this can never be returned as a
+   checksum value which is bounded by 0 ... INT_MAX */
 
 #define HASH_DATA_SIZE	16
 
-RETVAL_RANGE( MAX_ERROR, 0x7FFFFFFF ) STDC_NONNULL_ARG( ( 1 ) ) \
+#define CHECKSUMDATA_INIT_VALUE		( ( unsigned int ) -1 )
+
+RETVAL_RANGE( 0, INT_MAX ) STDC_NONNULL_ARG( ( 1 ) ) \
 int checksumData( IN_BUFFER( dataLength ) const void *data, 
 				  IN_DATALENGTH const int dataLength );
+RETVAL_RANGE( 0, INT_MAX ) STDC_NONNULL_ARG( ( 1 ) ) \
+int checksumDataExt( IN_BUFFER( dataLength ) const void *data,
+					 IN_DATALENGTH const int dataLength,
+					 const unsigned int initialValue );
 STDC_NONNULL_ARG( ( 1, 3 ) ) \
 void hashData( OUT_BUFFER_FIXED( hashMaxLength ) BYTE *hash, 
 			   IN_LENGTH_HASH const int hashMaxLength, 
@@ -1373,7 +1382,7 @@ BOOLEAN compareDataConstTime( IN_BUFFER( length ) const void *src,
 							  IN_BUFFER( length ) const void *dest,
 							  IN_LENGTH_SHORT const int length );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN checkZeroConstTime( IN_BUFFER( strLen ) const void *data,
+BOOLEAN checkZeroConstTime( IN_BUFFER( length ) const void *data,
 							IN_LENGTH_SHORT const int length );
 
 /****************************************************************************
@@ -1383,8 +1392,9 @@ BOOLEAN checkZeroConstTime( IN_BUFFER( strLen ) const void *data,
 ****************************************************************************/
 
 /* Signatures usually sign a hash of the data, with an optional second hash 
-   for TLS 1.0 - 1.1 signatures, but some special-snowflake designs want to 
-   sign the entire message so we need to also allow for that */
+   for TLS 1.0 - 1.1 signatures.  Some special-snowflake designs want to 
+   sign the entire message instead of just a hash so we need to also allow 
+   for that as well */
 
 typedef struct {
 	/* Message hash information.  The hash algorithm and parameter are filled
@@ -1394,8 +1404,8 @@ typedef struct {
 	int hashParam;
 	CRYPT_CONTEXT hashContext2;		/* Secondary hash context (TLS 1.0-1.1) */
 	
-	/* Message data information */
-	BUFFER_FIXED( length ) \
+	/* Message data information for special-snowflake algorithms */
+	BUFFER_OPT_FIXED( length ) \
 	const void *data;				/* Data to sign */
 	int length;						/* Length of data */
 	} SIG_DATA_INFO;
@@ -1418,7 +1428,12 @@ typedef struct {
 
 /* Signatures can have all manner of additional odds and ends associated 
    with them, the following structure contains these additional optional
-   values */
+   values.
+   
+   The handles are initialised to the standard not-initialised value of 
+   CRYPT_ERROR, for the functions where they're optional parameters, for
+   example createSignatureCMS(), they're converted to CRYPT_UNUSED as 
+   required by the caller */
 
 typedef struct {
 	/* CMS additional signature information */
@@ -1457,8 +1472,9 @@ typedef struct {
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3, 6, 8 ) ) \
 int iCryptCreateSignature( OUT_BUFFER_OPT( signatureMaxLength, *signatureLength ) \
 							void *signature, 
-						   IN_DATALENGTH_Z const int signatureMaxLength,
-						   OUT_DATALENGTH_Z int *signatureLength,
+						   IN_LENGTH_SHORT_Z const int signatureMaxLength,
+						   OUT_LENGTH_BOUNDED_SHORT_Z( signatureMaxLength ) \
+							int *signatureLength,
 						   IN_ENUM( CRYPT_FORMAT ) \
 							const CRYPT_FORMAT_TYPE formatType,
 						   IN_HANDLE const CRYPT_CONTEXT iSignContext,
@@ -1647,23 +1663,6 @@ int exportECCPoint( OUT_BUFFER_OPT( dataMaxLength, *dataLength ) void *data,
 					IN_PTR TYPECAST( const BIGNUM * ) const struct BN *bignumPtr2,
 					IN_LENGTH_PKC const int fieldSize );
 #endif /* USE_ECDH || USE_ECDSA */
-#if defined( USE_X25519 ) || defined( USE_ED25519 )
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-int import25519ByteString( INOUT_PTR TYPECAST( BIGNUM * ) 
-								struct BN *bignumPtr, 
-						   IN_BUFFER( length ) const void *buffer, 
-						   IN_LENGTH_SHORT_MIN( MIN_PKCSIZE_BERNSTEIN ) \
-								const int length );
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 4 ) ) \
-int export25519ByteString( OUT_BUFFER( dataMaxLength, *dataLength ) 
-								void *data, 
-						   IN_LENGTH_SHORT_MIN( MIN_PKCSIZE_BERNSTEIN ) \
-								const int dataMaxLength, 
-						   OUT_LENGTH_BOUNDED_Z( dataMaxLength ) 
-								int *dataLength,
-						   IN_PTR TYPECAST( BIGNUM * ) 
-								const struct BN *bignumPtr );
-#endif /* USE_X25519 || USE_ED25519 */
 
 /****************************************************************************
 *																			*
@@ -1803,7 +1802,7 @@ int createKeysetIndirect( INOUT_PTR MESSAGE_CREATEOBJECT_INFO *createInfo,
 						  STDC_UNUSED const int auxValue );
 #endif /* USE_HARDWARE || USE_TPM */
 
-/* Prototypes for self-test functions in int_api.c */
+/* Prototypes for self-test functions in various int_xxx.c files */
 
 CHECK_RETVAL_BOOL \
 BOOLEAN testIntAPI( void );

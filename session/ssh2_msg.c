@@ -413,6 +413,11 @@ int processChannelControlMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			{
 			int length;
 
+			/* Extended data has an additional field before the payload, see
+			   the long comment further down */
+			if( sshInfo->packetType == SSH_MSG_CHANNEL_EXTENDED_DATA )
+				( void ) readUint32( stream );
+			
 			/* Get the payload length and make sure that it's
 			   (approximately) valid, more exact checking has already been
 			   done by the caller so we don't need to return extended error
@@ -440,17 +445,23 @@ int processChannelControlMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 			/* The extended data message is used for out-of-band data sent
 			   over a channel, specifically output sent to stderr from a
-			   shell command.  What to do with this is somewhat uncertain,
-			   the only possible action that we could take apart from just
-			   ignoring it is to convert it back to in-band data.  However,
-			   something running a shell command may not expect to get
-			   anything returned in this manner (see the comment for the
-			   port-forwarding channel open in the client-side channel-open
-			   code for more on this) so for now we just ignore it and 
-			   assume that the user will rely on results sent as in-band
-			   data.  This should be fairly safe since this message type
-			   seems to be rarely (if ever) used, so apps will function
-			   without it */
+			   shell command (SSH_EXTENDED_DATA_STDERR is the only data type
+			   code defined for this message).
+			   
+			   What to do with this is somewhat uncertain, the only possible 
+			   action that we could take apart from just ignoring it is to 
+			   convert it back to in-band data.  However, something running 
+			   a shell command may not expect to get anything returned in 
+			   this manner (see the comment for the port-forwarding channel 
+			   open in the client-side channel-open code for more on this) 
+			   so for now we just ignore it and assume that the user will 
+			   rely on results sent as in-band data.
+			   
+			   This should be fairly safe since this message type has 
+			   apparently never been seen used with cryptlib (up until 
+			   release 3.4.9.4 the code mis-read the data type code without 
+			   anyone reporting a problem), so apps will function without 
+			   it */
 			return( OK_SPECIAL );
 			}
 
@@ -592,7 +603,7 @@ int closeChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	{
 	SES_READHEADER_FUNCTION readHeaderFunction;
 	READSTATE_INFO readInfo;
-	const int currWriteChannelNo = \
+	const long currWriteChannelNo = \
 				getCurrentChannelNo( sessionInfoPtr, CHANNEL_WRITE );
 	LOOP_INDEX noChannels = 1;
 	int status;

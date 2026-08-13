@@ -5,7 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>
 #if defined( INC_ALL )
   #include "crypt.h"
   #include "asn1.h"
@@ -108,7 +107,28 @@ static int updateUserID( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   information supplied by the client */
 #ifndef CONFIG_FUZZ
 	if( cmpMsgInfo == CMP_MSGINFO_FIRSTMESSAGE_TO_SERVER && useMAC )
+		{
+		/* There's one special-case condition that we have to check for here
+		   and that's when the userID changes in the middle of an exchange,
+		   in this case an ir, denoted by a MAC context already being set up
+		   from the previous part of the exchange.  See the long comment in 
+		   readUserID() about this and CMP's lack of handling of it.  
+		   
+		   For signed data the strategy proposed there is probably OK 
+		   because we're trusting the signing key more than some value in a 
+		   header field but for MAC-based authentication having the userID 
+		   change in mid-stream is an error.  "Client changed horses mid-
+		   stream" would be a better error message but probably won't help 
+		   anyone figure out what went wrong */
+		if( protocolInfo->iMacContext != CRYPT_ERROR )
+			{
+			retExt( CRYPT_ERROR_INVALID,
+					( CRYPT_ERROR_INVALID, SESSION_ERRINFO,
+					  "Client changed user ID during an exchange" ) );
+			}
+
 		return( initServerAuthentMAC( sessionInfoPtr, protocolInfo ) );
+		}
 #endif /* CONFIG_FUZZ */
 
 	return( CRYPT_OK );
@@ -227,7 +247,7 @@ static int updateMacInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
    This is required by ETSI 33.310 to kludge around various shortcomings in
    CMP, see the inline comments for details */
 
-CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int processExtraCerts( INOUT_PTR STREAM *stream,
 							  INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							  INOUT_PTR CMP_PROTOCOL_INFO *protocolInfo,
@@ -240,7 +260,8 @@ static int processExtraCerts( INOUT_PTR STREAM *stream,
 	char certName[ CRYPT_MAX_TEXTSIZE + 8 ];
 	char newCertName[ CRYPT_MAX_TEXTSIZE + 8 ];
 #endif /* USE_ERRMSGS */
-	int length, trustValue, status;
+	BOOLEAN_INT trustValue;
+	int length, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -265,7 +286,7 @@ static int processExtraCerts( INOUT_PTR STREAM *stream,
 		   continue.  Depending on what the server was trying to do we'll
 		   either continue as normal or the next signature check will fail
 		   due to incorrect certificates being used */
-		return( CRYPT_OK );
+		return( readUniversal( stream ) );
 		}
 
 	/* Read the extraCerts wrapper */
@@ -338,7 +359,7 @@ static int processExtraCerts( INOUT_PTR STREAM *stream,
 	status = krnlSendMessage( sessionInfoPtr->iAuthInContext, 
 							  IMESSAGE_GETATTRIBUTE, &trustValue, 
 							  CRYPT_CERTINFO_TRUSTED_IMPLICIT );
-	if( cryptStatusOK( status ) && trustValue == FALSE )
+	if( cryptStatusOK( status ) && !trustValue )
 		{
 		status = krnlSendMessage( sessionInfoPtr->iAuthInContext, 
 								  IMESSAGE_SETATTRIBUTE, MESSAGE_VALUE_TRUE, 
@@ -349,9 +370,28 @@ static int processExtraCerts( INOUT_PTR STREAM *stream,
 		status = krnlSendMessage( cmpInfo->iExtraCerts,
 								  IMESSAGE_CRT_SIGCHECK, NULL,
 								  sessionInfoPtr->iAuthInContext );
-		krnlSendMessage( sessionInfoPtr->iAuthInContext, 
-						 IMESSAGE_SETATTRIBUTE, &trustValue, 
-						 CRYPT_CERTINFO_TRUSTED_IMPLICIT );
+		if( !trustValue )
+			{
+			/* What to do in case of failure here is a bit complex, since
+			   we're just (re-)setting a metadata value this shouldn't ever 
+			   fail (and in any case we only ever get here if we're 
+			   following 33.310 semantics), but if it does fail then we're 
+			   leaving the certificate marked as implicitly trusted.  We
+			   could in theory destroy (decRefCount) the iAuthInContext but 
+			   this doesn't help us much if the caller still holds 
+			   additional references to it.  However since they've provided
+			   us the certificate for verification purposes that implies
+			   that they do trust it, so having it unnecessarily marked as 
+			   implicitly trusted is a no-op.  For all of these reasons we
+			   treat the trust-value reset as a best effort since there's 
+			   not much else that we can do, and the issue will resolve 
+			   itself as soon as the last reference to the object is 
+			   removed */
+			( void ) krnlSendMessage( sessionInfoPtr->iAuthInContext, 
+									  IMESSAGE_SETATTRIBUTE, 
+									  MESSAGE_VALUE_FALSE, 
+									  CRYPT_CERTINFO_TRUSTED_IMPLICIT );
+			}
 		}
 	if( cryptStatusError( status ) )
 		{
@@ -597,16 +637,16 @@ static int readUserID( INOUT_PTR STREAM *stream,
 
 	/* Record the new or changed PKI user information.  At this point we 
 	   fall into another one of the many traps set by CMP: If the user ID 
-	   has changed there's no obvious way to deal with this.  If we're using a 
-	   MAC then presumably a different MAC key is in use but we have no idea 
-	   what it is, if we're using a signature then we also have no idea what 
-	   signature key the new ID correspond to.  The best that we can do is 
-	   to keep going with whatever's at hand in the hope that the new user 
-	   ID refers to the existing key (EJBCA at least uses the sKID of the 
-	   signing certificate as the user ID, so if we send a request with a 
-	   user name as the user ID we get back a response with the CA's sKID as 
-	   the user ID, which means that ignoring the changed user ID works fine 
-	   because the CA key is used to sign the response) */
+	   has changed then there's no obvious way to deal with this.  If we're 
+	   using a MAC then presumably a different MAC key is in use but we have 
+	   no idea what it is, if we're using a signature then we also have no 
+	   idea what signature key the new ID corresponds to.  The best that we 
+	   can do is to keep going with whatever's at hand in the hope that the 
+	   new user ID refers to the existing key (EJBCA at least uses the sKID 
+	   of the signing certificate as the user ID, so if we send a request 
+	   with a user name as the user ID we get back a response with the CA's 
+	   sKID as the user ID, which means that ignoring the changed user ID 
+	   works fine because the CA key is used to sign the response) */
 	static_assert( CRYPT_MAX_HASHSIZE <= CRYPT_MAX_TEXTSIZE,
 				   "MAX_HASHSIZE > MAX_TEXTSIZE" );
 	REQUIRES( rangeCheck( userIDsize, 1, CRYPT_MAX_TEXTSIZE ) );
@@ -645,6 +685,16 @@ static int readMessageTime( INOUT_PTR STREAM *stream,
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
+
+	/* Make sure that we can perform time-based calculations */
+	if( systemTime <= MIN_TIME_VALUE )
+		{
+		assert( DEBUG_WARN );
+		retExt( CRYPT_ERROR_FAILED,
+				( CRYPT_ERROR_FAILED, errorInfo, 
+				  "System time is broken, can't perform time-based "
+				  "PKI operations" ) );
+		}
 
 	/* Read the message time and make sure that it's within 24 hours of the 
 	   system time */
@@ -960,6 +1010,8 @@ static int readPkiHeader( INOUT_PTR STREAM *stream,
 			}
 		protocolInfo->noIntegrity = TRUE;
 		}
+	if( cryptStatusError( status ) )
+		return( status );	/* Residual error from peekTag() */
 	if( !protocolInfo->noIntegrity )
 		{
 		status = readProtectionAlgo( stream, protocolInfo );
@@ -1001,7 +1053,7 @@ static int readPkiHeader( INOUT_PTR STREAM *stream,
 		status = readUniversal( stream );
 		}
 	if( cryptStatusError( status ) )
-		return( status );
+		return( status );	/* Residual error from peekTag() */
 
 	/* Record the transaction ID (which is effectively the nonce) or make 
 	   sure that it matches the one that we sent.  There's no real need to 
@@ -1241,7 +1293,7 @@ int readPkiMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   from servers, see the comment above for details */
 		if( protocolInfo->certIDsize <= 0 && \
 			protocolInfo->certIDv2size <= 0 && \
-			( !isServer( sessionInfoPtr ) && 
+			( isServer( sessionInfoPtr ) || \
 			  protocolInfo->senderDNlength <= 0 ) && \
 			!( protocolInfo->isCryptlib && \
 			   sessionInfoPtr->iAuthInContext != CRYPT_ERROR ) )

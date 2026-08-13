@@ -69,6 +69,8 @@ PROCESS_ID_TYPE threadSelf( void )
 	PROCESS_ID_TYPE processID;
 	RETURN_CODE_TYPE retCode; 
 
+	/* This appears to be a can't-fail function, which isn't surprising 
+	   since we should be able to locate ourselves */
 	GET_MY_ID( &processID, &retCode );
 	return( processID );
 	}
@@ -97,8 +99,10 @@ PROCESS_ID_TYPE threadSelf( void )
 
 static void freeRTOSCheck( void )
 	{
-	static_assert( pdTRUE == pdPASS );
-	static_assert( configTOTAL_HEAP_SIZE >= 32768L );
+	static_assert( pdTRUE == pdPASS,
+				   "pdTRUE != pdPASS" );
+	static_assert( configTOTAL_HEAP_SIZE >= 32768L,
+				   "configTOTAL_HEAP_SIZE is less than 32K" );
 	}
 
 /****************************************************************************
@@ -121,7 +125,12 @@ INT8U threadSelf( void )
 	{
 	OS_TCB osTCB;
 
-	OSTaskQuery( OS_PRIO_SELF, &osTCB );
+	if( OSTaskQuery( OS_PRIO_SELF, &osTCB ) != OS_NO_ERR )
+		{
+		/* It's not clear what we should do here, and if OSTaskQuery() fails 
+		   for our own task there's something seriously wrong */
+		return( OS_PRIO_SELF );
+		}
 	return( osTCB.OSTCBPrio );
 	}
 
@@ -378,7 +387,8 @@ const BYTE asciiCtypeTbl[ 256 ] = {
    to EBCDIC and use the local stricmp()/strnicmp() */
 
 CHECK_RETVAL_LENGTH_SHORT STDC_NONNULL_ARG( ( 1, 2 ) ) \
-int strCompare( IN_STRING const char *src, IN_STRING const char *dest, 
+int strCompare( IN_STRING const char *src, 
+				IN_STRING const char *dest, 
 				IN_LENGTH_SHORT const int length )
 	{
 	BYTE buffer1[ MAX_ATTRIBUTE_SIZE + 8 ];
@@ -387,13 +397,21 @@ int strCompare( IN_STRING const char *src, IN_STRING const char *dest,
 	assert( isReadPtrDynamic( src, length ) );
 	assert( isReadPtrDynamic( dest, 1 ) );
 
-	if( length <= 0 || length > MAX_ATTRIBUTE_SIZE )
-		return( 1 );	/* Invalid length */
+	if( length <= 0 || length > MAX_ATTRIBUTE_SIZE || \
+		strlen( src ) > MAX_ATTRIBUTE_SIZE - 1 || \
+		strlen( dest ) > MAX_ATTRIBUTE_SIZE - 1 )
+		{
+		/* Invalid length.  With a sufficiently malformed string, which we
+		   shouldn't be seeing since we're using mostly constant or fixed-
+		   length strings, we can still over-read, but it's better than over-
+		   writing */
+		return( 1 );
+		}
 
 	/* Virtually all strings are 7-bit ASCII, the following optimisation
 	   speeds up checking, particularly in cases where we're walking down a
 	   list of keywords looking for a match */
-	if( *src < 0x80 && *dest < 0x80 && \
+	if( byteToInt( *src ) < 0x80 && byteToInt( *dest ) < 0x80 && \
 		toLower( *src ) != toLower( *dest ) )
 		return( 1 );	/* Not equal */
 
@@ -593,7 +611,14 @@ int vsPrintf_s( INOUT_BUFFER_FIXED( bufSize ) char *buffer,
 			break;
 		}
 	ENSURES( LOOP_BOUND_OK );
-	buffer[ bufPos ] = '\0';
+	if( bufPos < bufSize )
+		buffer[ bufPos ] = '\0';
+	else
+		{
+		assert( DEBUG_WARN );
+		buffer[ bufSize - 1 ] = '\0';
+		bufPos = bufSize - 1;
+		}
 
 	return( bufPos );
 	}
@@ -685,7 +710,13 @@ TaskType threadSelf( void )
 	{
 	TaskType taskID;
 
-	GetTaskID( &taskID );
+	if( GetTaskID( &taskID ) != E_OK )
+		{
+		/* A can't-occur condition, it means we've called it from an 
+		   interrupt handler which isn't part of a task.  Return a dummy 
+		   value */
+		return( 0 );
+		}
 	return( taskID );
 	}
 
@@ -774,7 +805,13 @@ rtems_id threadSelf( void )
 	{
 	rtems_id taskID;
 
-	rtems_task_ident( RTEMS_SELF, RTEMS_SEARCH_ALL_NODES, &taskID );
+	if( rtems_task_ident( RTEMS_SELF, RTEMS_SEARCH_ALL_NODES, 
+						  &taskID ) != RTEMS_SUCCESSFUL )
+		{
+		/* A can't-occur condition, it means that we don't exist.  Return
+		   a dummy value */
+		return( 0 ); 
+		}
 	return( taskID );
 	}
 
@@ -852,34 +889,6 @@ long getTickCount( long startTime )
 	return( timeDifference );
 	}
 #endif /* NDEBUG */
-
-/* SunOS and older Slowaris have broken sprintf() handling.  In SunOS 4.x
-   this was documented as returning a pointer to the output data as per the
-   Berkeley original.  Under Slowaris the manpage was changed so that it
-   looks like any other sprintf(), but it still returns the pointer to the
-   output buffer in some versions so we use a wrapper that checks at
-   runtime to see what we've got and adjusts its behaviour accordingly.  In
-   fact it's much easier to fix than that, since we have to use vsprintf()
-   anyway and this doesn't have the sprintf() problem, this fixes itself
-   simply from the use of the wrapper (unfortunately we can't use 
-   vsnprintf() because these older OS versions don't include it yet) */
-
-#if defined( sun ) && ( OSVERSION <= 5 )
-
-#include <stdarg.h>
-
-int fixedSprintf( char *buffer, const int bufSize, const char *format, ... )
-	{
-	va_list argPtr;
-	int length;
-
-	va_start( argPtr, format );
-	length = vsprintf( buffer, format, argPtr );
-	va_end( argPtr );
-
-	return( length );
-	}
-#endif /* Old SunOS */
 
 /* Older versions of Solaris don't have strnlen().  They have strlcpy() and
    strlcat() and others, but no strnlen() */
@@ -1025,31 +1034,6 @@ long getTickCount( long startTime )
 	return( timeDifference );
 	}
 #endif /* Debug version */
-
-/* Borland C++ before 5.50 doesn't have snprintf() so we fake it using
-   sprintf().  Unfortunately these are all va_args functions so we can't 
-   just map them using macros but have to provide an explicit wrapper to get 
-   rid of the size argument */
-
-#if defined( __BORLANDC__ ) && ( __BORLANDC__ < 0x0550 )
-
-int bcSnprintf( char *buffer, const int bufSize, const char *format, ... )
-	{
-	va_list argPtr;
-	int length;
-
-	va_start( argPtr, format );
-	length = vsprintf( buffer, format, argPtr );
-	va_end( argPtr );
-
-	return( length );
-	}
-
-int bcVsnprintf( char *buffer, const int bufSize, const char *format, va_list argPtr )
-	{
-	return( vsprintf( buffer, format, argPtr ) );
-	}
-#endif /* BC++ before 5.50 */
 
 /* Safely load a DLL.  This gets quite complicated because different 
    versions of Windows have changed how they search for DLLs to load, and 
@@ -1284,10 +1268,13 @@ HMODULE WINAPI SafeLoadLibrary( IN_STRING LPCTSTR lpFileName )
 	{
 	char path[ MAX_PATH + 8 ];
 	const int fileNameLength = strnlen_s( lpFileName, MAX_PATH + 1 );
+#if VC_LT_2010( _MSC_VER )
+	int osVersion;
+#endif /* VC++ < 2010 */
 	int pathLength;
 
-	REQUIRES_EXT( fileNameLength >= 1 && fileNameLength < MAX_PATH, \
-				  NULL );
+	REQUIRES_EXT( fileNameLength >= 1 && \
+				  fileNameLength < MAX_PATH - 8, NULL );
 
 	assert( isReadPtr( lpFileName, 2 ) );
 
@@ -1300,7 +1287,8 @@ HMODULE WINAPI SafeLoadLibrary( IN_STRING LPCTSTR lpFileName )
 	   directory anyway, isn't going to achieve much, and in any case both
 	   of these OSes should be long dead by now */
 #if VC_LT_2010( _MSC_VER )
-	if( getSysVar( SYSVAR_OSMAJOR ) <= 4 )
+	osVersion = getSysVar( SYSVAR_OSMAJOR );
+	if( osVersion > 3 && osVersion <= 4 )
 		return( LoadLibrary( lpFileName ) );
 #else
 	if( !IsWindowsXPOrGreater() )
@@ -1367,8 +1355,8 @@ typedef struct SECI {
 	SECURITY_DESCRIPTOR pSecurityDescriptor;
 	PACL pAcl;
 	PTOKEN_USER pTokenUser;
-	BYTE aclBuffer[ ACL_BUFFER_SIZE + 8 ];
-	BYTE tokenBuffer[ TOKEN_BUFFER_SIZE + 8 ];
+	ALIGN_STRUCT_FIELD BYTE aclBuffer[ ACL_BUFFER_SIZE + 8 ];
+	ALIGN_STRUCT_FIELD BYTE tokenBuffer[ TOKEN_BUFFER_SIZE + 8 ];
 	} SECURITY_INFO;
 
 /* Initialise an ACL allowing only the creator access and return it to the
@@ -1460,11 +1448,8 @@ void freeACLInfo( IN_PTR TYPECAST( SECURITY_INFO * ) \
 	{
 	SECURITY_INFO *securityInfo = ( SECURITY_INFO * ) securityInfoPtr;
 
-	assert( securityInfoPtr == NULL || \
-			isWritePtr( securityInfoPtr, sizeof( SECURITY_INFO ) ) );
+	assert( isWritePtr( securityInfoPtr, sizeof( SECURITY_INFO ) ) );
 
-	if( securityInfo == NULL )
-		return;
 	clFree( "freeACLInfo", securityInfo );
 	}
 
@@ -1488,25 +1473,24 @@ void *getACLInfo( INOUT_PTR_OPT TYPECAST( SECURITY_INFO * ) \
 
 BOOL WINAPI DllMain( HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved )
 	{
-	UNUSED_ARG( hinstDLL );
 	UNUSED_ARG( lpvReserved );
-
-	/* Enable heap terminate-on-corruption.  In theory this could cause 
-	   problems when cryptlib is linked with buggy applications that rely on 
-	   the resilience of the heap manager in order to function since running 
-	   the app with cryptlib will cause it to crash through no fault of 
-	   cryptlib's, however this setting is enabled by default for all 64-bit
-	   processes and all 32-bit processes that set the subsystem major version
-	   to 6 or higher in the image header, so chances are it'll be enabled 
-	   anyway */
-#if VC_GE_2005( _MSC_VER )
-	( void ) HeapSetInformation( NULL, HeapEnableTerminationOnCorruption,
-								 NULL, 0 );
-#endif /* VS 2005 and newer */
 
 	switch( fdwReason )
 		{
 		case DLL_PROCESS_ATTACH:
+			/* Enable heap terminate-on-corruption.  In theory this could 
+			   cause problems when cryptlib is linked with buggy applications 
+			   that rely on the resilience of the heap manager in order to 
+			   function since running the app with cryptlib will cause it to 
+			   crash through no fault of cryptlib's, however this setting is 
+			   enabled by default for all 64-bit processes and all 32-bit 
+			   processes that set the subsystem major version to 6 or higher 
+			   in the image header, so chances are it'll be enabled anyway */
+#if VC_GE_2005( _MSC_VER )
+			( void ) HeapSetInformation( NULL, 
+								HeapEnableTerminationOnCorruption, NULL, 0 );
+#endif /* VS 2005 and newer */
+
 			/* Disable thread-attach notifications, which we don't do
 			   anything with and therefore don't need */
 			DisableThreadLibraryCalls( hinstDLL );
@@ -1581,7 +1565,7 @@ STDAPI DllRegisterServer( void )
 void vsAssert( const char *exprString, const char *fileName, 
 			   const int lineNo )
 	{
-	char string[ 1024 ], title[ 1024 ];
+	char string[ 1024 + 8 ], title[ 1024 + 8 ];
 	int result;
 
 	/* Log the output to the debug console */
@@ -1675,56 +1659,14 @@ int CALLBACK WEP( int nSystemExit )
 	return( TRUE );
 	}
 
-/* Check whether we're running inside a VM, which is a potential risk for
-   cryptovariables.  It gets quite tricky to detect the various VMs so for
-   now the only one that we detect is the most widespread Win32 one, 
-   VMware */
-
-#if defined( __WIN32__ ) && !defined( NO_ASM )
-
-BOOLEAN isRunningInVM( void )
-	{
-	unsigned int magicValue, version;
-
-	__try {
-	__asm {
-		push eax
-		push ebx
-		push ecx
-		push edx
-
-		/* Check for VMware via the VMware guest-to-host communications 
-		   channel */
-		mov eax, 'VMXh'		/* VMware magic value 0x564D5868 */
-		xor ebx, ebx		/* Clear parameters register */
-		mov ecx, 0Ah		/* Get-version command */
-		mov dx, 'VX'		/* VMware I/O port 0x5658 */
-		in eax, dx			/* Perform VMware call */
-		mov magicValue, ebx	/* VMware magic value */
-		mov version, ecx	/* VMware version */
-
-		pop edx
-		pop ecx
-		pop ebx
-		pop eax
-		}
-	} __except (EXCEPTION_EXECUTE_HANDLER) {}
-
-	return( ( magicValue == 'VMXh' ) ? TRUE : FALSE );
-	}
-#else
-
-BOOLEAN isRunningInVM( void )
-	{
-	return( FALSE );
-	}
-#endif /* __WIN32__ && !NO_ASM */
-
 /****************************************************************************
 *																			*
 *									Windows CE								*
 *																			*
 ****************************************************************************/
+
+/* These functions are for a functionally extinct OS.  They haven't been
+   maintained, and may no longer even compile */
 
 #elif defined( __WINCE__ )
 
@@ -1877,15 +1819,15 @@ struct tm *gmtime( const time_t *timePtr )
 int debugPrintf( const char *format, ... )
 	{
 	va_list argPtr;
-	char buffer[ 1024 ];
-	wchar_t wcBuffer[ 1024 ];
+	char buffer[ 1024 + 8 ];
+	wchar_t wcBuffer[ 1024 + 8 ];
 	int length, status;
 
 	va_start( argPtr, format );
 	length = vsprintf( buffer, format, argPtr );
 	va_end( argPtr );
-	status = asciiToUnicode( wcBuffer, 1024, buffer, length );
-	if( cryptStatusOK( status ) )
+	status = asciiToUnicode( wcBuffer, 1024, buffer, length + 1 );
+	if( cryptStatusOK( status ) )				/* + 1 for '\0' */
 		NKDbgPrintfW( L"%s", wcBuffer );
 	return( length );
 	}
@@ -1944,9 +1886,8 @@ int unicodeToAscii( char *dest, const int destMaxLen,
 								  length * sizeof( wchar_t ), "_", NULL );
 	return( ( status <= 0 ) ? CRYPT_ERROR_BADDATA : wcslen( dest ) );
 #else
-	status = wcstombs_s( &destLen, dest, destMaxLen, src, 
-						 length * sizeof( wchar_t ) );
-	return( ( status <= 0 ) ? CRYPT_ERROR_BADDATA : status );
+	status = wcstombs_s( &destLen, dest, destMaxLen, src, destMaxLen - 1 );
+	return( ( status != 0 ) ? CRYPT_ERROR_BADDATA : ( int ) destLen );
 #endif
 	}
 
@@ -2014,6 +1955,13 @@ int strnicmp( const char *src, const char *dest, /* const */ int length )
 
 		if( srcCh != destCh )
 			return( srcCh - destCh );
+		if( srcCh == '\0' )
+			{
+			/* We've run out of source string without finding a mis-match, 
+			   we're done.  Note that this also check destCh, since we
+			   wouldn't have got here if they weren't the same */
+			break;
+			}
 		}
 	ENSURES_EXT( LOOP_BOUND_OK, -1 );
 
@@ -2052,29 +2000,31 @@ int stricmp( const char *src, const char *dest )
    from the standard OpenBSD ones (a macro in os_spec.h is sufficient to map 
    this to the proper functions where they're available in libc).
    
-   In addition they always return 1, since the length value isn't checked
-   anywhere in the code  */
+   These functions take advantage of the fact that CRYPT_OK == 0, the success
+   error status for these functions, so the return status can be checked 
+   with cryptStatusOK() as for any standard cryptlib function */
 
 int strlcpy_s( char *dest, const int destLen, const char *src )
 	{
 	LOOP_INDEX i;
 
 	assert( isWritePtrDynamic( dest, destLen ) );
-	assert( isShortIntegerRangeNZ( destLen ) );
 	assert( isReadPtr( src, 1 ) );
+
+	REQUIRES_EXT( isShortIntegerRangeNZ( destLen ), -1 );
 
 	/* Copy as much as we can of the source string onto the end of the 
 	   destination string */
 	LOOP_MAX( i = 0, i < destLen - 1 && *src != '\0', i++ )
 		{
-		ENSURES_EXT( LOOP_INVARIANT_MAX( i, 0, destLen - 2 ), 1 );
+		ENSURES_EXT( LOOP_INVARIANT_MAX( i, 0, destLen - 2 ), -1 );
 
 		dest[ i ] = *src++;
 		}
-	ENSURES_EXT( LOOP_BOUND_OK, 1 );
+	ENSURES_EXT( LOOP_BOUND_OK, -1 );
 	dest[ i ] = '\0';
 
-	return( 1 );
+	return( 0 );
 	}
 
 int strlcat_s( char *dest, const int destLen, const char *src )
@@ -2082,36 +2032,37 @@ int strlcat_s( char *dest, const int destLen, const char *src )
 	LOOP_INDEX i;
 
 	assert( isWritePtrDynamic( dest, destLen ) );
-	assert( isShortIntegerRangeNZ( destLen ) );
 	assert( isReadPtr( src, 1 ) );
+
+	REQUIRES_EXT( isShortIntegerRangeNZ( destLen ), -1 );
 
 	/* See how long the existing destination string is */
 	LOOP_MAX( i = 0, i < destLen && dest[ i ] != '\0', i++ )
 		{
-		ENSURES_EXT( LOOP_INVARIANT_MAX( i, 0, destLen - 1 ), 1 );
+		ENSURES_EXT( LOOP_INVARIANT_MAX( i, 0, destLen - 1 ), -1 );
 		}
-	ENSURES_EXT( LOOP_BOUND_OK, 1 );
+	ENSURES_EXT( LOOP_BOUND_OK, -1 );
 	if( i >= destLen )
 		{
 		DEBUG_DIAG(( "Overflow in strlcat_s" ));
 		assert( DEBUG_WARN );
 		dest[ destLen - 1 ] = '\0';
 
-		return( 1 );
+		return( -1 );
 		}
 
 	/* Copy as much as we can of the source string onto the end of the 
 	   destination string */
 	LOOP_MAX_CHECKINC( i < destLen - 1 && *src != '\0', i++ )
 		{
-		ENSURES_EXT( LOOP_INVARIANT_MAX_XXX( i, 0, destLen - 2 ), 1 );
+		ENSURES_EXT( LOOP_INVARIANT_MAX_XXX( i, 0, destLen - 2 ), -1 );
 
 		dest[ i ] = *src++;
 		}
-	ENSURES_EXT( LOOP_BOUND_OK, 1 );
+	ENSURES_EXT( LOOP_BOUND_OK, -1 );
 	dest[ i ] = '\0';
 
-	return( 1 );
+	return( 0 );
 	}
 #endif /* NO_NATIVE_STRLCPY */
 
@@ -2132,7 +2083,7 @@ CHECK_RETVAL_ENUM( HWINTRINS_FLAG ) \
 static int getHWIntrins( void )
 	{
 	char vendorID[ 12 + 8 ];
-	unsigned long processorID, featureFlags, featureFlags2;
+	unsigned long processorID, maxLeaf, featureFlags, featureFlags2 = 0;
 	int sysCaps = HWINTRINS_FLAG_RDTSC;
 
 	/* Check whether the CPU supports extended features like CPUID and 
@@ -2151,6 +2102,7 @@ static int getHWIntrins( void )
 		xor edx, edx		/* Tell VC++ that ECX, EDX will be trashed */
 		xor eax, eax		/* CPUID function 0: Get vendor ID */
 		cpuid
+		mov dword ptr [maxLeaf], eax
 		mov dword ptr [vendorID], ebx
 		mov dword ptr [vendorID+4], edx
 		mov dword ptr [vendorID+8], ecx	/* Save vendor ID string */
@@ -2158,7 +2110,13 @@ static int getHWIntrins( void )
 		cpuid
 		mov [processorID], eax	/* Save processor ID */
 		mov [featureFlags], ecx	/* Save processor feature info */
-		mov [featureFlags2], ebx/* Save extended feature info */
+		cmp [maxLeaf], 7
+		jb noLeaf7
+		mov eax, 7			/* CPUID function 7: Get more processor info */
+		xor ecx, ecx		/*   Subfunction 0: Extended features */
+		cpuid
+		mov [featureFlags2], ebx/* Save more extended feature info */
+noLeaf7:
 		pop ebx				/* Restore frame pointer */
 		}
 
@@ -2212,6 +2170,8 @@ static int getHWIntrins( void )
 		/* Check for the presence of a hardware RNG */
 		if( featureFlags & ( 1 << 30 ) )
 			sysCaps |= HWINTRINS_FLAG_RDRAND;
+		if( featureFlags2 & ( 1 << 18 ) )
+			sysCaps |= HWINTRINS_FLAG_RDSEED;
 		}
 	if( !memcmp( vendorID, "GenuineIntel", 12 ) )
 		{
@@ -2242,7 +2202,8 @@ static int getHWIntrins( void )
 typedef struct { unsigned int eax, ebx, ecx, edx; } CPUID_INFO;
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-static void cpuID( OUT_PTR CPUID_INFO *result, const int type )
+static void cpuID( OUT_PTR CPUID_INFO *result, const unsigned int type,
+				   const int subType )
 	{
 	int intResult[ 4 ];	/* That's what the function prototype says */
 
@@ -2253,7 +2214,10 @@ static void cpuID( OUT_PTR CPUID_INFO *result, const int type )
 	   before calling the __cpuid intrinsic because some analysers don't 
 	   know about it and will warn about use of uninitialised memory */
 	memset( intResult, 0, sizeof( int ) * 4 );
-	__cpuid( intResult, type );
+	if( subType == CRYPT_UNUSED )
+		__cpuid( intResult, type );
+	else
+		__cpuidex( intResult, type, subType );
 	result->eax = intResult[ 0 ];
 	result->ebx = intResult[ 1 ];
 	result->ecx = intResult[ 2 ];
@@ -2266,23 +2230,30 @@ static int getHWIntrins( void )
 	CPUID_INFO cpuidInfo;
 	ALIGN_STACK_DATA char vendorID[ 12 + 8 ];
 	int *vendorIDptr = ( int * ) vendorID;
-	unsigned long processorID, featureFlags, featureFlags2;
+	unsigned long processorID, maxLeaf, featureFlags, featureFlags2 = 0;
 	int sysCaps = HWINTRINS_FLAG_RDTSC;	/* x86-64 always has RDTSC */
 
 	/* Get any CPU info that we need.  There is an 
 	   IsProcessorFeaturePresent() function, but all that this provides is 
-	   an indication of the availability of rdtsc (alongside some stuff that 
-	   we don't care about, like MMX and 3DNow).  Since we still need to 
-	   check for the presence of other features, we do the whole thing 
-	   ourselves */
-	cpuID( &cpuidInfo, 0 );
+	   an indication of the availability of rdtsc via 
+	   PF_RDTSC_INSTRUCTION_AVAILABLE (alongside some stuff that we don't 
+	   care about, like MMX, 3DNow, SSE3, SSE4, and AVX, as well as a huge
+	   range of ARM architecture options that ignore the equivalent x86 
+	   ones).  Since we still need to check for the presence of other 
+	   features, we do the whole thing ourselves */
+	cpuID( &cpuidInfo, 0, CRYPT_UNUSED );
+	maxLeaf = cpuidInfo.eax;
 	vendorIDptr[ 0 ] = cpuidInfo.ebx;
 	vendorIDptr[ 1 ] = cpuidInfo.edx;
 	vendorIDptr[ 2 ] = cpuidInfo.ecx;
-	cpuID( &cpuidInfo, 1 );
+	cpuID( &cpuidInfo, 1, CRYPT_UNUSED );
 	processorID = cpuidInfo.eax;
 	featureFlags = cpuidInfo.ecx;
-	featureFlags2 = cpuidInfo.ebx;
+	if( maxLeaf >= 7 )
+		{
+		cpuID( &cpuidInfo, 7, 0 );
+		featureFlags2 = cpuidInfo.ebx;
+		}
 
 	/* Check for vendor-specific special features */
 	if( !memcmp( vendorID, "CentaurHauls", 12 ) )
@@ -2292,11 +2263,11 @@ static int getHWIntrins( void )
 		   bit CPUs in mid-2010 and availability is limited so it's 
 		   uncertain whether this code will ever be exercised, but we provide 
 		   it anyway for compatibility with the 32-bit equivalent */
-		cpuID( &cpuidInfo, 0xC0000000 );
+		cpuID( &cpuidInfo, 0xC0000000, CRYPT_UNUSED );
 		if( cpuidInfo.eax >= 0xC0000001 )
 			{
 			/* Get the Centaur extended feature flags */
-			cpuID( &cpuidInfo, 0xC0000001 );
+			cpuID( &cpuidInfo, 0xC0000001, CRYPT_UNUSED );
 			if( ( cpuidInfo.edx & 0x000C ) == 0x000C )
 				sysCaps |= HWINTRINS_FLAG_XSTORE;
 			if( ( cpuidInfo.edx & 0x00C0 ) == 0x00C0 )
@@ -2312,6 +2283,12 @@ static int getHWIntrins( void )
 		/* Check for AMD Geode LX, family 0x5 = Geode, model 0xA = LX */
 		if( ( processorID & 0x0FF0 ) == 0x05A0 )
 			sysCaps |= HWINTRINS_FLAG_TRNG;
+
+		/* Check for the presence of a hardware RNG */
+		if( featureFlags & ( 1 << 30 ) )
+			sysCaps |= HWINTRINS_FLAG_RDRAND;
+		if( featureFlags2 & ( 1 << 18 ) )
+			sysCaps |= HWINTRINS_FLAG_RDSEED;
 		}
 	if( !memcmp( vendorID, "GenuineIntel", 12 ) )
 		{
@@ -2319,7 +2296,7 @@ static int getHWIntrins( void )
 		if( featureFlags & ( 1 << 25 ) )
 			sysCaps |= HWINTRINS_FLAG_AES;
 
-		/* Check for the return of a hardware RNG */
+		/* Check for the presence of a hardware RNG */
 		if( featureFlags & ( 1 << 30 ) )
 			sysCaps |= HWINTRINS_FLAG_RDRAND;
 		if( featureFlags2 & ( 1 << 18 ) )
@@ -2335,7 +2312,8 @@ static int getHWIntrins( void )
 			( __GNUC__ == 4 && __GNUC_MINOR__ >= 4 ) ) ) ) && \
 	  ( defined( __i386__ ) || defined( __x86_64__ ) )
 
-/* clang and newer versions of gcc have cpuid as an intrinsic */
+/* clang and newer versions of gcc have cpuid as an intrinsic, but not all of
+   them have __cpuid_count yet */
 
 #if HWINTRINS_FLAG_RDTSC != 0x01
   #error Need to sync HWINTRINS_FLAG_RDTSC with equivalent asm definition
@@ -2343,12 +2321,34 @@ static int getHWIntrins( void )
 
 #include <cpuid.h>
 
+/* Now we run into a bit of a problem, for some unknown reason older 
+   versions of clang and gcc defined __cpuid_count() but not 
+   __get_cpuid_count(), and since the latter is an inline function there's
+   no way to detect this with the preprocessor.  To work around this we
+   provide our own version for clang/gcc versions where this isn't
+   present.  The reason for the odd check for gcc is that clang lies about 
+   being gcc, so it defines __GNUC__ without defining a version which
+   means that it passes the check for __GNUC__ < 6 */
+
+#if ( defined( __clang__ ) && __clang_major__ < 5 ) || \
+	( defined( __GNUC__ ) && __GNUC__ < 6 && !defined( __clang__ ) )
+
+  static int __get_cpuid_count( unsigned int __leaf, unsigned int __subleaf,
+								unsigned int *__eax, unsigned int *__ebx,
+								unsigned int *__ecx, unsigned int *__edx )
+	{
+	__cpuid_count( __leaf, __subleaf, *__eax, *__ebx, *__ecx, *__edx );
+	return( 1 );
+	}
+#endif /* clang < 5.0 / gcc < 6.0 */
+
 typedef struct { unsigned int eax, ebx, ecx, edx; } CPUID_INFO;
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-static BOOLEAN cpuID_Checked( OUT_PTR CPUID_INFO *result, const int type )
+static BOOLEAN cpuID_Checked( OUT_PTR CPUID_INFO *result, const int type,
+							  const int subType )
 	{
-	int a, b, c, d;		/* That's what the function prototype says */
+	unsigned int a, b, c, d;
 	int retVal;
 
 	assert( isWritePtr( result, sizeof( CPUID_INFO ) ) );
@@ -2357,7 +2357,10 @@ static BOOLEAN cpuID_Checked( OUT_PTR CPUID_INFO *result, const int type )
 	memset( result, 0, sizeof( CPUID_INFO ) );
 
 	/* Get the CPUID data and copy it back to the caller */
-	retVal = __get_cpuid( type, &a, &b, &c, &d );
+	if( subType == CRYPT_UNUSED )
+		retVal = __get_cpuid( type, &a, &b, &c, &d );
+	else
+		retVal = __get_cpuid_count( type, subType, &a, &b, &c, &d );
 	if( retVal <= 0 )
 		return( FALSE );
 	result->eax = a;
@@ -2369,9 +2372,14 @@ static BOOLEAN cpuID_Checked( OUT_PTR CPUID_INFO *result, const int type )
 	}
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-static void cpuID( OUT_PTR CPUID_INFO *result, const int type )
+static void cpuID( OUT_PTR CPUID_INFO *result, const unsigned int type )
 	{
 	int a, b, c, d;		/* That's what the function prototype says */
+
+	assert( isWritePtr( result, sizeof( CPUID_INFO ) ) );
+
+	/* Clear return value */
+	memset( result, 0, sizeof( CPUID_INFO ) );
 
 	/* The GNU __get_cpuid() is broken, see
 	   https://github.com/gcc-mirror/gcc/blob/master/gcc/config/i386/cpuid.h,
@@ -2403,22 +2411,26 @@ CHECK_RETVAL_ENUM( HWINTRINS_FLAG ) \
 static int getHWIntrins( void )
 	{
 	CPUID_INFO cpuidInfo;
-	char vendorID[ 12 + 8 ];
+	ALIGN_STACK_DATA char vendorID[ 12 + 8 ];
 	int *vendorIDptr = ( int * ) vendorID;
-	unsigned long processorID, featureFlags, featureFlags2;
+	unsigned long processorID, featureFlags, featureFlags2 = 0;
 	int sysCaps = 0;
 
-	/* Get any CPU info that we need */
-	if( !cpuID_Checked( &cpuidInfo, 0 ) )	/* CPUID function 0: Get vendor ID */
-		return( HWINTRINS_FLAG_NONE );
+	/* Get any CPU info that we need.  There's more breakage here in that 
+	   some VMs mask off the high bits of the return values and/or mess with
+	   the values as a whole, so that what gets returned doesn't allow us to
+	   detect any of the features that we can actually use */
+	if( !cpuID_Checked( &cpuidInfo, 0, CRYPT_UNUSED ) )
+		return( HWINTRINS_FLAG_NONE );	/* CPUID function 0: Get vendor ID */
 	vendorIDptr[ 0 ] = cpuidInfo.ebx;
 	vendorIDptr[ 1 ] = cpuidInfo.edx;
 	vendorIDptr[ 2 ] = cpuidInfo.ecx;
-	if( !cpuID_Checked( &cpuidInfo, 1 ) )	/* CPUID function 1: Get processor info */
-		return( HWINTRINS_FLAG_NONE );
+	if( !cpuID_Checked( &cpuidInfo, 1, CRYPT_UNUSED ) )
+		return( HWINTRINS_FLAG_NONE );	/* CPUID function 1: Get processor info */
 	processorID = cpuidInfo.eax;
 	featureFlags = cpuidInfo.ecx;
-	featureFlags2 = cpuidInfo.ebx;
+	if( cpuID_Checked( &cpuidInfo, 7, 0 ) )
+		featureFlags2 = cpuidInfo.ebx;	/* CPUID function 7 / 0: Get ext.info */
 
 	/* Check for vendor-specific special features */
 	if( !memcmp( vendorID, "CentaurHauls", 12 ) )
@@ -2445,6 +2457,16 @@ static int getHWIntrins( void )
 		/* Check for AMD Geode LX, family 0x5 = Geode, model 0xA = LX */
 		if( ( processorID & 0x0FF0 ) == 0x05A0 )
 			sysCaps |= HWINTRINS_FLAG_TRNG;
+
+		/* Check for hardware AES support */
+		if( featureFlags & ( 1 << 25 ) )
+			sysCaps |= HWINTRINS_FLAG_AES;
+
+		/* Check for the presence of a hardware RNG */
+		if( featureFlags & ( 1 << 30 ) )
+			sysCaps |= HWINTRINS_FLAG_RDRAND;
+		if( featureFlags2 & ( 1 << 18 ) )
+			sysCaps |= HWINTRINS_FLAG_RDSEED;
 		}
 	if( !memcmp( vendorID, "GenuineIntel", 12 ) )
 		{
@@ -2452,7 +2474,7 @@ static int getHWIntrins( void )
 		if( featureFlags & ( 1 << 25 ) )
 			sysCaps |= HWINTRINS_FLAG_AES;
 
-		/* Check for the return of a hardware RNG */
+		/* Check for the presence of a hardware RNG */
 		if( featureFlags & ( 1 << 30 ) )
 			sysCaps |= HWINTRINS_FLAG_RDRAND;
 		if( featureFlags2 & ( 1 << 18 ) )
@@ -2475,7 +2497,7 @@ CHECK_RETVAL_ENUM( HWINTRINS_FLAG ) \
 static int getHWIntrins( void )
 	{
 	char vendorID[ 12 + 8 ];
-	unsigned long processorID, featureFlags, featureFlags2;
+	unsigned long processorID, maxLeaf, featureFlags, featureFlags2 = 0;
 	int hasAdvFeatures = 0, sysCaps = 0;
 
 	/* Check whether the CPU supports extended features like CPUID and 
@@ -2502,9 +2524,13 @@ static int getHWIntrins( void )
 		"jz noCPUID\n\t"
 		"movl $1, %[hasAdvFeatures]\n\t"/* hasAdvFeatures = TRUE */
 		"movl %[HW_FLAG_RDTSC], %[sysCaps]\n\t"		/* sysCaps = HWINTRINS_FLAG_RDTSC */
-		"pushl %%ebx\n\t"	/* Save PIC register */
+		"pushl %%ebx\n\t"		/* Save PIC register */
 		"xorl %%eax, %%eax\n\t"	/* CPUID function 0: Get vendor ID */
 		"cpuid\n\t"
+		"pushl %%edx\n\t"
+		"leal %6, %%edx\n\t"
+		"movl %%eax, (%%edx)\n\t"	/* maxLeaf */
+		"popl %%edx\n\t"
 		"leal %2, %%eax\n\t"
 		"movl %%ebx, (%%eax)\n\t"
 		"movl %%edx, 4(%%eax)\n\t"
@@ -2515,9 +2541,15 @@ static int getHWIntrins( void )
 		"movl %%eax, (%%edx)\n\t"	/* processorID */
 		"leal %4, %%edx\n\t"
 		"movl %%ecx, (%%edx)\n\t"	/* featureFlags */
+		"cmpl $7, %6\n\t"			/* Check if leaf 7 is supported */
+		"jb noLeaf7\n\t"
+		"movl $7, %%eax\n\t"		/* CPUID function 7 / 0: Get extended processor info */
+		"xorl %%ecx, %%ecx\n\t"
+		"cpuid\n\t"
 		"leal %5, %%edx\n\t"
 		"movl %%ebx, (%%edx)\n\t"	/* featureFlags2 */
-		"popl %%ebx\n"		/* Restore PIC register */
+	"noLeaf7:\n\t"
+		"popl %%ebx\n"				/* Restore PIC register */
 	"noCPUID:\n\n"
 #if 0	/* See comment in tools/ccopts.sh for why this is disabled */
 		".section .note.GNU-stack, \"\", @progbits; .previous\n"
@@ -2527,12 +2559,13 @@ static int getHWIntrins( void )
 							   one of these in included asm code doesn't
 							   hurt */
 #endif /* 0 */
-		: [hasAdvFeatures] "=m"(hasAdvFeatures),/* Output */
-			[sysCaps] "=m"(sysCaps),
+		: [hasAdvFeatures] "+m"(hasAdvFeatures),/* Output */
+			[sysCaps] "+m"(sysCaps),
 			[vendorID] "=m"(vendorID), 
 			[processorID] "=m"(processorID),
 			[featureFlags] "=m"(featureFlags),
-			[featureFlags2] "=m"(featureFlags2)
+			[featureFlags2] "+m"(featureFlags2),
+			[maxLeaf] "+m"(maxLeaf)
 		: [HW_FLAG_RDTSC] "i"(HWINTRINS_FLAG_RDTSC)/* Input */
 		: "%eax", "%ecx", "%edx"				/* Registers clobbered */
 		);
@@ -2593,6 +2626,12 @@ static int getHWIntrins( void )
 		/* Check for AMD Geode LX, family 0x5 = Geode, model 0xA = LX */
 		if( ( processorID & 0x0FF0 ) == 0x05A0 )
 			sysCaps |= HWINTRINS_FLAG_TRNG;
+
+		/* Check for the presence of a hardware RNG */
+		if( featureFlags & ( 1 << 30 ) )
+			sysCaps |= HWINTRINS_FLAG_RDRAND;
+		if( featureFlags2 & ( 1 << 18 ) )
+			sysCaps |= HWINTRINS_FLAG_RDSEED;
 		}
 	if( !memcmp( vendorID, "GenuineIntel", 12 ) )
 		{
@@ -2600,7 +2639,7 @@ static int getHWIntrins( void )
 		if( featureFlags & ( 1 << 25 ) )
 			sysCaps |= HWINTRINS_FLAG_AES;
 
-		/* Check for the return of a hardware RNG */
+		/* Check for the presence of a hardware RNG */
 		if( featureFlags & ( 1 << 30 ) )
 			sysCaps |= HWINTRINS_FLAG_RDRAND;
 		if( featureFlags2 & ( 1 << 18 ) )
@@ -2806,7 +2845,7 @@ static BOOLEAN testCryptoAvail( const int cryptoFD,
 		ioctl( cryptoFD, CIOCFSESSION, &session.ses );
 		return( FALSE );
 		}
-	ioctl( cryptoFD, CIOCFSESSION, &session.ses );
+	( void ) ioctl( cryptoFD, CIOCFSESSION, &session.ses );
 	if( !( sessionInfo.flags & SIOP_FLAG_KERNEL_DRIVER_ONLY ) )
 		{
 		/* The sole flag supported by CryptoDev, 
@@ -2828,6 +2867,8 @@ static BOOLEAN testCryptoAvail( const int cryptoFD,
 	DEBUG_PRINT(( "Enabling crypto hardware support for %s.\n",
 				  isCipher ? sessionInfo.cipher_info.cra_driver_name : \
 							 sessionInfo.hash_info.cra_driver_name ));
+#else
+	( void ) ioctl( cryptoFD, CIOCFSESSION, &session.ses );
 #endif /* CIOCGSESSINFO */
 
 	return( TRUE );
@@ -2851,7 +2892,7 @@ static BOOLEAN checkCopyAvail( const int cryptoFD )
 	session2.mac = CRYPTO_SHA1;
 	if( ioctl( cryptoFD, CIOCGSESSION, &session2 ) )
 		{
-		( void ) ioctl( cryptoFD, CIOCFSESSION, session1 );
+		( void ) ioctl( cryptoFD, CIOCFSESSION, &session1.ses );
 		return( FALSE );
 		}
 
@@ -2875,8 +2916,8 @@ static BOOLEAN checkCopyAvail( const int cryptoFD )
 		}
 
 	/* Clean up */
-	( void ) ioctl( cryptoFD, CIOCFSESSION, session1 );
-	( void ) ioctl( cryptoFD, CIOCFSESSION, session2 );
+	( void ) ioctl( cryptoFD, CIOCFSESSION, &session1.ses );
+	( void ) ioctl( cryptoFD, CIOCFSESSION, &session2.ses );
 
 	return( returnValue );
 	}
@@ -2947,6 +2988,7 @@ static int getHWCrypt( void )
 		if( testCryptoAvail( cryptoFD, hwCryptInfo[ i ].source ) )
 			hwCryptFlags |= hwCryptInfo[ i ].destination;
 		}
+	ENSURES_EXT( LOOP_BOUND_OK, HWCRYPT_FLAG_NONE );
 	ENSURES_EXT( i < FAILSAFE_ARRAYSIZE( hwCryptInfo, MAP_TABLE ), 
 				 HWCRYPT_FLAG_NONE );
 	close( cryptoFD );
@@ -3251,10 +3293,14 @@ void unlockMemory( IN_BUFFER( size ) void *address,
    size, determine on which page the data ends.  These are used to determine 
    which pages a memory block covers */
 
-#if defined( _MSC_VER ) && ( _MSC_VER >= 1400 )
-  #define PTR_TYPE	INT_PTR 
+#if defined( _MSC_VER ) 
+  #if VC_GE_2005( _MSC_VER )
+	#define PTR_TYPE	INT_PTR 
+  #else
+	#define PTR_TYPE	long
+  #endif /* VS 2005 or newer */
 #else
-  #define PTR_TYPE	long
+  #define PTR_TYPE	intptr_t
 #endif /* Newer versions of VC++ */
 
 #define getPageStartAddress( address ) \
@@ -3382,6 +3428,7 @@ void unlockMemory( IN_BUFFER( size ) void *address,
 
 	REQUIRES_V( isIntegerRangeNZ( size ) );
 	REQUIRES_V( isBooleanValue( checkPageOverlap ) );
+	REQUIRES_V( pageSize > 0 );
 
 	if( !werFunctionCheck )
 		{
@@ -3453,9 +3500,11 @@ void unlockMemory( IN_BUFFER( size ) void *address,
 		secondPageAddress = 0;
 
 	/* Walk down the block list checking whether the page(s) contain another 
-	   locked block */
+	   locked block.  We can get a CRYPT_ERROR_NOTFOUND if this is the only
+	   memory block and it hasn't been linked into the block list yet, or
+	   has already been unlinked */
 	status = getBlockListInfo( NULL, &currentBlockPtr, &currentBlockSize );
-	REQUIRES_V( cryptStatusOK( status ) );
+	REQUIRES_V( cryptStatusOK( status ) || status == CRYPT_ERROR_NOTFOUND );
 	LOOP_LARGE_CHECKINC( cryptStatusOK( status ),
 						 status = getBlockListInfo( currentBlockPtr, 
 													&currentBlockPtr, 
@@ -3467,6 +3516,12 @@ void unlockMemory( IN_BUFFER( size ) void *address,
 						getPageEndAddress( currentBlockPtr, currentBlockSize );
 
 		ENSURES_V( LOOP_INVARIANT_LARGE_GENERIC() );
+
+		/* getBlockListInfo() returns all blocks in the list, including the
+		   one that we're potentially unlocking, so we make sure that we 
+		   don't match ourselves */
+		if( address == currentBlockPtr )
+			continue;
 
 		if( currentFirstPageAddress == currentSecondPageAddress )
 			currentSecondPageAddress = 0;
@@ -3526,10 +3581,7 @@ void unlockMemory( IN_BUFFER( size ) void *address,
 /* Align a pointer to a given boundary.  This gets quite complicated because
    the only pointer arithmetic that's normally allowed is addition and 
    subtraction, but to align to a boundary we need to be able to perform 
-   bitwise operations.  First we convert the pointer to a BYTE pointer so
-   that we can perform normal maths on it, and then we round in the usual
-   manner used by roundUp().  Because we have to do pointer-casting we can't 
-   use roundUp() directly but have to build our own version here.
+   bitwise operations.  To get around this we work with uintptrs.
    
    Note that there's no standard way to do this, alignment attributes and
    _Alignas()/alignas() only work on stack storage and memalign() is an 
@@ -3539,11 +3591,35 @@ STDC_NONNULL_ARG( ( 1 ) ) \
 void *ptr_align( const void *ptr, 
 				 IN_RANGE( 4, 16 ) const int units )
 	{
+	const uintptr_t address = ( uintptr_t ) ptr;
+	int offset;
+	
 	assert( isReadPtr( ptr, 1 ) );
 	assert( units == 4 || units == 8 || units == 16 );
-			/* Power of 2 required for the units - 1 bitmask */
+			/* Power of 2 required for the units - 1 bitmask.  This will be
+			   compiled out on release builds but it's only present to both
+			   document what's required and to catch problems during 
+			   regression tests, every call site hardcodes in the units 
+			   value so an incorrect value will be caught in testing */
 
+#if 0
 	return( ( void * ) ( ( BYTE * ) ptr + ( -( ( intptr_t )( ptr ) ) & ( units - 1 ) ) ) );
+#else
+	/* Calculate the offset required to get to the next multiple of units,
+	   then add it to the pointer, which avoids triggering UB breakage.
+	   The complex expression below calculates the address modulo the 
+	   rounding units with 'address & ( units - 1 )' to get 0 ... units - 1,
+	   then subtracts it from units to get it into the range 1 ... units, 
+	   and then the second masking takes the end-of-range units back to 0,
+	   to give a final range required to round up the pointer.
+	   
+	   You normally need to get a note from your mother before doing this
+	   sort of thing */
+	offset = ( int ) \
+		( ( units - ( address & ( ( uintptr_t ) units - 1 ) ) ) & \
+													( ( uintptr_t ) units - 1 ) );
+	return( ( BYTE * ) ptr + offset );
+#endif /* 0 */
 	}
 
 /* Determine the difference between two pointers, with some sanity 
@@ -3562,13 +3638,25 @@ void *ptr_align( const void *ptr,
 	undefined.
    
    As called we're always pointing to the same object, however the compiler
-   may not be able to determine this, triggering yet another of C's 200+
-   UB booby-traps even though in every architecture in existence subtracting
-   one linear address from another is valid whether it points to the same
-   object or not.  However testing across every known architecture and 
-   compiler hasn't revealed any compiler braindamage in the handling of 
-   this, so it should be handled correctly */
+   may decide that we're not, triggering yet another of C's 200+ UB booby-
+   traps even though in every architecture in existence subtracting one 
+   linear address from another is valid whether it points to the same object 
+   or not.  Testing across every known architecture and compiler hasn't 
+   revealed any compiler braindamage in the handling of this, however just 
+   to be safe we use the uintptr_t escape hatch which means the gcc 
+   developers can't force any breakage no matter how much they'd like to */
 
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+int ptr_diff( const void *ptr1, const void *ptr2 )
+	{
+	const uintptr_t address1 = ( uintptr_t ) ptr1;
+	const uintptr_t address2 = ( uintptr_t ) ptr2;
+	uintptr_t diff;
+
+	assert( isReadPtr( ptr1, 1 ) );
+	assert( isReadPtr( ptr2, 1 ) );
+
+#if 0
 #ifndef PTRDIFF_MIN
   /* Some systems don't define PTRDIFF_MIN despite it having been around 
      since C99, these are typically ancient 32-bit systems in which case it's
@@ -3576,13 +3664,6 @@ void *ptr_align( const void *ptr,
   #define PTRDIFF_MIN	INT_MIN
 #endif /* PTRDIFF_MIN */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-int ptr_diff( const void *ptr1, const void *ptr2 )
-	{
-	ptrdiff_t diff;
-
-	assert( isReadPtr( ptr1, 1 ) );
-	assert( isReadPtr( ptr2, 1 ) );
 	assert( ptr1 >= ptr2 );
 
 	diff = ( const BYTE * ) ptr1 - ( const BYTE * ) ptr2;
@@ -3598,6 +3679,21 @@ int ptr_diff( const void *ptr1, const void *ptr2 )
 		else
 			diff = -diff;
 		}
+#else
+	/* Since we've got the pointers as a uintptr_t, we can perform standard 
+	   operations on them without the risk of triggering UB, even though
+	   what we're working with is bit-for-bit identical to the same value
+	   when it's a pointer.
+	   
+	   The compare for 0 on an unsigned type is a no-op, but is left here
+	   to document that it's (in effect) been done by the data type used */
+	if( address1 < address2 )
+		{
+		assert( DEBUG_WARN );
+		return( -1 );
+		}
+	diff = address1 - address2;
+#endif
 	if( diff < 0 || diff >= MAX_INTLENGTH_SHORT )
 		return( -1 );
 

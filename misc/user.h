@@ -171,8 +171,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int setOptionSpecial( INOUT_ARRAY( configOptionsCount ) TYPECAST( OPTION_INFO * ) \
 							struct OI *configOptions, 
 					  IN_INT_SHORT const int configOptionsCount, 
-					  IN_RANGE_FIXED( CRYPT_OPTION_SELFTESTOK ) \
-							const CRYPT_ATTRIBUTE_TYPE option,
+					  IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE option,
 					  IN_INT_Z const int value );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 4 ) ) \
 int setOptionString( INOUT_ARRAY( configOptionsCount ) TYPECAST( OPTION_INFO * ) \

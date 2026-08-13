@@ -130,7 +130,8 @@ static int getSrvFQDN( INOUT_PTR NET_STREAM_INFO *netStream,
 	   we only try a new one once a minute */
 	if( lastFetchTime >= getTime( GETTIME_NOFAIL ) - 60 )
 		{
-		strlcpy_s( fqdn, fqdnMaxLen, cachedFQDN );
+		status = strlcpy_s( fqdn, fqdnMaxLen, cachedFQDN );
+		ENSURES( cryptStatusOK( status ) );
 		return( CRYPT_OK );
 		}
 
@@ -198,7 +199,8 @@ static int getSrvFQDN( INOUT_PTR NET_STREAM_INFO *netStream,
 
 	/* Remember the value that we just found to lighten the load on the
 	   resolver when we perform repeat queries */
-	strlcpy_s( fqdn, fqdnMaxLen, cachedFQDN );
+	status = strlcpy_s( fqdn, fqdnMaxLen, cachedFQDN );
+	ENSURES( cryptStatusOK( status ) );
 	lastFetchTime = getTime( GETTIME_NOFAIL );
 
 	return( CRYPT_OK );
@@ -216,7 +218,7 @@ int findHostInfo( INOUT_PTR NET_STREAM_INFO *netStream,
 	DNS_STATUS dnsStatus;
 	char nameBuffer[ MAX_DNS_SIZE + 8 ];
 	LOOP_INDEX i;
-	int priority = 32767;
+	int priority = 32767, status;
 
 	assert( isWritePtr( netStream, sizeof( NET_STREAM_INFO ) ) );
 	assert( isWritePtrDynamic( hostName, hostNameMaxLen ) );
@@ -294,7 +296,9 @@ int findHostInfo( INOUT_PTR NET_STREAM_INFO *netStream,
 					pDnsInfo->Data.SRV.pNameTarget, 
 					wcslen( pDnsInfo->Data.SRV.pNameTarget ) + 1 );
 #else
-	strlcpy_s( hostName, hostNameMaxLen, pDnsInfo->Data.SRV.pNameTarget );
+	status = strlcpy_s( hostName, hostNameMaxLen, 
+						pDnsInfo->Data.SRV.pNameTarget );
+	ENSURES( cryptStatusOK( status ) );
 #endif /* Win32 vs. WinCE */
 	*hostPort = pDnsInfo->Data.SRV.wPort;
 
@@ -327,6 +331,7 @@ static int getFQDN( STDC_UNUSED INOUT_PTR NET_STREAM_INFO *netStream,
 	struct hostent *hostInfo;
 	char *hostNamePtr = NULL;
 	LOOP_INDEX addressCount;
+	int status;
 
 	assert( isWritePtr( netStream, sizeof( NET_STREAM_INFO ) ) );
 	assert( isWritePtrDynamic( fqdn, fqdnMaxLen ) );
@@ -400,7 +405,8 @@ static int getFQDN( STDC_UNUSED INOUT_PTR NET_STREAM_INFO *netStream,
 	/* We found the FQDN, return it to the caller */
 	if( strnlen_s( hostNamePtr, MAX_DNS_SIZE ) + 1 > fqdnMaxLen )
 		return( CRYPT_ERROR_OVERFLOW );
-	strlcpy_s( fqdn, fqdnMaxLen, hostNamePtr );
+	status = strlcpy_s( fqdn, fqdnMaxLen, hostNamePtr );
+	ENSURES( cryptStatusOK( status ) );
 	return( CRYPT_OK );
 	}
 

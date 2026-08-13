@@ -81,9 +81,11 @@ static const ALGOID_INFO algoIDinfoTbl[] = {
 	  MKOID( "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x0A" )
 	  MKDESC( "rsaPSS (1 2 840 113549 1 1 10)" ) },
 #endif /* USE_PSS */
+#ifdef USE_MD5
 	{ CRYPT_ALGO_RSA, CRYPT_ALGO_MD5, 16, ALGOID_CLASS_PKCSIG,
 	  MKOID( "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x04" )
 	  MKDESC( "md5withRSAEncryption (1 2 840 113549 1 1 4)" ) },
+#endif /* USE_MD5 */
 	{ CRYPT_ALGO_RSA, CRYPT_ALGO_SHA1, 20, ALGOID_CLASS_PKCSIG,
 	  MKOID( "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x05" )
 	  MKDESC( "sha1withRSAEncryption (1 2 840 113549 1 1 5)" ) },
@@ -96,14 +98,14 @@ static const ALGOID_INFO algoIDinfoTbl[] = {
 	{ CRYPT_ALGO_RSA, CRYPT_ALGO_SHA2, 32, ALGOID_CLASS_PKCSIG,
 	  MKOID( "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x0B" )
 	  MKDESC( "sha256withRSAEncryption (1 2 840 113549 1 1 11)" ) },
-  #ifdef USE_SHA2_EXT
+#ifdef USE_SHA2_EXT
 	{ CRYPT_ALGO_RSA, CRYPT_ALGO_SHA2, 48, ALGOID_CLASS_PKCSIG,
 	  MKOID( "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x0C" )
 	  MKDESC( "sha384withRSAEncryption (1 2 840 113549 1 1 12)" ) },
 	{ CRYPT_ALGO_RSA, CRYPT_ALGO_SHA2, 64, ALGOID_CLASS_PKCSIG,
 	  MKOID( "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x0D" )
 	  MKDESC( "sha512withRSAEncryption (1 2 840 113549 1 1 13)" ) },
-  #endif /* USE_SHA2_EXT */
+#endif /* USE_SHA2_EXT */
 	/* The following four ALGOID_CLASS_PKC entries are bug workarounds for 
 	   implementations that erroneously use xxxWithRSA when they should be 
 	   using straight RSA, see the comment in 
@@ -114,14 +116,14 @@ static const ALGOID_INFO algoIDinfoTbl[] = {
 	{ CRYPT_ALGO_RSA, CRYPT_ALGO_NONE, ALGOID_ENCODING_PKCS1, ALGOID_CLASS_PKC,
 	  MKOID( "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x0B" )
 	  MKDESC( "Bug workaround for implementations using sha256WithRSA instead of RSA" ) },
-  #ifdef USE_SHA2_EXT
+#ifdef USE_SHA2_EXT
 	{ CRYPT_ALGO_RSA, CRYPT_ALGO_NONE, ALGOID_ENCODING_PKCS1, ALGOID_CLASS_PKC,
 	  MKOID( "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x0C" )
 	  MKDESC( "Bug workaround for implementations using sha384WithRSA instead of RSA" ) },
 	{ CRYPT_ALGO_RSA, CRYPT_ALGO_NONE, ALGOID_ENCODING_PKCS1, ALGOID_CLASS_PKC,
 	  MKOID( "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x0D" )
 	  MKDESC( "Bug workaround for implementations using sha512WithRSA instead of RSA" ) },
-  #endif /* USE_SHA2_EXT */
+#endif /* USE_SHA2_EXT */
 
 	/* DSA and dsaWith<hash> */
 #ifdef USE_DSA
@@ -265,20 +267,20 @@ static const ALGOID_INFO algoIDinfoTbl[] = {
   #endif /* USE_SHA2_EXT */
 
 	/* MAC algorithms */
-	{ CRYPT_ALGO_HMAC_SHA1, CRYPT_ALGO_NONE, 20, ALGOID_CLASS_HASH,
+	{ CRYPT_ALGO_HMAC_SHA1, CRYPT_ALGO_NONE, 20, ALGOID_CLASS_MAC,
 	  MKOID( "\x06\x08\x2B\x06\x01\x05\x05\x08\x01\x02" )
 	  MKDESC( "hmac-SHA (1 3 6 1 5 5 8 1 2)" ) },
-	{ CRYPT_ALGO_HMAC_SHA1, CRYPT_ALGO_NONE, 20, ALGOID_CLASS_HASH,
+	{ CRYPT_ALGO_HMAC_SHA1, CRYPT_ALGO_NONE, 20, ALGOID_CLASS_MAC,
 	  MKOID( "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x07" )
 	  MKDESC( "Another hmacWithSHA1 (1 2 840 113549 2 7)" ) },
-	{ CRYPT_ALGO_HMAC_SHA2, CRYPT_ALGO_NONE, 32, ALGOID_CLASS_HASH,
+	{ CRYPT_ALGO_HMAC_SHA2, CRYPT_ALGO_NONE, 32, ALGOID_CLASS_MAC,
 	  MKOID( "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x09" )
 	  MKDESC( "hmacWithSHA256 (1 2 840 113549 2 9)" ) },
   #ifdef USE_SHA2_EXT
-	{ CRYPT_ALGO_HMAC_SHA2, CRYPT_ALGO_NONE, 48, ALGOID_CLASS_HASH,
+	{ CRYPT_ALGO_HMAC_SHA2, CRYPT_ALGO_NONE, 48, ALGOID_CLASS_MAC,
 	  MKOID( "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x0A" )
 	  MKDESC( "hmacWithSHA384 (1 2 840 113549 2 10)" ) },
-	{ CRYPT_ALGO_HMAC_SHA2, CRYPT_ALGO_NONE, 64, ALGOID_CLASS_HASH,
+	{ CRYPT_ALGO_HMAC_SHA2, CRYPT_ALGO_NONE, 64, ALGOID_CLASS_MAC,
 	  MKOID( "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x0B" )
 	  MKDESC( "hmacWithSHA512 (1 2 840 113549 2 11)" ) },
   #endif /* USE_SHA2_EXT */
@@ -684,6 +686,7 @@ int oidToAlgorithm( IN_BUFFER( oidLength ) const BYTE *oid,
 			break;
 
 		case ALGOID_CLASS_HASH:
+		case ALGOID_CLASS_MAC:
 			/* For hash and MAC algorithms the algorithm is reflected in the
 			   hashAlgo member of the algoIDparams and the parameter is the
 			   hash size */

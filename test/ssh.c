@@ -515,11 +515,13 @@ int testClockProblems( void )
 			  connections some time in 2022.
 	Server 4: Reference OpenSSH implementation.  As of early 2016 switched 
 			  to a bunch of oddball nonstandard suites that we don't support.
+			  Started rejecting SSH connections some time in 2023.
 	Server 5: OpenSSH with ECC support.  There are two aliases for the same 
 			  server, anoncvs is a somewhat nonstandard config that only 
 			  allows access via the 'anoncvs' account and is rather abrupt
 			  about disconnecting clients, and natsu, which is a more 
-			  standard config that behaves more normally.
+			  standard config that behaves more normally.  Vanished in 2024
+			  some time.
 	Server 6: Sends PAM auth request consisting of 16 bytes of zeroes, 
 			  technically this is valid (since the spec is so vague) but it
 			  doesn't make any sense to send it.
@@ -634,7 +636,7 @@ static const struct {
 	{ NULL, NULL, NULL, FALSE }
 	};
 
-#define SSH2_SERVER_NO	16
+#define SSH2_SERVER_NO		16
 
 #ifdef TEST_SESSION_LOOPBACK
 

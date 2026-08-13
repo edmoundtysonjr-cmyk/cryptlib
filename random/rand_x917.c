@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						cryptlib X9.17 Generator Routines					*
-*						Copyright Peter Gutmann 1995-2024					*
+*						Copyright Peter Gutmann 1995-2025					*
 *																			*
 ****************************************************************************/
 
@@ -21,7 +21,9 @@
 
 #ifndef CONFIG_CONSERVE_MEMORY_EXTRA
 
-/* Sanity-check the X9.17 randomness state */
+/* Sanity-check the X9.17 randomness state.  Note that this only checks the
+   subset that applies to X9.17, not the overall RANDOM_INFO which is
+   checked by sanityCheckRandom() */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 static BOOLEAN sanityCheckRandomX917( const RANDOM_INFO *randomInfo )
@@ -47,17 +49,31 @@ static BOOLEAN sanityCheckRandomX917( const RANDOM_INFO *randomInfo )
 		}
 
 	/* Make sure that the X9.17 generator accounting information is within
-	   bounds.  See the comment in generateX917() for the high-range check */
+	   bounds.  The reason for the odd-looking high-range value is that we 
+	   ensure that x917Count < X917_MAX_CYCLES when calling generateX917() 
+	   from random/random.c:getRandomOutput() but after generateX917() has 
+	   run it can add another RANDOMPOOL_SIZE / X917_POOLSIZE to the cycle
+	   count, so on entry it's < X917_MAX_CYCLES, on exit it can be up to
+	   RANDOMPOOL_SIZE / X917_POOLSIZE over that, which means that it'll
+	   be reset on the next iteration of random/random.c:getRandomOutput() */
 	if( randomInfo->x917Count < 0 || \
 		randomInfo->x917Count > X917_MAX_CYCLES + \
-								( MAX_RANDOM_BYTES / X917_POOLSIZE ) )
+								( RANDOMPOOL_SIZE / X917_POOLSIZE ) )
 		{
 		DEBUG_PUTS(( "sanityCheckRandomX917: X9.17 count" ));
+		return( FALSE );
+		}
+	if( !isBooleanValue( randomInfo->x917Inited ) || \
+		!isBooleanValue( randomInfo->useX931 ) )
+		{
+		DEBUG_PUTS(( "sanityCheckRandomX917: X9.17 flags" ));
 		return( FALSE );
 		}
 
 	return( TRUE );
 	}
+#else
+  #define sanityCheckRandomX917( x )	TRUE
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 /****************************************************************************
@@ -110,6 +126,11 @@ static BOOLEAN sanityCheckRandomX917( const RANDOM_INFO *randomInfo )
 
 #ifdef USE_3DES_X917
 
+/* This code exists only to document the original circa 2001 FIPS-certified 
+   implementation.  Such a generator can no longer be certified because of
+   its use of 3DES.  Since the code hasn't been updated since then it no 
+   longer compiles with the current cryptlib configuration */
+
 /* A macro to make what's being done by the generator easier to follow */
 
 #define rngEncrypt( data, key ) \
@@ -121,17 +142,17 @@ static BOOLEAN sanityCheckRandomX917( const RANDOM_INFO *randomInfo )
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 int setKeyX917( INOUT_PTR RANDOM_INFO *randomInfo, 
-				IN_BUFFER_C( X917_KEYSIZE ) const BYTE *key,
+				IN_BUFFER_C( X917_KEYSIZE ) BYTE *key,
 				IN_BUFFER_C( X917_POOLSIZE ) const BYTE *state,
 				IN_BUFFER_OPT_C( X917_POOLSIZE ) const BYTE *dateTime )
 	{
-	X917_KEY *des3Key = &randomInfo->x917Key;
+	X917_KEY *des3Key = DATAPTR_GET( randomInfo->x917Key );
 	int desStatus;
 
 	assert( isWritePtr( randomInfo, sizeof( RANDOM_INFO ) ) );
 	assert( isReadPtr( key, X917_KEYSIZE ) );
-	assert( isReadPtr( state, X917_KEYSIZE ) );
-	assert( dateTime == NULL || isReadPtr( dateTime, X917_KEYSIZE ) );
+	assert( isReadPtr( state, X917_POOLSIZE ) );
+	assert( dateTime == NULL || isReadPtr( dateTime, X917_POOLSIZE ) );
 
 	/* Precondition: the key and seed aren't being taken from the same 
 	   location */
@@ -185,7 +206,7 @@ int setKeyX917( INOUT_PTR RANDOM_INFO *randomInfo,
 /* Macros to make what's being done by the generator easier to follow */
 
 #define AES_KEY		aes_encrypt_ctx
-#define rngEncrypt( data, key ) \
+#define aesEncrypt( data, key ) \
 		aes_ecb_encrypt( ( data ), ( data ), X917_BLOCKSIZE, ( key ) )
 
 /* Set the X9.17 generator key */
@@ -200,12 +221,14 @@ int setKeyX917( INOUT_PTR RANDOM_INFO *randomInfo,
 	int aesStatus;
 
 	static_assert( X917_KEYSIZE == X917_POOLSIZE,
-				   "X9.17 key vs.pool size" );
+				   "X9.17 key vs. pool size" );
+	static_assert( X917_BLOCKSIZE == X917_POOLSIZE,
+				   "X9.17 block vs. pool size" );
 
 	assert( isWritePtr( randomInfo, sizeof( RANDOM_INFO ) ) );
 	assert( isReadPtr( key, X917_KEYSIZE ) );
 	assert( isReadPtr( state, X917_POOLSIZE ) );
-	assert( dateTime == NULL || isReadPtr( dateTime, X917_KEYSIZE ) );
+	assert( dateTime == NULL || isReadPtr( dateTime, X917_POOLSIZE ) );
 
 	/* Precondition: the key and seed aren't being taken from the same 
 	   location */
@@ -233,6 +256,13 @@ int setKeyX917( INOUT_PTR RANDOM_INFO *randomInfo,
 		memcpy( randomInfo->x917DT, dateTime, X917_POOLSIZE );
 		randomInfo->useX931 = TRUE;
 		}
+	else
+		{
+		/* Reset the X9.31 flag if we're not using that interpretation any
+		   more.  In practice this is a no-op since we always use it once
+		   we're past the X9.17 self-tests so it'd never get unset */
+		randomInfo->useX931 = FALSE;
+		}
 
 	/* We've initialised the generator and reset the cryptovariables, we're
 	   ready to go */
@@ -247,20 +277,79 @@ int setKeyX917( INOUT_PTR RANDOM_INFO *randomInfo,
 
 /* Run the X9.17 generator over a block of data */
 
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+static int incrementDT( INOUT_BUFFER_FIXED( X917_POOLSIZE ) BYTE *dt )
+	{
+	LOOP_INDEX i;
+	ORIGINAL_INT_VAR( lsb1, dt[ X917_POOLSIZE - 1 ] );
+	ORIGINAL_INT_VAR( lsb2, dt[ X917_POOLSIZE - 2 ] );
+	ORIGINAL_INT_VAR( lsb3, dt[ X917_POOLSIZE - 3 ] );
+	ORIGINAL_INT_VAR( lsb4, dt[ X917_POOLSIZE - 4 ] );
+
+	assert( isWritePtr( dt, X917_POOLSIZE ) );
+
+	/* Update DT to meet the monotonically increasing time value 
+	   requirement.  Although the spec doesn't explicitly state this, 
+	   the published test vectors increment the rightmost byte so the 
+	   value is treated as big-endian */
+	LOOP_EXT_REV( i = X917_POOLSIZE - 1, i >= 0, i--, \
+					  X917_POOLSIZE + 1 )
+		{
+		ENSURES( LOOP_INVARIANT_REV( i, 0, X917_POOLSIZE - 1 ) );
+
+		/* The following would be better written as:
+
+			dt[ i ]++;
+			if( dt[ i ] != 0 )
+				break;
+
+		   but this takes advantage of 8-bit integer wraparound which 
+		   triggers exceptions in code-check tools */
+		if( dt[ i ] >= 0xFF )
+			dt[ i ] = 0;
+		else
+			{
+			dt[ i ]++;
+			break;
+			}
+		}
+	ENSURES( LOOP_BOUND_EXT_REV_OK( X917_POOLSIZE + 1 ) );
+
+	/* Postcondition: The value has been incremented by one.  This check 
+	   fails once every 2^32 but at (typically, for an encryption key) 128 
+	   bits of output at a time it's unlikely we'd ever get to that point, 
+	   256M 128-bit output blocks, and in any case we always run it in 
+	   X9.17 (CSPRNG) rather than X9.31 (PRNG) mode so it's really only 
+	   excercised during the self-test */
+	ENSURES( ( dt[ X917_POOLSIZE - 1 ] == ORIGINAL_VALUE( lsb1 ) + 1 ) || \
+			 ( dt[ X917_POOLSIZE - 1 ] == 0 && \
+			   dt[ X917_POOLSIZE - 2 ] == ORIGINAL_VALUE( lsb2 ) + 1 ) || \
+			 ( dt[ X917_POOLSIZE - 1 ] == 0 && \
+			   dt[ X917_POOLSIZE - 2 ] == 0 && \
+			   dt[ X917_POOLSIZE - 3 ] == ORIGINAL_VALUE( lsb3 ) + 1 ) || \
+			 ( dt[ X917_POOLSIZE - 1 ] == 0 && \
+			   dt[ X917_POOLSIZE - 2 ] == 0 && \
+			   dt[ X917_POOLSIZE - 3 ] == 0 && \
+			   dt[ X917_POOLSIZE - 4 ] == ORIGINAL_VALUE( lsb4 ) + 1 ) );
+
+	return( CRYPT_OK );
+	}
+
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int generateX917( INOUT_PTR RANDOM_INFO *randomInfo, 
 				  INOUT_BUFFER_FIXED( length ) BYTE *data, 
-				  IN_RANGE( 1, RANDOMPOOL_ALLOCSIZE ) const int length )
+				  IN_RANGE( 1, RANDOMPOOL_SIZE ) const int length )
 	{
 	AES_KEY *aesKey = DATAPTR_GET( randomInfo->x917Key );
 	BYTE encTime[ X917_POOLSIZE + 8 ], *dataPtr = data;
 	LOOP_INDEX dataBlockPos;
+	int aesStatus;
 
 	assert( isWritePtr( randomInfo, sizeof( RANDOM_INFO ) ) );
-	assert( isReadPtrDynamic( data, length ) );
+	assert( isWritePtrDynamic( data, length ) );
 
-	static_assert( RANDOMPOOL_ALLOCSIZE % X917_POOLSIZE == 0,
-				   "Random pool alloc size vs. X9.17 pool size" );
+	static_assert( RANDOMPOOL_SIZE % X917_POOLSIZE == 0,
+				   "Random pool size vs. X9.17 pool size" );
 
 	/* Precondition: The generator has been initialised, we're not asking 
 	   for more data than the maximum that should be needed (in fact we're 
@@ -268,17 +357,14 @@ int generateX917( INOUT_PTR RANDOM_INFO *randomInfo,
 	   the cryptovariables aren't past their use-by date */
 	REQUIRES( sanityCheckRandomX917( randomInfo ) );
 	REQUIRES( randomInfo->x917Inited == TRUE );
-	REQUIRES( length == X917_POOLSIZE || length == RANDOMPOOL_ALLOCSIZE );
+	REQUIRES( length == X917_POOLSIZE || length == RANDOMPOOL_SIZE );
 	REQUIRES( randomInfo->x917Count >= 0 && \
 			  randomInfo->x917Count < X917_MAX_CYCLES );
 
-	/* Process as many blocks of output as needed.  We can't check the
-	   return value of the encryption call because there isn't one, however
-	   the encryption code has gone through a self-test when the randomness
-	   subsystem was initialised.  This can run the generator for slightly 
-	   more than X917_MAX_CYCLES if we're already close to the limit before 
-	   we start, but this isn't a big problem, it's only an approximate 
-	   reset-count measure anyway */
+	/* Process as many blocks of output as needed.  This can run the 
+	   generator for slightly more than X917_MAX_CYCLES if we're already 
+	   close to the limit before we start, but this isn't a big problem, 
+	   it's only an approximate reset-count measure anyway */
 	LOOP_LARGE( dataBlockPos = 0, 
 				dataBlockPos < length,
 				dataBlockPos += X917_POOLSIZE )
@@ -297,7 +383,9 @@ int generateX917( INOUT_PTR RANDOM_INFO *randomInfo,
 
 		/* Set the seed from the user-supplied data.  This varies depending
 		   on whether we're using the X9.17 or X9.31 interpretation of
-		   seeding */
+		   seeding.  In production we always use the X9.17 CSPRNG form, not
+		   the X9.31 PRNG one, checked by the caller before calling this
+		   function */
 		if( randomInfo->useX931 )
 			{
 			/* It's the X9.31 interpretation, there's no further user seed
@@ -315,8 +403,8 @@ int generateX917( INOUT_PTR RANDOM_INFO *randomInfo,
 			   we'll reuse the previous data in the buffer.  All that matters 
 			   is that there's at least one byte of difference.  In any case 
 			   though we're only ever called with either 
-			   length == X917_POOLSIZE or length == RANDOMPOOL_ALLOCSIZE, so
-			   we always copy a full X917_POOLSIZE worth of data */
+			   length == X917_POOLSIZE or length == RANDOMPOOL_SIZE, so we 
+			   always copy a full X917_POOLSIZE worth of data */
 			REQUIRES( rangeCheck( bytesToCopy, 1, X917_POOLSIZE ) );
 			memcpy( encTime, dataPtr, bytesToCopy );
 
@@ -326,7 +414,8 @@ int generateX917( INOUT_PTR RANDOM_INFO *randomInfo,
 			}
 
 		/* out = Enc( Enc( DT ) ^ V(n) ); */
-		rngEncrypt( encTime, aesKey );
+		aesStatus = aesEncrypt( encTime, aesKey );
+		ENSURES( aesStatus == EXIT_SUCCESS );
 		LOOP_EXT_ALT( i = 0, i < X917_POOLSIZE, i++, X917_POOLSIZE + 1 )
 			{
 			ENSURES( LOOP_INVARIANT_EXT_ALT( i, 0, X917_POOLSIZE - 1,
@@ -335,7 +424,8 @@ int generateX917( INOUT_PTR RANDOM_INFO *randomInfo,
 			randomInfo->x917Pool[ i ] ^= encTime[ i ];
 			}
 		ENSURES( LOOP_BOUND_OK_ALT );
-		rngEncrypt( randomInfo->x917Pool, aesKey );
+		aesStatus = aesEncrypt( randomInfo->x917Pool, aesKey );
+		ENSURES( aesStatus == EXIT_SUCCESS );
 		REQUIRES( boundsCheckZ( dataBlockPos, bytesToCopy, length ) );
 		memcpy( dataPtr, randomInfo->x917Pool, bytesToCopy );
 
@@ -353,52 +443,16 @@ int generateX917( INOUT_PTR RANDOM_INFO *randomInfo,
 			randomInfo->x917Pool[ i ] ^= encTime[ i ];
 			}
 		ENSURES( LOOP_BOUND_OK_ALT );
-		rngEncrypt( randomInfo->x917Pool, aesKey );
+		aesStatus = aesEncrypt( randomInfo->x917Pool, aesKey );
+		ENSURES( aesStatus == EXIT_SUCCESS );
 
-		/* If we're using the X9.31 interpretation, update DT to meet the
-		   monotonically increasing time value requirement.  Although the
-		   spec doesn't explicitly state this, the published test vectors
-		   increment the rightmost byte so the value is treated as big-
-		   endian */
+		/* If we're using the X9.31 interpretation, update DT */
 		if( randomInfo->useX931 )
 			{
-			ORIGINAL_INT_VAR( lsb1, randomInfo->x917DT[ X917_POOLSIZE - 1 ] );
-			ORIGINAL_INT_VAR( lsb2, randomInfo->x917DT[ X917_POOLSIZE - 2 ] );
-			ORIGINAL_INT_VAR( lsb3, randomInfo->x917DT[ X917_POOLSIZE - 3 ] );
-
-			LOOP_EXT_REV_ALT( i = X917_POOLSIZE - 1, i >= 0, i--, \
-							  X917_POOLSIZE )
-				{
-				ENSURES( LOOP_INVARIANT_REV_ALT( i, 0, X917_POOLSIZE - 1 ) );
-
-				/* The following would be better written as:
-
-					randomInfo->x917DT[ i ]++;
-					if( randomInfo->x917DT[ i ] != 0 )
-						break;
-
-				   but this takes advantage of 8-bit integer wraparound which
-				   triggers exceptions in code-check tools */
-				if( randomInfo->x917DT[ i ] >= 0xFF )
-					randomInfo->x917DT[ i ] = 0;
-				else
-					{
-					randomInfo->x917DT[ i ]++;
-					break;
-					}
-				}
-			ENSURES( LOOP_BOUND_EXT_REV_OK_ALT( X917_POOLSIZE ) );
-
-			/* Postcondition: The value has been incremented by one */
-			ENSURES( ( randomInfo->x917DT[ X917_POOLSIZE - 1 ] == \
-							ORIGINAL_VALUE( lsb1 ) + 1 ) || \
-					 ( randomInfo->x917DT[ X917_POOLSIZE - 1 ] == 0 && \
-					   randomInfo->x917DT[ X917_POOLSIZE - 2 ] == \
-							ORIGINAL_VALUE( lsb2 ) + 1 ) || \
-					 ( randomInfo->x917DT[ X917_POOLSIZE - 1 ] == 0 && \
-					   randomInfo->x917DT[ X917_POOLSIZE - 2 ] == 0 && \
-					   randomInfo->x917DT[ X917_POOLSIZE - 3 ] == \
-							ORIGINAL_VALUE( lsb3 ) + 1 ) );
+			int status;
+			
+			status = incrementDT( randomInfo->x917DT );
+			ENSURES( cryptStatusOK( status ) );	
 			}
 
 		/* Move on to the next block */
@@ -452,6 +506,10 @@ int initX917( INOUT_PTR RANDOM_INFO *randomInfo )
 *						X9.17 Generator Self-test Routines					*
 *																			*
 ****************************************************************************/
+
+/* The following tests are all run with fixed test vectors and serve to test 
+   the correct functioning of the various PRNGs, they're never used with live 
+   data */
 
 #ifndef CONFIG_NO_SELFTEST
 
@@ -526,7 +584,7 @@ static const X917_MCT_TESTDATA x917MCTdata = {	/* Monte Carlo Test */
 	"\xA4\x5B\xF2\xE5\x0D\x15\x37\x10\x79\x83\x2F\x38\xA8\x9B\x2A\xB0",
 	"\x82\x19\xE0\x1B\x2A\x69\x58\xBB",
 	"\x28\x31\x76\xBA\x23\xFA\x31\x81",
-	0
+	{ 0 }
 #elif ( RNG_TEST_VALUES == RNG_TEST_AES_NIST )
 	/* Key = F7D36762B9915F1ED585EB8E91700EB2
 	   DT = 259E67249288597A4D61E7C0E690AFAE
@@ -915,7 +973,9 @@ static const X917_VST_TESTDATA x917VSTdata = {	/* Variable Seed Test (VST) */
 	};
 
 /* Helper functions to output the test data in the format required for the
-   FIPS eval */
+   FIPS eval.  Again, this is from the circa 2001 FIPS-certified 3DES 
+   implementation so both hardcodes 3DES and probably won't compile any 
+   more */
 
 #if ( RNG_TEST_VALUES == RNG_TEST_FIPSEVAL )
 
@@ -926,11 +986,11 @@ static void printVector( const char *description, const BYTE *data )
 	printf( "%s = ", description );
 	LOOP_SMALL( i = 0, i < 8, i++ )
 		{
-		ENSURES( LOOP_INVARIANT_SMALL( i, 0, 7 ) );
+		ENSURES_V( LOOP_INVARIANT_SMALL( i, 0, 7 ) );
 
 		printf( "%02x", data[ i ] );
 		}
-	ENSURES( LOOP_BOUND_OK );
+	ENSURES_V( LOOP_BOUND_OK );
 	putchar( '\n' );
 	}
 
@@ -967,11 +1027,7 @@ int randomAlgorithmSelfTest( void )
 	int status;
 
 	/* Test the hash algorithm functionality */
-#ifdef USE_SHA1_PRNG
-	capabilityInfo = getSHA1Capability();
-#else
 	capabilityInfo = getSHA2Capability();
-#endif /* USE_SHA1_PRNG */
 	status = capabilityInfo->selfTestFunction();
 	if( cryptStatusError( status ) )
 		return( status );
@@ -991,11 +1047,7 @@ int randomAlgorithmSelfTest( void )
 
 /* Test the X9.17 generator */
 
-#if defined( USE_SHA1_PRNG )	/* SHA-1 + 3DES */
-  #define PRNG_OUTPUT_STEP1	"\xF0\x8D\xD4\xDE\xFA\x2C\x80\x11"
-  #define PRNG_OUTPUT_STEP2	"\xA0\xA9\x4E\xEC\xCD\xD9\x28\x7F"
-  #define PRNG_OUTPUT_STEP3	"\x70\x82\x64\xED\x83\x88\x40\xE4"
-#elif defined( USE_3DES_X917 )	/* SHA-2 + 3DES */
+#if defined( USE_3DES_X917 )	/* SHA-2 + 3DES */
   #define PRNG_OUTPUT_STEP1	"\x7F\x93\x4E\x84\x3B\x79\xB3\x96"
   #define PRNG_OUTPUT_STEP2	"\x43\xD5\x6A\x6D\x97\x71\xA8\x12"
   #define PRNG_OUTPUT_STEP3	"\xAE\xEF\x82\x6F\xC1\x5B\x44\xAF"
@@ -1003,17 +1055,20 @@ int randomAlgorithmSelfTest( void )
   #define PRNG_OUTPUT_STEP1	"\x8A\xB2\x91\x01\x94\x33\x5C\x51\xB6\x44\x15\x42\xA7\x4B\x1D\xFE"
   #define PRNG_OUTPUT_STEP2	"\xDB\x5B\xB2\xA0\xEE\xCB\xA6\x4B\xEE\x85\x8C\xEA\xF7\xCA\x13\x74"
   #define PRNG_OUTPUT_STEP3	"\x02\x86\x91\x4C\xB8\x61\x2C\xA5\xA7\xEB\xD7\x34\x5F\x3C\x17\x38"
-#endif /* SHA-1 vs. SHA-2 PRNG */
+#endif /* 3DES vs. AES PRNG */
 
-CHECK_RETVAL \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int selfTestX917( INOUT_PTR RANDOM_INFO *testRandomInfo, 
-				  IN_BUFFER_C( X917_KEYSIZE ) const BYTE *key )
+				  IN_BUFFER_C( X917_KEYSIZE * 2 ) const BYTE *key )
 	{
 	BYTE buffer[ X917_BLOCKSIZE + 8 ];
 	int status;
 
 	assert( isWritePtr( testRandomInfo, sizeof( RANDOM_INFO ) ) );
-	assert( isReadPtr( key, X917_KEYSIZE ) );
+	assert( isReadPtr( key, X917_KEYSIZE * 2 ) );
+
+	static_assert( X917_KEYSIZE * 2 <= RANDOMPOOL_SIZE,
+				   "X9.17 key size vs. random pool size" );
 
 	/* Check that the ANSI X9.17 PRNG is working correctly */
 	memset( buffer, 0, X917_BLOCKSIZE );
@@ -1040,7 +1095,7 @@ int selfTestX917( INOUT_PTR RANDOM_INFO *testRandomInfo,
 
 #if !defined( CONFIG_SLOW_CPU )
 
-CHECK_RETVAL \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int fipsTest( INOUT_PTR RANDOM_INFO *testRandomInfo,
 					 IN_BOOL const BOOLEAN isX931 )
 	{
@@ -1091,15 +1146,17 @@ static int fipsTest( INOUT_PTR RANDOM_INFO *testRandomInfo,
 		LOOP_EXT_REV_ALT( j = X917_BLOCKSIZE - 1, j > 0, j--, 
 						  X917_BLOCKSIZE )
 			{
+			int carry;
+			
 			ENSURES( LOOP_INVARIANT_REV_ALT( j, 1, X917_BLOCKSIZE - 1 ) );
 
-			if( V[ j - 1 ] & 1 )
-				V[ j ] = intToByte( ( V[ j ] >> 1 ) | 0x80 );
+			carry = ( V[ j - 1 ] & 1 ) ? 0x80 : 0x00;
+			V[ j ] = intToByte( ( V[ j ] >> 1 ) | carry );
 			}
 		ENSURES( LOOP_BOUND_EXT_REV_OK_ALT( X917_BLOCKSIZE ) );
 		V[ 0 ] = intToByte( ( V[ 0 ] >> 1 ) | 0x80 );
 		LOOP_EXT_REV_ALT( j = X917_BLOCKSIZE - 1, j >= 0, j--, 
-						  X917_BLOCKSIZE )
+						  X917_BLOCKSIZE + 1 )
 			{
 			ENSURES( LOOP_INVARIANT_REV_ALT( j, 0, X917_BLOCKSIZE - 1 ) );
 
@@ -1107,7 +1164,7 @@ static int fipsTest( INOUT_PTR RANDOM_INFO *testRandomInfo,
 			if( DT[ j ] != 0 )
 				break;
 			}
-		ENSURES( LOOP_BOUND_EXT_REV_OK_ALT( X917_BLOCKSIZE ) );
+		ENSURES( LOOP_BOUND_EXT_REV_OK_ALT( X917_BLOCKSIZE + 1 ) );
 		}
 	ENSURES( LOOP_BOUND_OK );
 
@@ -1115,7 +1172,7 @@ static int fipsTest( INOUT_PTR RANDOM_INFO *testRandomInfo,
 	}
 #endif /* Slower CPUs */
 
-CHECK_RETVAL \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int fipsTestX917( INOUT_PTR RANDOM_INFO *testRandomInfo )
 	{
 	/* The following tests can take quite some time on slower CPUs because

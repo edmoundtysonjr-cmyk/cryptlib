@@ -5,7 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>
 #include "crypt.h"
 #ifdef INC_ALL
   #include "misc_rw.h"				/* For TOTP check */
@@ -84,11 +83,11 @@ static int exitErrorNotFound( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 /* Make sure that an attribute that's being added isn't already present */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-static BOOLEAN checkAttributePresent( INOUT_PTR SESSION_INFO *sessionInfoPtr,
+static BOOLEAN checkAttributePresent( IN_PTR const SESSION_INFO *sessionInfoPtr,
 									  IN_ATTRIBUTE \
 						 				const CRYPT_ATTRIBUTE_TYPE attribute )
 	{
-	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
+	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
 	REQUIRES_B( isAttribute( attribute ) );
 
@@ -143,6 +142,7 @@ static int checkAuthToken( IN_BUFFER( totpValueLength ) const void *totpValue,
 	REQUIRES( totpValueLength > 0 && totpValueLength <= CRYPT_MAX_TEXTSIZE );
 	REQUIRES( authTokenSeedSize >= 16 && \
 			  authTokenSeedSize <= CRYPT_MAX_TEXTSIZE );
+			  /* Enforced by the kernel */
 
 	/* If the time is screwed up then we can't continue */
 	if( currentTime <= MIN_TIME_VALUE )
@@ -191,7 +191,13 @@ static int checkAuthToken( IN_BUFFER( totpValueLength ) const void *totpValue,
 	/* Make sure that the HOTP value matches the value supplied as the 
 	   password.  The TOTP values are tokens unrelated to the secret value 
 	   that are only valid for 30 seconds so there shouldn't be any problem 
-	   putting them in an error message */
+	   putting them in an error message.
+	   
+	   Note that this doesn't currently implement the RFC 6238 handling of 
+	   clock drift between two systems (which in any case is only a 
+	   RECOMMENDed, section 6 of the RFC) because we don't have any way to 
+	   store the drift value locally which means that all we'd be doing is 
+	   widening the time-step size to 60 or 90 seconds */
 	if( compareDataConstTime( totpValue, totpBuffer, 6 ) != TRUE )
 		{
 		retExtSan( CRYPT_ERROR_WRONGKEY,
@@ -264,7 +270,7 @@ static int addUrl( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* Remember the server name */
-	if( urlInfo.hostLen + urlInfo.locationLen >= MAX_URL_SIZE )
+	if( urlInfo.hostLen + urlInfo.locationLen > MAX_URL_SIZE )
 		{
 		/* This should never happen since the overall URL size has to be 
 		   less than MAX_URL_SIZE */
@@ -309,9 +315,13 @@ static int addUrl( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   return */
 	if( urlInfo.port > 0 )
 		{
-		( void ) krnlSendMessage( sessionInfoPtr->objectHandle, 
-								  IMESSAGE_DELETEATTRIBUTE, NULL,
-								  CRYPT_SESSINFO_SERVER_PORT );
+		if( findSessionInfo( sessionInfoPtr, \
+							 CRYPT_SESSINFO_SERVER_PORT ) != NULL )
+			{
+			( void ) krnlSendMessage( sessionInfoPtr->objectHandle, 
+									  IMESSAGE_DELETEATTRIBUTE, NULL,
+									  CRYPT_SESSINFO_SERVER_PORT );
+			}
 		status = krnlSendMessage( sessionInfoPtr->objectHandle, 
 								  IMESSAGE_SETATTRIBUTE, &urlInfo.port,
 								  CRYPT_SESSINFO_SERVER_PORT );
@@ -320,9 +330,13 @@ static int addUrl( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{
 		MESSAGE_DATA userInfoMsgData;
 
-		( void ) krnlSendMessage( sessionInfoPtr->objectHandle, 
-								  IMESSAGE_DELETEATTRIBUTE, NULL,
-								  CRYPT_SESSINFO_USERNAME );
+		if( findSessionInfo( sessionInfoPtr, \
+							 CRYPT_SESSINFO_USERNAME ) != NULL )
+			{
+			( void ) krnlSendMessage( sessionInfoPtr->objectHandle, 
+									  IMESSAGE_DELETEATTRIBUTE, NULL,
+									  CRYPT_SESSINFO_USERNAME );
+			}
 		setMessageData( &userInfoMsgData, ( MESSAGE_CAST ) urlInfo.userInfo, 
 						urlInfo.userInfoLen );
 		status = krnlSendMessage( sessionInfoPtr->objectHandle, 
@@ -392,7 +406,10 @@ static int addCredential( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* Check that what we're adding is consistent with what we've already 
-	   got */
+	   got.  This changes the caller's cursor setting, but these attributes 
+	   are only added before the session is activated which means that it's
+	   unlikely they'll be trying to move the cursor around, that's done
+	   after activation to see what the other side sent */
 	status = setSessionAttributeCursor( sessionInfoPtr,
 										CRYPT_ATTRIBUTE_CURRENT_GROUP, 
 										CRYPT_CURSOR_LAST );
@@ -506,22 +523,22 @@ static int addCredential( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			retIntError();
 		}
 
-	/* If it could be an encoded PKI value, check its validity */
+	/* If it could be an encoded PKI value, check its validity.  We need at
+	   least "XXXXX-XXXXX-XXXXX" or 17 characters of data */
 #ifdef USE_BASE64ID
-	if( credentialLength >= 15 && \
+	if( credentialLength >= 17 && \
 		isPKIUserValue( credential, credentialLength ) )
 		{
 		BYTE decodedValue[ CRYPT_MAX_TEXTSIZE + 8 ];
-		int decodedValueLen;
+		int dummy;
 
 		/* It's an encoded value, make sure that it's in order */
 		status = decodePKIUserValue( decodedValue, CRYPT_MAX_TEXTSIZE, 
-									 &decodedValueLen, credential, 
-									 credentialLength );
+									 &dummy, credential, credentialLength );
 		zeroise( decodedValue, CRYPT_MAX_TEXTSIZE );
 		if( cryptStatusError( status ) )
 			return( status );
-		flags = ATTR_FLAG_ENCODEDVALUE;
+		flags |= ATTR_FLAG_ENCODEDVALUE;
 		}
 #endif /* USE_BASE64ID */
 
@@ -660,14 +677,16 @@ static int addPrivateKey( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			}
 		}
 
-	/* If we're using ECDSA and the 64-bit SHA-2 algorithms aren't available,
-	   make sure that the key is P256 and not one that requires a 64-bit hash
-	   fashion statement */
-#ifndef USE_SHA2_EXT
+	/* Get any additional information that we may need for the private key */
 	status = krnlSendMessage( privateKey, IMESSAGE_GETATTRIBUTE, 
 							  &privateKeyAlgo, CRYPT_CTXINFO_ALGO );
 	if( cryptStatusError( status ) )
 		return( CRYPT_ARGERROR_NUM1 );
+
+	/* If we're using ECDSA and the 64-bit SHA-2 algorithms aren't available,
+	   make sure that the key is P256 and not one that requires a 64-bit hash
+	   fashion statement */
+#ifndef USE_SHA2_EXT
 	if( privateKeyAlgo == CRYPT_ALGO_ECDSA )
 		{
 		int privateKeySize;
@@ -700,21 +719,24 @@ static int addPrivateKey( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		if( status == OK_SPECIAL )
 			{
 			/* The value was dealt with as a side-effect of the check 
-			   function, there's nothing more to do */
+			   function, there's nothing more to do.  The only case where
+			   this really happens is when SESSION_FLAG_MULTIPLEKEYS is set
+			   and there's already a private key present, which happens with
+			   TLS SNI-based key selection.  In that case the check function
+			   adds any additional keys as session attributes which will be
+			   swapped into place with the main private key as required when
+			   the session is established, see session/tls_svr.c:checkSNI()
+			   for details */
 			return( CRYPT_OK );
 			}
 		if( cryptStatusError( status ) )
 			return( status );
 		}
 
-	/* Get any additional information that we may need for the private key */
-	status = krnlSendMessage( privateKey, IMESSAGE_GETATTRIBUTE, 
-							  &privateKeyAlgo, CRYPT_CTXINFO_ALGO );
+	/* Add the private key and increment its reference count */
+	status = krnlSendNotifier( privateKey, IMESSAGE_INCREFCOUNT );
 	if( cryptStatusError( status ) )
 		return( status );
-
-	/* Add the private key and increment its reference count */
-	krnlSendNotifier( privateKey, IMESSAGE_INCREFCOUNT );
 	sessionInfoPtr->privateKey = privateKey;
 	sessionInfoPtr->privateKeyAlgo = privateKeyAlgo;
 
@@ -812,9 +834,9 @@ int getSessionAttribute( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   there's a network-level connection established but not whether
 			   there's any messages or a secure session active across it.  
 			   See the comment in setSessionAttribute() for more on this */
-			*valuePtr = sessionInfoPtr->iCryptInContext != CRYPT_ERROR && \
-						TEST_FLAG( sessionInfoPtr->flags, 
-								   SESSION_FLAG_ISOPEN ) ? TRUE : FALSE;
+			*valuePtr = ( ( sessionInfoPtr->iCryptInContext != CRYPT_ERROR ) && \
+						  TEST_FLAG( sessionInfoPtr->flags, 
+									 SESSION_FLAG_ISOPEN ) ) ? TRUE : FALSE;
 			return( CRYPT_OK );
 
 		case CRYPT_SESSINFO_CONNECTIONACTIVE:
@@ -1046,10 +1068,15 @@ int setSessionAttribute( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			/* Make sure that all of the information that we need to proceed 
 			   is present */
 			REQUIRES( DATAPTR_ISVALID( sessionInfoPtr->attributeList ) );
-			missingInfo = checkMissingInfo( DATAPTR_GET( sessionInfoPtr->attributeList ),
-								isServer( sessionInfoPtr ) ? TRUE : FALSE );
-			if( missingInfo != CRYPT_ATTRIBUTE_NONE )
+			status = checkMissingInfo( DATAPTR_GET( sessionInfoPtr->attributeList ),
+									   &missingInfo, 
+									   isServer( sessionInfoPtr ) ? TRUE : FALSE );
+			if( cryptStatusError( status ) )
+				{
+				if( status != CRYPT_ERROR_NOTINITED )
+					return( status );	/* Some other sort of error */
 				return( exitErrorNotInited( sessionInfoPtr, missingInfo ) );
+				}
 			status = activateSession( sessionInfoPtr );
 			if( cryptArgError( status ) )
 				{
@@ -1121,7 +1148,9 @@ int setSessionAttribute( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				}
 
 			/* Add the keyset and increment its reference count */
-			krnlSendNotifier( value, IMESSAGE_INCREFCOUNT );
+			status = krnlSendNotifier( value, IMESSAGE_INCREFCOUNT );
+			if( cryptStatusError( status ) )
+				return( status );
 			sessionInfoPtr->cryptKeyset = value;
 
 			return( CRYPT_OK );
@@ -1134,21 +1163,42 @@ int setSessionAttribute( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							FNPTR_GET( sessionInfoPtr->setAttributeFunction );
 			const PROTOCOL_INFO *protocolInfo = \
 							DATAPTR_GET( sessionInfoPtr->protocolInfo );
+			const AUTHRESPONSE_TYPE authResponse = \
+							( value == TRUE || value == TRUE_ALT ) ? \
+							AUTHRESPONSE_SUCCESS : AUTHRESPONSE_FAILURE;
+							/* This is a bit of an unusual check, normally we
+							   treat booleans as !0 and 0 since values coming
+							   from external sources won't be using our
+							   custom-bit-pattern value of TRUE.  However 
+							   this one is a critical enough setting that we
+							   explicitly check for the two values allowed by
+							   the kernel, TRUE and TRUE_ALT = 1.  No other
+							   values should get here because of the kernel
+							   check so this check is just to document what's 
+							   going on */
 
+			REQUIRES( setAttributeFunction != NULL );
 			REQUIRES( protocolInfo != NULL );
 
-			sessionInfoPtr->authResponse = value ? AUTHRESPONSE_SUCCESS : \
-												   AUTHRESPONSE_FAILURE;
 			if( !( protocolInfo->flags & SESSION_PROTOCOL_REFLECTAUTHOK ) )
+				{
+				sessionInfoPtr->authResponse = authResponse;
 				return( CRYPT_OK );
+				}
 
 			/* Besides recording whether it's OK to continue, in some cases 
 			   we need to reflect the auth-response action down to session-
-			   specific handlers for protocol-specific handling */
-			REQUIRES( setAttributeFunction != NULL );
-			return( setAttributeFunction( sessionInfoPtr, 
-										  &sessionInfoPtr->authResponse,
-										  CRYPT_SESSINFO_AUTHRESPONSE ) );
+			   specific handlers for protocol-specific handling.  Note that
+			   we don't set the session's authResponse until we've confirmed
+			   that the operation has succeeded, since the handler may have 
+			   to complete preconditions needed for the authResponse setting 
+			   to be valid for the session */
+			status = setAttributeFunction( sessionInfoPtr, &authResponse,
+										   CRYPT_SESSINFO_AUTHRESPONSE );
+			if( cryptStatusError( status ) )
+				return( status );
+			sessionInfoPtr->authResponse = authResponse;
+			return( CRYPT_OK );
 			}
 
 		case CRYPT_SESSINFO_SESSION:
@@ -1337,16 +1387,23 @@ int deleteSessionAttribute( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 #ifdef USE_TSP
 		case CRYPT_SESSINFO_TSP_MSGIMPRINT:
-			if( sessionInfoPtr->sessionTSP->imprintAlgo == CRYPT_ALGO_NONE || \
-				sessionInfoPtr->sessionTSP->imprintSize <= 0 )
+			{
+			TSP_INFO *tspInfo = sessionInfoPtr->sessionTSP;
+			
+			REQUIRES( sessionInfoPtr->type == CRYPT_SESSION_TSP || \
+					  sessionInfoPtr->type == CRYPT_SESSION_TSP_SERVER );
+		
+			if( tspInfo->imprintAlgo == CRYPT_ALGO_NONE || \
+				tspInfo->imprintSize <= 0 )
 				{
 				return( exitErrorNotFound( sessionInfoPtr,
 										   CRYPT_SESSINFO_TSP_MSGIMPRINT ) );
 				}
-			sessionInfoPtr->sessionTSP->imprintAlgo = CRYPT_ALGO_NONE;
-			sessionInfoPtr->sessionTSP->imprintSize = 0;
+			tspInfo->imprintAlgo = CRYPT_ALGO_NONE;
+			tspInfo->imprintSize = 0;
 
 			return( CRYPT_OK );
+			}
 #endif /* USE_TSP */
 		}
 

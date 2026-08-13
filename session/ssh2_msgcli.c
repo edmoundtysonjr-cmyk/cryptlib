@@ -5,7 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>
 #if defined( INC_ALL )
   #include "crypt.h"
   #include "misc_rw.h"
@@ -375,7 +374,7 @@ static int createOpenRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	if( cryptStatusError( status ) )
 		{
-		sMemDisconnect( stream );
+		sMemClose( stream );
 		return( status );
 		}
 	return( CRYPT_OK );
@@ -404,7 +403,7 @@ static int createOpenRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	REQUIRES( isEnumRange( serviceType, SERVICE ) );
 	REQUIRES( !checkOverflowSub( sessionInfoPtr->sendBufSize,
 								 EXTRA_PACKET_SIZE ) );
-	ENSURES( isIntegerRangeNZ( maxPacketSize ) );
+	REQUIRES( isIntegerRangeNZ( maxPacketSize ) );
 
 	/* Set the request type to tell the caller what to do after they've sent 
 	   the initial channel open */
@@ -445,7 +444,7 @@ static int createOpenRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	status = writeUint32( stream, maxPacketSize );
 	if( cryptStatusError( status ) )
 		{
-		sMemDisconnect( stream );
+		sMemClose( stream );
 		return( status );
 		}
 	return( CRYPT_OK );
@@ -628,7 +627,8 @@ int sendChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	BYTE buffer[ UINT32_SIZE + 8 ];
 	const long channelNo = getCurrentChannelNo( sessionInfoPtr,
 												CHANNEL_READ );
-	int currentChannelNo, windowSize, length, value, status;
+	long currentChannelNo; 
+	int windowSize, length, value, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
@@ -780,7 +780,14 @@ int sendChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	if( cryptStatusOK( status ) )
 		status = selectChannel( sessionInfoPtr, channelNo, CHANNEL_BOTH );
 	if( cryptStatusError( status ) )
+		{
+		/* The activation failed, make sure the channel doesn't remain 
+		   marked as active.  This is more a hygiene thing than anything 
+		   else since the session can't continue without an open channel */
+		( void ) setChannelExtAttribute( sessionInfoPtr, SSH_ATTRIBUTE_ACTIVE, 
+										 FALSE );
 		return( status );
+		}
 
 	/* If we're just opening a new channel in an existing session then we're 
 	   done */
@@ -803,7 +810,11 @@ int sendChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 		sMemClose( &stream );
 		}
 	if( cryptStatusError( status ) )
+		{
+		( void ) setChannelExtAttribute( sessionInfoPtr, 
+										 SSH_ATTRIBUTE_ACTIVE, FALSE );
 		return( status );
+		}
 	
 	/* If the peer advertised a zero-length window, we have to wait for a 
 	   window adjust before we can send any data.  We know that this is what

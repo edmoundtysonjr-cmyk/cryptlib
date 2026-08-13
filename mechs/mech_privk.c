@@ -49,7 +49,7 @@ static int pgpReadDecryptMPI( INOUT_PTR STREAM *stream,
 	REQUIRES( minLength >= bitsToBytes( 155 ) && \
 			  minLength <= maxLength && \
 			  maxLength <= CRYPT_MAX_PKCSIZE );
-	REQUIRES( isIntegerRangeNZ( mpiDataStartPos ) );
+	REQUIRES( isIntegerRange( mpiDataStartPos ) );
 
 	/* Find the start of the MPI data */
 	REQUIRES( !checkOverflowAdd( mpiDataStartPos, UINT16_SIZE ) );
@@ -107,7 +107,7 @@ static int pgpReadDecryptMPI( INOUT_PTR STREAM *stream,
    can't perform very precise pre-filtering here) */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
-static int pgp2DecryptKey( IN_BUFFER( dataLength ) const void *data, 
+static int pgp2DecryptKey( INOUT_BUFFER_FIXED( dataLength ) void *data, 
 						   IN_LENGTH_SHORT_MIN( 16 ) const int dataLength, 
 						   OUT_LENGTH_BOUNDED_Z( dataLength ) \
 								int *bytesToChecksum, 
@@ -117,7 +117,7 @@ static int pgp2DecryptKey( IN_BUFFER( dataLength ) const void *data,
 	STREAM stream;
 	int status;
 
-	assert( isReadPtrDynamic( data, dataLength ) );
+	assert( isWritePtrDynamic( data, dataLength ) );
 	assert( isWritePtr( bytesToChecksum, sizeof( int ) ) );
 	
 	REQUIRES( isShortIntegerRangeMin( dataLength, 16 ) );
@@ -133,9 +133,9 @@ static int pgp2DecryptKey( IN_BUFFER( dataLength ) const void *data,
 	if( isDlpAlgo )
 		{
 		if( cryptStatusOK( status ) )
-			*bytesToChecksum = stell( &stream );
+			status = *bytesToChecksum = stell( &stream );
 		sMemDisconnect( &stream );
-		return( status );
+		return( cryptStatusError( status ) ? status : CRYPT_OK );
 		}
 	if( cryptStatusOK( status ) )
 		{
@@ -153,9 +153,9 @@ static int pgp2DecryptKey( IN_BUFFER( dataLength ) const void *data,
 									MIN_PKCSIZE / 2, CRYPT_MAX_PKCSIZE  );
 		}
 	if( cryptStatusOK( status ) )
-		*bytesToChecksum = stell( &stream );
+		status = *bytesToChecksum = stell( &stream );
 	sMemDisconnect( &stream );
-	return( status );
+	return( cryptStatusError( status ) ? status : CRYPT_OK );
 	}
 #endif /* USE_PGP || USE_PGPKEYS */
 
@@ -223,7 +223,7 @@ static int checkKeyIntegrity( IN_BUFFER( dataLength ) const void *data,
 	padSize = blockSize - ( length & ( blockSize - 1 ) );
 	if( padSize < 1 || padSize > CRYPT_MAX_IVSIZE || \
 		checkOverflowAdd( length, padSize ) || \
-		length + padSize > dataLength )
+		length + padSize != dataLength )
 		return( CRYPT_ERROR_BADDATA );
 	padPtr = ( const BYTE * ) data + length;
 	LOOP_EXT( i = 0, i < padSize, i++, CRYPT_MAX_IVSIZE + 1 )
@@ -415,6 +415,10 @@ static int privateKeyWrap( INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo,
 	if( mechanismInfo->wrappedData == NULL )
 		{
 		mechanismInfo->wrappedDataLength = paddedPayloadSize;
+
+		ENSURES( CFI_CHECK_SEQUENCE_2( "exportPrivateKeyData", 
+									   "IMESSAGE_GETATTRIBUTE" ) ); 
+
 		return( CRYPT_OK );
 		}
 	ANALYSER_HINT( isShortIntegerRangeMin( mechanismInfo->wrappedDataLength, \
@@ -438,12 +442,11 @@ static int privateKeyWrap( INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo,
 
 		REQUIRES( !checkOverflowSub( paddedPayloadSize, 8 ) );
 
-		/* Sample the first and last 8 bytes of data so that we can check
-		   that they really have been encrypted */
-		memcpy( startSample, dataPtr, 8 );
-		memcpy( endSample, dataEndPtr, 8 );
+		/* Make sure that the values we calculated earlier haven't been 
+		   changed across the exportPrivateKeyData() data call */
+		ENSURES( payloadSize + padSize == paddedPayloadSize );
 
-		/* Add the PKCS #5 padding and encrypt the data */
+		/* Add the PKCS #5 padding */
 		LOOP_EXT( i = 0, i < padSize, i++, CRYPT_MAX_IVSIZE + 1 )
 			{
 			ENSURES( LOOP_INVARIANT_EXT( i, 0, padSize - 1,
@@ -452,6 +455,13 @@ static int privateKeyWrap( INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo,
 			dataPtr[ payloadSize + i ] = intToByte( padSize );
 			}
 		ENSURES( LOOP_BOUND_OK );
+
+		/* Sample the first and last 8 bytes of data so that we can check
+		   that they really have been encrypted */
+		memcpy( startSample, dataPtr, 8 );
+		memcpy( endSample, dataEndPtr, 8 );
+
+		/* Encrypt the data */
 		status = krnlSendMessage( mechanismInfo->wrapContext,
 								  IMESSAGE_CTX_ENCRYPT,
 								  mechanismInfo->wrappedData,
@@ -470,7 +480,7 @@ static int privateKeyWrap( INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo,
 			}
 		zeroise( startSample, 8 );
 		zeroise( endSample, 8 );
-		CFI_CHECK_UPDATE( "exportPrivateKeyData" );
+		CFI_CHECK_UPDATE( "exportPrivateKeyData2" );
 		}
 	if( cryptStatusError( status ) )
 		{
@@ -483,7 +493,7 @@ static int privateKeyWrap( INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo,
 
 	ENSURES( CFI_CHECK_SEQUENCE_3( "exportPrivateKeyData", 
 								   "IMESSAGE_GETATTRIBUTE", 
-								   "exportPrivateKeyData" ) );
+								   "exportPrivateKeyData2" ) );
 
 	return( CRYPT_OK );
 	}
@@ -518,6 +528,7 @@ static int privateKeyUnwrap( INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo,
 
 	/* Copy the encrypted private key data to a temporary pagelocked buffer, 
 	   decrypt it, and read it into the context */
+	REQUIRES( isShortIntegerRangeNZ( mechanismInfo->wrappedDataLength ) );
 	if( ( status = krnlMemalloc( &buffer, \
 							mechanismInfo->wrappedDataLength ) ) != CRYPT_OK )
 		return( status );
@@ -538,13 +549,17 @@ static int privateKeyUnwrap( INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo,
 		status = importPrivateKeyData( buffer, 
 							mechanismInfo->wrappedDataLength, 
 							mechanismInfo->keyContext, formatType );
-		if( checksumData( buffer, 
+		if( status == CRYPT_ERROR_BADDATA || status == CRYPT_ERROR_INVALID )
+			status = CRYPT_ERROR_WRONGKEY;
+		if( cryptStatusOK( status ) && \
+			checksumData( buffer, 
 						  mechanismInfo->wrappedDataLength ) != checksum )
 			{
 			/* The private-key data was corrupted between the decrypt and 
 			   when it was loaded into the context, we can't trust the 
 			   key */
-			DEBUG_DIAG(( "Decrypted private-key data memory corruption detected" ));
+			DEBUG_DIAG(( "Decrypted private-key data memory corruption "
+						 "detected" ));
 			status = CRYPT_ERROR_FAILED;
 			}
 		}
@@ -560,6 +575,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
 int exportPrivateKey( STDC_UNUSED void *dummy, 
 					  INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo )
 	{
+	UNUSED_ARG_OPT( dummy );
+
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_WRAP_INFO ) ) );
 
 	return( privateKeyWrap( mechanismInfo, PRIVATEKEY_WRAP_NORMAL ) );
@@ -569,6 +586,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
 int importPrivateKey( STDC_UNUSED void *dummy, 
 					  INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo )
 	{
+	UNUSED_ARG_OPT( dummy );
+
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_WRAP_INFO ) ) );
 
 	return( privateKeyUnwrap( mechanismInfo, PRIVATEKEY_WRAP_NORMAL ) );
@@ -578,6 +597,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
 int exportPrivateKeyExt( STDC_UNUSED void *dummy, 
 						 INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo )
 	{
+	UNUSED_ARG_OPT( dummy );
+
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_WRAP_INFO ) ) );
 
 	return( privateKeyWrap( mechanismInfo, PRIVATEKEY_WRAP_EXTENDED ) );
@@ -587,6 +608,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
 int importPrivateKeyExt( STDC_UNUSED void *dummy, 
 						 INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo )
 	{
+	UNUSED_ARG_OPT( dummy );
+
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_WRAP_INFO ) ) );
 
 	return( privateKeyUnwrap( mechanismInfo, PRIVATEKEY_WRAP_EXTENDED ) );
@@ -596,6 +619,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
 int exportPrivateKeyPKCS8( STDC_UNUSED void *dummy, 
 						   INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo )
 	{
+	UNUSED_ARG_OPT( dummy );
+
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_WRAP_INFO ) ) );
 
 	return( privateKeyWrap( mechanismInfo, PRIVATEKEY_WRAP_OLD ) );
@@ -605,6 +630,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
 int importPrivateKeyPKCS8( STDC_UNUSED void *dummy, 
 						   INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo )
 	{
+	UNUSED_ARG_OPT( dummy );
+
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_WRAP_INFO ) ) );
 
 	return( privateKeyUnwrap( mechanismInfo, PRIVATEKEY_WRAP_OLD ) );
@@ -695,7 +722,12 @@ static int privateKeyUnwrapPGP( INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo,
 		   variant then the amount of data to checksum is the total amount
 		   minus the size of the checksum */
 		if( type == PRIVATEKEYPGP_WRAP_OPENPGP_OLD )
+			{
+			REQUIRES( !checkOverflowSub( mechanismInfo->wrappedDataLength, 
+										 UINT16_SIZE ) );
 			bytesToChecksum = mechanismInfo->wrappedDataLength - UINT16_SIZE;
+			REQUIRES( isShortIntegerRangeMin( bytesToChecksum, 16 ) );
+			}
 		status = checkPgp2KeyIntegrity( buffer, mechanismInfo->wrappedDataLength,
 										bytesToChecksum );
 		}
@@ -709,7 +741,7 @@ static int privateKeyUnwrapPGP( INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo,
 		status = importPrivateKeyData( buffer, 
 							mechanismInfo->wrappedDataLength, 
 							mechanismInfo->keyContext, KEYFORMAT_PGP );
-		if( status == CRYPT_ERROR_BADDATA )
+		if( status == CRYPT_ERROR_BADDATA || status == CRYPT_ERROR_INVALID )
 			status = CRYPT_ERROR_WRONGKEY;
 		}
 	REQUIRES( isShortIntegerRangeNZ( mechanismInfo->wrappedDataLength ) ); 
@@ -724,6 +756,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
 int importPrivateKeyPGP2( STDC_UNUSED void *dummy, 
 						  INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo )
 	{
+	UNUSED_ARG_OPT( dummy );
+
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_WRAP_INFO ) ) );
 
 	return( privateKeyUnwrapPGP( mechanismInfo, PRIVATEKEYPGP_WRAP_PGP2 ) );
@@ -733,6 +767,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
 int importPrivateKeyOpenPGPOld( STDC_UNUSED void *dummy, 
 								INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo )
 	{
+	UNUSED_ARG_OPT( dummy );
+
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_WRAP_INFO ) ) );
 
 	return( privateKeyUnwrapPGP( mechanismInfo, PRIVATEKEYPGP_WRAP_OPENPGP_OLD ) );
@@ -742,6 +778,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 2 ) ) \
 int importPrivateKeyOpenPGP( STDC_UNUSED void *dummy, 
 							 INOUT_PTR MECHANISM_WRAP_INFO *mechanismInfo )
 	{
+	UNUSED_ARG_OPT( dummy );
+
 	assert( isWritePtr( mechanismInfo, sizeof( MECHANISM_WRAP_INFO ) ) );
 
 	return( privateKeyUnwrapPGP( mechanismInfo, PRIVATEKEYPGP_WRAP_OPENPGP ) );

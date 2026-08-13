@@ -5,7 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>
 #define PKC_CONTEXT		/* Indicate that we're working with PKC contexts */
 #include "crypt.h"
 #if defined( INC_ALL )
@@ -30,35 +29,30 @@
 *																			*
 ****************************************************************************/
 
-/* Read and check the SPKI hash that binds the public key data to the 
-   private key data */
+/* Check the SPKI hash that binds the public key data to the private key 
+   data */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-static int readCheckSPKIHash( INOUT_PTR STREAM *stream,
-							  const CONTEXT_INFO *contextInfoPtr ) 
+static int checkSPKIHash( IN_PTR const CONTEXT_INFO *contextInfoPtr,
+						  IN_BUFFER( 32 ) const void *spkiHash,
+						  IN_LENGTH_FIXED( 32 ) const int spkiHashLength ) 
 	{
-	const PKC_CALCULATEKEYID_FUNCTION calculateKeyIDFunction = \
-				( PKC_CALCULATEKEYID_FUNCTION ) \
-				FNPTR_GET( contextInfoPtr->ctxPKC->calculateKeyIDFunction );
-	BYTE readSPKIhash[ CRYPT_MAX_HASHSIZE + 8 ];
+	PKC_CALCULATEKEYID_FUNCTION calculateKeyIDFunction;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	BYTE calculatedSPKIhash[ CRYPT_MAX_HASHSIZE + 8 ];
-	int length, status;
+	int status;
 
-	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
+	assert( isReadPtr( spkiHash, spkiHashLength ) );
 
-	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( contextInfoPtr->type == CONTEXT_PKC );
+	REQUIRES( spkiHashLength == 32 );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	calculateKeyIDFunction = ( PKC_CALCULATEKEYID_FUNCTION ) \
+							 FNPTR_GET( pkcInfo->calculateKeyIDFunction );
 	REQUIRES( calculateKeyIDFunction != NULL );
-
-	/* Read the ESSCertIDv2 that contains the SPKI hash.  This assumes that
-	   the hash used is always SHA-2 */
-	readSequence( stream, NULL );
-	status = readOctetString( stream, readSPKIhash, &length, 32, 32 );
-	if( cryptStatusError( status ) )
-		return( status );
-	if( length != 32 )		/* Already implicitly checked above */
-		return( CRYPT_ERROR_BADDATA );
 
 	/* Get the hash of the SPKI for the current context data.  The keyID 
 	   calculation function can either update the context information with 
@@ -74,8 +68,7 @@ static int readCheckSPKIHash( INOUT_PTR STREAM *stream,
 	
 	/* Make sure that the hash value stored with the private-key data 
 	   matches the value for the public key that we're using */
-	if( compareDataConstTime( readSPKIhash, calculatedSPKIhash, 
-							  32 ) != TRUE )
+	if( compareDataConstTime( spkiHash, calculatedSPKIhash, 32 ) != TRUE )
 		{
 		DEBUG_DIAG(( "Public key doesn't match private key" ));
 		assert_nofuzz( DEBUG_WARN );
@@ -104,9 +97,10 @@ static int readRsaPrivateKey( INOUT_PTR STREAM *stream,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *rsaKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	READ_BIGNUM_FUNCTION readBignumFunction = checkRead ? \
 									checkBignumRead : readBignumTag;
+	BYTE spkiHash[ CRYPT_MAX_HASHSIZE + 8 ];
 	int tag, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -118,17 +112,23 @@ static int readRsaPrivateKey( INOUT_PTR STREAM *stream,
 			  capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_RSA );
 	REQUIRES( isBooleanValue( useExtFormat ) );
 	REQUIRES( isBooleanValue( checkRead ) );
+	REQUIRES( pkcInfo != NULL );
 
-	/* If we're using the extended format, read the outer wrapper and read 
-	   and check the hash that binds the public key data to the private key 
-	   data */
+	/* If we're using the extended format, read the outer wrapper and the 
+	   ESSCertIDv2 that contains the SPKI hash that binds the public key 
+	   data to the private key data.  This assumes that the hash used is 
+	   always SHA-2 */
 	if( useExtFormat )
 		{
-		status = readSequence( stream, NULL );
-		if( cryptStatusOK( status ) )
-			status = readCheckSPKIHash( stream, contextInfoPtr );
+		int length;
+
+		readSequence( stream, NULL );	/* Wrapper */
+		readSequence( stream, NULL );	/* ESSCertIDv2 */
+		status = readOctetString( stream, spkiHash, &length, 32, 32 );
 		if( cryptStatusError( status ) )
 			return( status );
+		if( length != 32 )		/* Already implicitly checked above */
+			return( CRYPT_ERROR_BADDATA );
 		}
 
 	/* Read the header */
@@ -140,7 +140,7 @@ static int readRsaPrivateKey( INOUT_PTR STREAM *stream,
 		status = readConstructed( stream, NULL, 0 );
 		}
 	if( cryptStatusError( status ) )
-		return( status );
+		return( status );	/* Residual error from peekTag() */
 
 	/* Read the key components */
 	if( checkStatusPeekTag( stream, status, tag ) && \
@@ -149,25 +149,25 @@ static int readRsaPrivateKey( INOUT_PTR STREAM *stream,
 		/* The public components may already have been read when we read a
 		   corresponding public key or certificate so we only read them if
 		   they're not already present */
-		if( BN_is_zero( &rsaKey->rsaParam_n ) && \
-			BN_is_zero( &rsaKey->rsaParam_e ) )
+		if( BN_is_zero( &pkcInfo->rsaParam_n ) || \
+			BN_is_zero( &pkcInfo->rsaParam_e ) )
 			{
-			status = readBignumFunction( stream, &rsaKey->rsaParam_n, 
+			status = readBignumFunction( stream, &pkcInfo->rsaParam_n, 
 										 RSAPARAM_MIN_N, RSAPARAM_MAX_N, 
 										 NULL, BIGNUM_CHECK_VALUE_PKC, 0 );
 			if( cryptStatusOK( status ) )
 				{
-				status = readBignumFunction( stream, &rsaKey->rsaParam_e, 
+				status = readBignumFunction( stream, &pkcInfo->rsaParam_e, 
 											 RSAPARAM_MIN_E, RSAPARAM_MAX_E, 
-											 &rsaKey->rsaParam_n, 
+											 &pkcInfo->rsaParam_n, 
 											 BIGNUM_CHECK_VALUE, 1 );
 				}
 			}
 		else
 			{
 			/* The key components are already present, skip them */
-			REQUIRES( !BN_is_zero( &rsaKey->rsaParam_n ) && \
-					  !BN_is_zero( &rsaKey->rsaParam_e ) );
+			REQUIRES( !BN_is_zero( &pkcInfo->rsaParam_n ) && \
+					  !BN_is_zero( &pkcInfo->rsaParam_e ) );
 			readUniversal( stream );
 			status = readUniversal( stream );
 			}
@@ -179,44 +179,60 @@ static int readRsaPrivateKey( INOUT_PTR STREAM *stream,
 		status = readUniversal( stream );
 		}
 	if( cryptStatusError( status ) )
-		return( status );
-	status = readBignumFunction( stream, &rsaKey->rsaParam_p, 
+		return( status );	/* Residual error from peekTag() */
+	status = readBignumFunction( stream, &pkcInfo->rsaParam_p, 
 								 RSAPARAM_MIN_P, RSAPARAM_MAX_P, 
-								 &rsaKey->rsaParam_n, 
+								 &pkcInfo->rsaParam_n, 
 								 BIGNUM_CHECK_VALUE, 3 );
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumFunction( stream, &rsaKey->rsaParam_q, 
+		status = readBignumFunction( stream, &pkcInfo->rsaParam_q, 
 									 RSAPARAM_MIN_Q, RSAPARAM_MAX_Q, 
-									 &rsaKey->rsaParam_n, 
+									 &pkcInfo->rsaParam_n, 
 									 BIGNUM_CHECK_VALUE, 4 );
 		}
 	if( checkStatusPeekTag( stream, status, tag ) && \
 		tag == MAKE_CTAG_PRIMITIVE( 5 ) )
 		{
-		status = readBignumFunction( stream, &rsaKey->rsaParam_exponent1, 
+		status = readBignumFunction( stream, &pkcInfo->rsaParam_exponent1, 
 									 RSAPARAM_MIN_EXP1, RSAPARAM_MAX_EXP1, 
-									 &rsaKey->rsaParam_n, 
+									 &pkcInfo->rsaParam_n, 
 									 BIGNUM_CHECK_VALUE, 5 );
 		if( cryptStatusOK( status ) )
 			{
-			status = readBignumFunction( stream, &rsaKey->rsaParam_exponent2, 
+			status = readBignumFunction( stream, &pkcInfo->rsaParam_exponent2, 
 										 RSAPARAM_MIN_EXP2, RSAPARAM_MAX_EXP2, 
-										 &rsaKey->rsaParam_n, 
+										 &pkcInfo->rsaParam_n, 
 										 BIGNUM_CHECK_VALUE, 6 );
 			}
 		if( cryptStatusOK( status ) )
 			{
-			status = readBignumFunction( stream, &rsaKey->rsaParam_u, 
+			status = readBignumFunction( stream, &pkcInfo->rsaParam_u, 
 										 RSAPARAM_MIN_U, RSAPARAM_MAX_U, 
-										 &rsaKey->rsaParam_n, 
+										 &pkcInfo->rsaParam_n, 
 										 BIGNUM_CHECK_VALUE, 7 );
 			}
 		}
 	if( cryptStatusError( status ) )
-		return( status );
+		return( status );	/* Residual error from peekTag() */
 
-	ENSURES( sanityCheckPKCInfo( rsaKey ) );
+	/* We've now got all of the key data, check the SPKI hash that binds the 
+	   public key data to the private key if there's one present.
+	   
+	   Note that there's a tautological situation that can in theory occur 
+	   if a keyset contains an SPKI hash and a private key including public 
+	   key components but no separate public key.  This makes the following 
+	   check a no-op since we're comparing the SPKI hash to the encrypt+MAC-
+	   protected copy of the public key data that we've just read as part of 
+	   the private-key data */
+	if( useExtFormat )
+		{
+		status = checkSPKIHash( contextInfoPtr, spkiHash, 32 );
+		if( cryptStatusError( status ) )
+			return( status );
+		}
+
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -229,12 +245,12 @@ static int readDlpPrivateKey( INOUT_PTR STREAM *stream,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *dlpKey = contextInfoPtr->ctxPKC;
-	const DH_DOMAINPARAMS *domainParams = dlpKey->domainParams;
-	const BIGNUM *p = ( domainParams != NULL ) ? \
-					  &domainParams->p : &dlpKey->dlpParam_p;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const DH_DOMAINPARAMS *domainParams;
+	const BIGNUM *p;
 	READ_BIGNUM_FUNCTION readBignumFunction = checkRead ? \
 									checkBignumRead : readBignumTag;
+	BYTE spkiHash[ CRYPT_MAX_HASHSIZE + 8 ];
 	int tag, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -248,17 +264,28 @@ static int readDlpPrivateKey( INOUT_PTR STREAM *stream,
 				capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ELGAMAL ) );
 	REQUIRES( isBooleanValue( useExtFormat ) );
 	REQUIRES( isBooleanValue( checkRead ) );
+	REQUIRES( pkcInfo != NULL );
 
-	/* If we're using the extended format, read the outer wrapper and read 
-	   and check the hash that binds the public key data to the private key 
-	   data */
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	domainParams = pkcInfo->domainParams;
+	p = ( domainParams != NULL ) ? &domainParams->p : &pkcInfo->dlpParam_p;
+
+	/* If we're using the extended format, read the outer wrapper and the 
+	   ESSCertIDv2 that contains the SPKI hash that binds the public key 
+	   data to the private key data.  This assumes that the hash used is 
+	   always SHA-2 */
 	if( useExtFormat )
 		{
-		status = readSequence( stream, NULL );
-		if( cryptStatusOK( status ) )
-			status = readCheckSPKIHash( stream, contextInfoPtr );
+		int length;
+
+		readSequence( stream, NULL );	/* Wrapper */
+		readSequence( stream, NULL );	/* ESSCertIDv2 */
+		status = readOctetString( stream, spkiHash, &length, 32, 32 );
 		if( cryptStatusError( status ) )
 			return( status );
+		if( length != 32 )		/* Already implicitly checked above */
+			return( CRYPT_ERROR_BADDATA );
 		}
 
 	/* Read the key components */
@@ -271,21 +298,30 @@ static int readDlpPrivateKey( INOUT_PTR STREAM *stream,
 		status = readSequence( stream, NULL );
 		if( cryptStatusOK( status ) )
 			{
-			status = readBignumFunction( stream, &dlpKey->dlpParam_x,
+			status = readBignumFunction( stream, &pkcInfo->dlpParam_x,
 										 DLPPARAM_MIN_X, DLPPARAM_MAX_X, 
 										 p, BIGNUM_CHECK_VALUE_PKC, 0 );
 			}
 		}
 	else
 		{
-		status = readBignumFunction( stream, &dlpKey->dlpParam_x,
+		status = readBignumFunction( stream, &pkcInfo->dlpParam_x,
 									 DLPPARAM_MIN_X, DLPPARAM_MAX_X, p,
-									 BIGNUM_CHECK_VALUE, DEFAULT_TAG );
+									 BIGNUM_CHECK_VALUE_PKC, DEFAULT_TAG );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( dlpKey ) );
+	/* We've now got all of the key data, check the SPKI hash that binds the 
+	   public key data to the private key if there's one present */
+	if( useExtFormat )
+		{
+		status = checkSPKIHash( contextInfoPtr, spkiHash, 32 );
+		if( cryptStatusError( status ) )
+			return( status );
+		}
+
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -300,9 +336,10 @@ static int readEccPrivateKey( INOUT_PTR STREAM *stream,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	READ_BIGNUM_FUNCTION readBignumFunction = checkRead ? \
 									checkBignumRead : readBignumTag;
+	BYTE spkiHash[ CRYPT_MAX_HASHSIZE + 8 ];
 	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -311,32 +348,48 @@ static int readEccPrivateKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( capabilityInfoPtr != NULL );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
-			  capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDSA );
+			  ( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDSA || \
+			    capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDH ) );
 	REQUIRES( isBooleanValue( useExtFormat ) );
 	REQUIRES( isBooleanValue( checkRead ) );
+	REQUIRES( pkcInfo != NULL );
 
-	/* If we're using the extended format, read the outer wrapper and read 
-	   and check the hash that binds the public key data to the private key 
-	   data */
+	/* If we're using the extended format, read the outer wrapper and the 
+	   ESSCertIDv2 that contains the SPKI hash that binds the public key 
+	   data to the private key data.  This assumes that the hash used is 
+	   always SHA-2 */
 	if( useExtFormat )
 		{
-		status = readSequence( stream, NULL );
-		if( cryptStatusOK( status ) )
-			status = readCheckSPKIHash( stream, contextInfoPtr );
+		int length;
+
+		readSequence( stream, NULL );	/* Wrapper */
+		readSequence( stream, NULL );	/* ESSCertIDv2 */
+		status = readOctetString( stream, spkiHash, &length, 32, 32 );
 		if( cryptStatusError( status ) )
 			return( status );
+		if( length != 32 )		/* Already implicitly checked above */
+			return( CRYPT_ERROR_BADDATA );
 		}
 
 	/* Read the key components.  Note that we can't use the ECC p value for
 	   a range check because it hasn't been set yet, all that we have at 
 	   this point is a curve ID */
-	status = readBignumFunction( stream, &eccKey->eccParam_d,
+	status = readBignumFunction( stream, &pkcInfo->eccParam_d,
 								 ECCPARAM_MIN_D, ECCPARAM_MAX_D, NULL,
 								 BIGNUM_CHECK_VALUE_ECC, DEFAULT_TAG );
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( eccKey ) );
+	/* We've now got all of the key data, check the SPKI hash that binds the 
+	   public key data to the private key if there's one present */
+	if( useExtFormat )
+		{
+		status = checkSPKIHash( contextInfoPtr, spkiHash, 32 );
+		if( cryptStatusError( status ) )
+			return( status );
+		}
+
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -352,8 +405,10 @@ static int read25519PrivateKey( INOUT_PTR STREAM *stream,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
-	BYTE buffer[ MAX_PKCSIZE_BERNSTEIN + 8 ];
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	BERNSTEIN_KEY_INFO *bernsteinKey;
+	BYTE buffer[ MAX_PKCSIZE_BERNSTEIN + 8 ], *bufPtr;
+	BYTE spkiHash[ CRYPT_MAX_HASHSIZE + 8 ];
 	int length, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -366,34 +421,60 @@ static int read25519PrivateKey( INOUT_PTR STREAM *stream,
 			    capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ED25519 ) );
 	REQUIRES( isBooleanValue( useExtFormat ) );
 	REQUIRES( isBooleanValue( checkRead ) );
+	REQUIRES( pkcInfo != NULL );
 
-	/* If we're using the extended format, read the outer wrapper and read 
-	   and check the hash that binds the public key data to the private key 
-	   data */
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	bernsteinKey = pkcInfo->bernsteinKey;
+	bufPtr = checkRead ? buffer : bernsteinKey->privKey;
+
+	/* If we're using the extended format, read the outer wrapper and the 
+	   ESSCertIDv2 that contains the SPKI hash that binds the public key 
+	   data to the private key data.  This assumes that the hash used is 
+	   always SHA-2 */
 	if( useExtFormat )
 		{
-		status = readSequence( stream, NULL );
-		if( cryptStatusOK( status ) )
-			status = readCheckSPKIHash( stream, contextInfoPtr );
+		readSequence( stream, NULL );	/* Wrapper */
+		readSequence( stream, NULL );	/* ESSCertIDv2 */
+		status = readOctetString( stream, spkiHash, &length, 32, 32 );
+		if( cryptStatusError( status ) )
+			return( status );
+		if( length != 32 )		/* Already implicitly checked above */
+			return( CRYPT_ERROR_BADDATA );
+		}
+
+	/* Read the private value in Bernstein special-snowflake form.  
+	   MIN_PKCSIZE_BERNSTEIN and MAX_PKCSIZE_BERNSTEIN have the same value, 
+	   the only exist for consistency with the other MIN ... MAX values */
+	status = readOctetString( stream, bufPtr, &length, 
+							  MIN_PKCSIZE_BERNSTEIN, 
+							  MAX_PKCSIZE_BERNSTEIN );
+	if( cryptStatusError( status ) )
+		return( status );
+	ENSURES( length == MIN_PKCSIZE_BERNSTEIN );
+	if( checkRead )
+		{
+		BOOLEAN compareStatus;
+		
+		/* We're checking that what we read, verified, and checksummed
+		   corresponds to what was originally there */
+		compareStatus = compareDataConstTime( buffer, bernsteinKey->privKey, 
+											  MIN_PKCSIZE_BERNSTEIN );
+		zeroise( buffer, MAX_PKCSIZE_BERNSTEIN );
+		if( compareStatus != TRUE )
+			return( CRYPT_ERROR_FAILED );
+		}
+
+	/* We've now got all of the key data, check the SPKI hash that binds the 
+	   public key data to the private key if there's one present */
+	if( useExtFormat )
+		{
+		status = checkSPKIHash( contextInfoPtr, spkiHash, 32 );
 		if( cryptStatusError( status ) )
 			return( status );
 		}
 
-	/* Read the private value in Bernstein special-snowflake form and write 
-	   it */
-	status = readOctetString( stream, buffer, &length, 
-							  MIN_PKCSIZE_BERNSTEIN, MAX_PKCSIZE_BERNSTEIN );
-	if( cryptStatusError( status ) )
-		return( status );
-	if( length != 32 )
-		return( CRYPT_ERROR_BADDATA );
-	status = import25519ByteString( &eccKey->curve25519Param_priv, 
-									buffer, length );
-	zeroise( buffer, MAX_PKCSIZE_BERNSTEIN );
-	if( cryptStatusError( status ) )
-		return( status );
-
-	ENSURES( sanityCheckPKCInfo( eccKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -420,8 +501,7 @@ static int readRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 	CRYPT_ALGO_TYPE cryptAlgo DUMMY_INIT;
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *rsaKey = contextInfoPtr->ctxPKC;
-	const int startPos = stell( stream );
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int length, endPos, status, LOOP_ITERATOR;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -431,13 +511,18 @@ static int readRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 	REQUIRES( capabilityInfoPtr != NULL );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
 			  capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_RSA );
-	REQUIRES( isIntegerRange( startPos ) );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Skip the PKCS #8 wrapper.  When we read the OCTET STRING 
 	   encapsulation we use MIN_PKCSIZE_THRESHOLD rather than MIN_PKCSIZE
 	   so that a too-short key will get to readBignum(), which returns an 
 	   appropriate error code */
-	readSequence( stream, &length );			/* Outer wrapper */
+	status = readSequence( stream, &length );	/* Outer wrapper */
+	if( cryptStatusError( status ) )
+		return( status );
+	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
+	endPos = stell( stream ) + length;
+	ENSURES( isIntegerRangeMin( endPos, length ) );
 	status = readShortInteger( stream, NULL );	/* Version */
 	if( cryptStatusOK( status ) )
 		status = readAlgoID( stream, &cryptAlgo, ALGOID_CLASS_PKC );
@@ -458,16 +543,17 @@ static int readRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 
 	/* Read the RSA key components, skipping n and e if we've already got 
 	   them via the associated public key/certificate */
-	if( BN_is_zero( &rsaKey->rsaParam_n ) )
+	if( BN_is_zero( &pkcInfo->rsaParam_n ) || \
+		BN_is_zero( &pkcInfo->rsaParam_e ) )
 		{
-		status = readBignum( stream, &rsaKey->rsaParam_n,
+		status = readBignum( stream, &pkcInfo->rsaParam_n,
 							 RSAPARAM_MIN_N, RSAPARAM_MAX_N, NULL, 
 							 BIGNUM_CHECK_VALUE_PKC );
 		if( cryptStatusOK( status ) )
 			{
-			status = readBignum( stream, &rsaKey->rsaParam_e,
+			status = readBignum( stream, &pkcInfo->rsaParam_e,
 								 RSAPARAM_MIN_E, RSAPARAM_MAX_E,
-								 &rsaKey->rsaParam_n, BIGNUM_CHECK_VALUE );
+								 &pkcInfo->rsaParam_n, BIGNUM_CHECK_VALUE );
 			}
 		}
 	else
@@ -482,42 +568,41 @@ static int readRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignum( stream, &rsaKey->rsaParam_p,
+		status = readBignum( stream, &pkcInfo->rsaParam_p,
 							 RSAPARAM_MIN_P, RSAPARAM_MAX_P,
-							 &rsaKey->rsaParam_n, BIGNUM_CHECK_VALUE );
+							 &pkcInfo->rsaParam_n, BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignum( stream, &rsaKey->rsaParam_q,
+		status = readBignum( stream, &pkcInfo->rsaParam_q,
 							 RSAPARAM_MIN_Q, RSAPARAM_MAX_Q,
-							 &rsaKey->rsaParam_n, BIGNUM_CHECK_VALUE );
+							 &pkcInfo->rsaParam_n, BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignum( stream, &rsaKey->rsaParam_exponent1,
+		status = readBignum( stream, &pkcInfo->rsaParam_exponent1,
 							 RSAPARAM_MIN_EXP1, RSAPARAM_MAX_EXP1,
-							 &rsaKey->rsaParam_n, BIGNUM_CHECK_VALUE );
+							 &pkcInfo->rsaParam_n, BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignum( stream, &rsaKey->rsaParam_exponent2,
+		status = readBignum( stream, &pkcInfo->rsaParam_exponent2,
 							 RSAPARAM_MIN_EXP2, RSAPARAM_MAX_EXP2,
-							 &rsaKey->rsaParam_n, BIGNUM_CHECK_VALUE );
+							 &pkcInfo->rsaParam_n, BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignum( stream, &rsaKey->rsaParam_u,
+		status = readBignum( stream, &pkcInfo->rsaParam_u,
 							 RSAPARAM_MIN_U, RSAPARAM_MAX_U,
-							 &rsaKey->rsaParam_n, BIGNUM_CHECK_VALUE );
+							 &pkcInfo->rsaParam_n, BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
 
 	/* Check whether there are any attributes present */
-	REQUIRES( !checkOverflowAdd( startPos, length ) );
-	if( stell( stream ) >= startPos + length )
+	if( stell( stream ) >= endPos )
 		{
-		ENSURES( sanityCheckPKCInfo( rsaKey ) );
+		ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 		return( CRYPT_OK );
 		}
@@ -601,7 +686,7 @@ static int readRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 		}
 	ENSURES( LOOP_BOUND_OK );
 
-	ENSURES( sanityCheckPKCInfo( rsaKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -615,7 +700,7 @@ static int readDsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 	CRYPT_ALGO_TYPE cryptAlgo DUMMY_INIT;
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *dlpKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -625,6 +710,7 @@ static int readDsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 	REQUIRES( capabilityInfoPtr != NULL );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
 			  capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_DSA );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Skip the PKCS #8 wrapper */
 	readSequence( stream, NULL );				/* Outer wrapper */
@@ -632,7 +718,10 @@ static int readDsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 	if( cryptStatusOK( status ) )
 		{
 		ALGOID_PARAMS algoIDparams;
-
+	
+		/* The DSA public parameters are stored as AlgorithmIdentifier 
+		   parameters so we have to use readAlgoIDex() which lets us 
+		   continue with the parameter read */
 		status = readAlgoIDex( stream, &cryptAlgo, &algoIDparams, 
 							   ALGOID_CLASS_PKC );
 		}
@@ -641,21 +730,21 @@ static int readDsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 
 	/* Read the DSA parameters if we haven't already got them via the
 	   associated public key/certificate */
-	if( BN_is_zero( &dlpKey->dlpParam_p ) )
+	if( BN_is_zero( &pkcInfo->dlpParam_p ) )
 		{
 		readSequence( stream, NULL );	/* Parameter wrapper */
-		status = readBignum( stream, &dlpKey->dlpParam_p,
+		status = readBignum( stream, &pkcInfo->dlpParam_p,
 							 DLPPARAM_MIN_P, DLPPARAM_MAX_P, NULL,
 							 BIGNUM_CHECK_VALUE_PKC );
 		if( cryptStatusOK( status ) )
 			{
-			status = readBignum( stream, &dlpKey->dlpParam_q,
+			status = readBignum( stream, &pkcInfo->dlpParam_q,
 								 DLPPARAM_MIN_Q, DLPPARAM_MAX_Q, NULL,
 								 BIGNUM_CHECK_VALUE );
 			}
 		if( cryptStatusOK( status ) )
 			{
-			status = readBignum( stream, &dlpKey->dlpParam_g,
+			status = readBignum( stream, &pkcInfo->dlpParam_g,
 								 DLPPARAM_MIN_G, DLPPARAM_MAX_G, NULL,
 								 BIGNUM_CHECK_VALUE );
 			}
@@ -669,14 +758,14 @@ static int readDsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 	status = readOctetStringHole( stream, NULL, 20, DEFAULT_TAG );
 	if( cryptStatusOK( status ) )	/* OCTET STRING encapsulation */
 		{
-		status = readBignum( stream, &dlpKey->dlpParam_x,
+		status = readBignum( stream, &pkcInfo->dlpParam_x,
 							 DLPPARAM_MIN_X, DLPPARAM_MAX_X,
-							 &dlpKey->dlpParam_p, BIGNUM_CHECK_VALUE );
+							 &pkcInfo->dlpParam_p, BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( dlpKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -693,7 +782,7 @@ static int readEccPrivateKeyOld( INOUT_PTR STREAM *stream,
 	CRYPT_ALGO_TYPE cryptAlgo;
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	ALGOID_PARAMS algoIDparams;
 	long value;
 	int tag, status;
@@ -704,7 +793,9 @@ static int readEccPrivateKeyOld( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( capabilityInfoPtr != NULL );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
-			  capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDSA );
+			  ( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDSA || \
+			    capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDH ) );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Read the ECC key components.  These were never standardised in any 
 	   PKCS standard, nor in the PKCS #12 RFC.  RFC 5915 "Elliptic Curve 
@@ -762,13 +853,13 @@ static int readEccPrivateKeyOld( INOUT_PTR STREAM *stream,
 	tag = readTag( stream );
 	if( cryptStatusError( tag ) || tag != BER_OCTETSTRING )
 		return( CRYPT_ERROR_BADDATA );
-	status = readBignumTag( stream, &eccKey->eccParam_d,
+	status = readBignumTag( stream, &pkcInfo->eccParam_d,
 							ECCPARAM_MIN_D, ECCPARAM_MAX_D, NULL,
 							BIGNUM_CHECK_VALUE_ECC, NO_TAG );
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( eccKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -792,7 +883,7 @@ static int readPgpRsaPrivateKey( INOUT_PTR STREAM *stream,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *rsaKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -802,42 +893,43 @@ static int readPgpRsaPrivateKey( INOUT_PTR STREAM *stream,
 	REQUIRES( capabilityInfoPtr != NULL );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
 			  capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_RSA );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Read the PGP private key information.  Note that we have to read the 
 	   d value here because we need it to calculate e1 and e2 */
-	status = readBignumInteger16Ubits( stream, &rsaKey->rsaParam_d, 
+	status = readBignumInteger16Ubits( stream, &pkcInfo->rsaParam_d, 
 									   bytesToBits( RSAPARAM_MIN_D ), 
 									   bytesToBits( RSAPARAM_MAX_D ), 
-									   &rsaKey->rsaParam_n, 
+									   &pkcInfo->rsaParam_n, 
 									   BIGNUM_CHECK_VALUE_PKC );
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumInteger16Ubits( stream, &rsaKey->rsaParam_p, 
+		status = readBignumInteger16Ubits( stream, &pkcInfo->rsaParam_p, 
 										   bytesToBits( RSAPARAM_MIN_P ), 
 										   bytesToBits( RSAPARAM_MAX_P ),
-										   &rsaKey->rsaParam_n,
+										   &pkcInfo->rsaParam_n,
 										   BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumInteger16Ubits( stream, &rsaKey->rsaParam_q, 
+		status = readBignumInteger16Ubits( stream, &pkcInfo->rsaParam_q, 
 										   bytesToBits( RSAPARAM_MIN_Q ), 
 										   bytesToBits( RSAPARAM_MAX_Q ),
-										   &rsaKey->rsaParam_n,
+										   &pkcInfo->rsaParam_n,
 										   BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumInteger16Ubits( stream, &rsaKey->rsaParam_u, 
+		status = readBignumInteger16Ubits( stream, &pkcInfo->rsaParam_u, 
 										   bytesToBits( RSAPARAM_MIN_U ), 
 										   bytesToBits( RSAPARAM_MAX_U ),
-										   &rsaKey->rsaParam_n,
+										   &pkcInfo->rsaParam_n,
 										   BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( rsaKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -848,7 +940,7 @@ static int readPgpDlpPrivateKey( INOUT_PTR STREAM *stream,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *dlpKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -859,20 +951,23 @@ static int readPgpDlpPrivateKey( INOUT_PTR STREAM *stream,
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
 			  ( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_DSA || \
 				capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ELGAMAL ) );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Read the PGP private key information */
-	status = readBignumInteger16Ubits( stream, &dlpKey->dlpParam_x, 
+	status = readBignumInteger16Ubits( stream, &pkcInfo->dlpParam_x, 
 									   bytesToBits( DLPPARAM_MIN_X ), 
 									   bytesToBits( DLPPARAM_MAX_X ),
-									   &dlpKey->dlpParam_p,
+									   &pkcInfo->dlpParam_p,
 									   BIGNUM_CHECK_VALUE );
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( dlpKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
+
+#if defined( USE_ECDSA ) || defined( USE_ECDH )
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int readPgpEccPrivateKey( INOUT_PTR STREAM *stream, 
@@ -880,7 +975,7 @@ static int readPgpEccPrivateKey( INOUT_PTR STREAM *stream,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -889,20 +984,23 @@ static int readPgpEccPrivateKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( capabilityInfoPtr != NULL );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
-			  ( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDSA ) );
+			  ( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDSA || \
+			    capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDH ) );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Read the PGP private key information */
-	status = readBignumInteger16Ubits( stream, &eccKey->eccParam_d, 
+	status = readBignumInteger16Ubits( stream, &pkcInfo->eccParam_d, 
 									   bytesToBits( ECCPARAM_MIN_D ), 
 									   bytesToBits( ECCPARAM_MAX_D ), 
 									   NULL, BIGNUM_CHECK_VALUE_ECC );
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( eccKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
+#endif /* USE_ECDSA || USE_ECDH */
 #endif /* USE_PGPKEYS */
 
 /****************************************************************************
@@ -993,10 +1091,18 @@ static int readPrivateKeyDlpFunction( INOUT_PTR STREAM *stream,
 									   checkRead ) );
 #endif /* USE_INT_ASN1 */
 
-#if defined( USE_PKCS12 ) && defined( USE_INT_ASN1 )
+#if defined( USE_PKCS12 ) && defined( USE_INT_ASN1 ) && defined( USE_DSA )
 		case KEYFORMAT_PRIVATE_OLD:
+			if( capabilityInfoPtr->cryptAlgo != CRYPT_ALGO_DSA )
+				{
+				/* It's not clear that it's even possible to store DH or 
+				   Elgamal keys in this format, but given the garbled muddle
+				   that is PKCS #12 someone may actually have managed it */
+				assert( DEBUG_WARN );
+				return( CRYPT_ERROR_NOTAVAIL );
+				}
 			return( readDsaPrivateKeyOld( stream, contextInfoPtr ) );
-#endif /* USE_PKCS12 && USE_INT_ASN1 */
+#endif /* USE_PKCS12 && USE_INT_ASN1 && USE_DSA */
 
 #ifdef USE_PGPKEYS
 		case KEYFORMAT_PGP:
@@ -1025,7 +1131,8 @@ static int readPrivateKeyEccFunction( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( capabilityInfoPtr != NULL );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
-			  capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDSA );
+			  ( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDSA || \
+			    capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDH ) );
 	REQUIRES( isEnumRange( formatType, KEYFORMAT ) );
 	REQUIRES( isBooleanValue( checkRead ) );
 
@@ -1141,13 +1248,14 @@ void initPrivKeyRead( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES_V( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES_V( contextInfoPtr->type == CONTEXT_PKC );
 	REQUIRES_V( capabilityInfoPtr != NULL );
+	REQUIRES_V( pkcInfo != NULL );
 
 	/* Set the access method pointers */
 	switch( capabilityInfoPtr->cryptAlgo )
@@ -1206,12 +1314,13 @@ static int readPrivKeyNullFunction( INOUT_PTR STREAM *stream,
 STDC_NONNULL_ARG( ( 1 ) ) \
 void initPrivKeyRead( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES_V( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES_V( contextInfoPtr->type == CONTEXT_PKC );
+	REQUIRES_V( pkcInfo != NULL );
 
 	/* Set the access method pointers */
 	FNPTR_SET( pkcInfo->readPrivateKeyFunction, readPrivKeyNullFunction );

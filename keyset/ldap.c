@@ -578,29 +578,37 @@ static void catComponent( char *dest, const int destLen, char *src )
 static int encodeDN( char *dn, const int maxDnLen, char *C, char *SP, 
 					 char *L, char *O, char *OU, char *CN )
 	{
-	strlcpy_s( dn, maxDnLen, "CN=" );
+	int status;
+	
+	status = strlcpy_s( dn, maxDnLen, "CN=" );
+	ENSURES( cryptStatusOK( status ) );
 	catComponent( dn, maxDnLen, CN );
 	if( *OU )
 		{
-		strlcat_s( dn, maxDnLen, ",OU=" );
+		status = strlcat_s( dn, maxDnLen, ",OU=" );
+		ENSURES( cryptStatusOK( status ) );
 		catComponent( dn, maxDnLen, OU );
 		}
 	if( *O )
 		{
-		strlcat_s( dn, maxDnLen, ",O=" );
+		status = strlcat_s( dn, maxDnLen, ",O=" );
+		ENSURES( cryptStatusOK( status ) );
 		catComponent( dn, maxDnLen, O );
 		}
 	if( *L )
 		{
-		strlcat_s( dn, maxDnLen, ",L=" );
+		status = strlcat_s( dn, maxDnLen, ",L=" );
+		ENSURES( cryptStatusOK( status ) );
 		catComponent( dn, maxDnLen, L );
 		}
 	if( *SP )
 		{
-		strlcat_s( dn, maxDnLen, ",ST=" );	/* Not to be confused with ST=street */
+		status = strlcat_s( dn, maxDnLen, ",ST=" );	/* Not to be confused with ST=street */
+		ENSURES( cryptStatusOK( status ) );
 		catComponent( dn, maxDnLen, SP );
 		}
-	strlcat_s( dn, maxDnLen, ",C=" );
+	status = strlcat_s( dn, maxDnLen, ",C=" );
+	ENSURES( cryptStatusOK( status ) );
 	catComponent( dn, maxDnLen, C );
 
 	return( CRYPT_OK );

@@ -5,7 +5,7 @@
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>		/* For snprintf_s() */
+#include <stdio.h>		/* For sprintf_s() */
 #include "crypt.h"
 #ifdef INC_ALL
   #include "trustmgr.h"
@@ -83,10 +83,20 @@ static int exitErrorNotFound( INOUT_PTR USER_INFO *userInfoPtr,
    that require this user object */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+static int resetConfigChanged( INOUT_PTR USER_INFO *userInfoPtr )
+	{
+	assert( isWritePtr( userInfoPtr, sizeof( USER_INFO ) ) );
+
+	return( setOptionSpecial( userInfoPtr->configOptions, 
+							  userInfoPtr->configOptionsCount,
+							  CRYPT_OPTION_CONFIGCHANGED, FALSE ) );
+	}
+
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int twoPhaseConfigUpdate( INOUT_PTR USER_INFO *userInfoPtr, 
 								 IN_INT_Z const int value )
 	{
-	CRYPT_USER iTrustedCertUserObject = CRYPT_UNUSED;
+	CRYPT_USER iTrustedCertUserObject = CRYPT_UNUSED, userObjectHandle;
 	CONFIG_DISPOSITION_TYPE disposition;
 	char userFileName[ 16 + 8 ];
 	void *data = NULL;
@@ -98,7 +108,10 @@ static int twoPhaseConfigUpdate( INOUT_PTR USER_INFO *userInfoPtr,
 
 	/* Set up the filename that we want to access */
 	if( userInfoPtr->userFileInfo.fileRef == CRYPT_UNUSED )
-		strlcpy_s( userFileName, 16, "cryptlib" );
+		{
+		status = strlcpy_s( userFileName, 16, CONFIG_FILE_NAME );
+		ENSURES( cryptStatusOK( status ) );
+		}
 	else
 		{
 		int result;
@@ -119,17 +132,20 @@ static int twoPhaseConfigUpdate( INOUT_PTR USER_INFO *userInfoPtr,
 		{
 		case CONFIG_DISPOSITION_NO_CHANGE:
 			/* There's nothing to do, we're done */
-			return( CRYPT_OK );
+			return( resetConfigChanged( userInfoPtr ) );
 
 		case CONFIG_DISPOSITION_EMPTY_CONFIG_FILE:
 			/* There's nothing to write, delete the configuration file */
+			( void ) resetConfigChanged( userInfoPtr );
 			return( deleteConfig( userFileName ) );
 
 		case CONFIG_DISPOSITION_TRUSTED_CERTS_ONLY:
 			/* There are only trusted certificates present, if they're 
 			   unchanged from earlier then there's nothing to do */
 			if( !userInfoPtr->trustInfoChanged )
-				return( CRYPT_OK );
+				{
+				return( resetConfigChanged( userInfoPtr ) );
+				}
 
 			/* Remember where the trusted certificates are coming from */
 			iTrustedCertUserObject = userInfoPtr->objectHandle;
@@ -155,12 +171,31 @@ static int twoPhaseConfigUpdate( INOUT_PTR USER_INFO *userInfoPtr,
 			retIntError();
 		}
 
+	/* Take a copy of the user object handle across the unlock that we're 
+	   about to perform.  In practice this doesn't matter because 
+	   userInfoPtr points to static storage in the system data, but it's
+	   good practice to keep a local copy of any information we need
+	   across the unlock */
+	userObjectHandle = userInfoPtr->objectHandle;
+
 	/* We've got the configuration data (if there is any) in a memory 
 	   buffer, we can unlock the user object to allow external access while 
 	   we commit the in-memory data to disk.  This also sends any trusted
 	   certificates in the user object to the configuration file alongside
-	   the data */
-	status = krnlSuspendObject( userInfoPtr->objectHandle, &refCount );
+	   the data.
+	   
+	   There is a theoretical race condition here in which two threads both
+	   try and update the configuration data at the same time, so thread A
+	   does the prepare, releases the user object, thread B changes 
+	   something, then thread A does the commit on the original data.  We
+	   don't try and handle this exceptional case for two reasons, firstly
+	   it would involve a large amount of (error-prone and untestable) Rube-
+	   Goldberg machinery for something that likely never occurs, and 
+	   secondly the caller should know that simultaneously updating the
+	   config data from two different threads is a bad idea.  That is, an
+	   in-memory update is fine, but a commit to disk while at the same
+	   time changing it isn't */
+	status = krnlSuspendObject( userObjectHandle, &refCount );
 	ENSURES( cryptStatusOK( status ) );
 	commitStatus = commitConfigData( userFileName, data, length, 
 									 iTrustedCertUserObject );
@@ -170,7 +205,7 @@ static int twoPhaseConfigUpdate( INOUT_PTR USER_INFO *userInfoPtr,
 		clFree( "twoPhaseConfigUpdate", data );
 		data = NULL;
 		}
-	status = krnlResumeObject( userInfoPtr->objectHandle, refCount );
+	status = krnlResumeObject( userObjectHandle, refCount );
 	if( cryptStatusError( status ) )
 		{
 		/* Handling errors at this point is rather tricky because an error 
@@ -182,10 +217,17 @@ static int twoPhaseConfigUpdate( INOUT_PTR USER_INFO *userInfoPtr,
 		   so it's just going to propagate the exception back */
 		retIntError();
 		}
-	if( cryptStatusOK( commitStatus ) )
-		userInfoPtr->trustInfoChanged = FALSE;
-
-	return( commitStatus );
+	if( cryptStatusError( commitStatus ) )
+		return( commitStatus );
+	
+	/* In theory we would need to re-derive the userInfoPtr from the
+	   userObjectHandle across the suspend and resume, but the pointer is to 
+	   static storage in the system data so we know that it can't move, and 
+	   it saves us having to do a somewhat odd krnlAcquireObject() followed 
+	   immediately by a krnlReleaseObject() just to get a pointer that we 
+	   already have */
+	userInfoPtr->trustInfoChanged = FALSE;
+	return( resetConfigChanged( userInfoPtr ) );
 	}
 #endif /* USE_KEYSETS */
 
@@ -203,7 +245,12 @@ static int twoPhaseSelftest( INOUT_PTR USER_INFO *userInfoPtr,
 	/* It's a self-test, forward the message to the system object with 
 	   the user object unlocked, tell the system object to perform its self-
 	   test, and then re-lock the user object and set the self-test result 
-	   value.  Since the self-test configuration setting will be marked as 
+	   value.  The handle that we use for this is the CRYPTO_OBJECT_HANDLE, 
+	   in the standard build this is the system object, it's only with
+	   custom hardware configs that it's mapped to a distinct object that
+	   handles the crypto.
+	   
+	   Since the self-test configuration setting will be marked as 
 	   in-use at this point (to avoid having another thread update it while 
 	   the user object was unlocked) it can't be written to directly so we 
 	   have to update it via setOptionSpecial().  In addition since this is 
@@ -220,9 +267,11 @@ static int twoPhaseSelftest( INOUT_PTR USER_INFO *userInfoPtr,
 	selfTestStatus = krnlSendNotifier( CRYPTO_OBJECT_HANDLE, 
 									   IMESSAGE_SELFTEST );
 	status = krnlResumeObject( iCryptUser, refCount );
-			 /* See comment above on krnlResumeObject() error handling */
 	if( cryptStatusError( status ) )
+		{
+		/* See comment above on krnlResumeObject() error handling */
 		return( status );
+		}
 	return( setOptionSpecial( userInfoPtr->configOptions, 
 							  userInfoPtr->configOptionsCount,
 							  CRYPT_OPTION_SELFTESTOK,
@@ -270,7 +319,7 @@ int getUserAttribute( INOUT_PTR USER_INFO *userInfoPtr,
 			/* Since the CA signing key tied to the user object is meant to 
 			   be used only through cryptlib-internal means we shouldn't 
 			   really be returning it to the caller.  We can return the 
-			   ssociated CA cert, but this may be an internal-only object 
+			   associated CA cert, but this may be an internal-only object 
 			   that the caller can't do anything with.  To avoid this 
 			   problem we isolate the cert by returning a copy of the
 			   associated certificate object */
@@ -282,8 +331,8 @@ int getUserAttribute( INOUT_PTR USER_INFO *userInfoPtr,
 			return( status );
 			}
 
-#ifdef USE_CERTIFICATES
 		case CRYPT_IATTRIBUTE_CTL:
+#ifdef USE_CERTIFICATES
 			{
 			MESSAGE_CREATEOBJECT_INFO createInfo;
 
@@ -310,6 +359,8 @@ int getUserAttribute( INOUT_PTR USER_INFO *userInfoPtr,
 				krnlSendNotifier( createInfo.cryptHandle, IMESSAGE_DECREFCOUNT );
 			return( status );
 			}
+#else
+			retIntError();
 #endif /* USE_CERTIFICATES */
 		}
 
@@ -409,7 +460,7 @@ int setUserAttribute( INOUT_PTR USER_INFO *userInfoPtr,
 			status = krnlSendMessage( value, IMESSAGE_GETATTRIBUTE,
 									  &attributeValue, 
 									  CRYPT_CERTINFO_CERTTYPE );
-			if( cryptStatusError( status ) ||
+			if( cryptStatusError( status ) || \
 				( attributeValue != CRYPT_CERTTYPE_CERTIFICATE && \
 				  attributeValue != CRYPT_CERTTYPE_CERTCHAIN ) )
 				return( CRYPT_ARGERROR_NUM1 );
@@ -437,7 +488,7 @@ int setUserAttribute( INOUT_PTR USER_INFO *userInfoPtr,
 			/* the full implementation of user roles */
 			/*!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!*/
 
-			return( status );
+			return( CRYPT_ERROR_NOTAVAIL );
 			}
 
 		case CRYPT_IATTRIBUTE_COMPLETEINIT:
@@ -490,6 +541,10 @@ int setUserAttribute( INOUT_PTR USER_INFO *userInfoPtr,
 			if( cryptStatusOK( status ) )
 				userInfoPtr->trustInfoChanged = TRUE;
 			return( status );
+#else
+		case CRYPT_IATTRIBUTE_CERTKEYSET:
+		case CRYPT_IATTRIBUTE_CTL:
+			retIntError();
 #endif /* USE_CERTIFICATES */
 		}
 
@@ -505,16 +560,20 @@ int setUserAttribute( INOUT_PTR USER_INFO *userInfoPtr,
 		attribute != CRYPT_OPTION_SELFTESTOK )
 		return( status );
 
-	/* If there was a problem setting a side-effects option, don't go any 
-	   further */
+	/* If there was a problem setting a with-side-effects option, don't go 
+	   any further */
 	if( status != OK_SPECIAL )
 		return( status );
 
 	/* Complete the processing of the special options */
-#ifdef USE_KEYSETS
 	if( attribute == CRYPT_OPTION_CONFIGCHANGED )
+		{
+#ifdef USE_KEYSETS
 		return( twoPhaseConfigUpdate( userInfoPtr, value ) );
+#else
+		return( CRYPT_ERROR_NOTAVAIL );
 #endif /* USE_KEYSETS */
+		}
 	return( twoPhaseSelftest( userInfoPtr, value ) );
 	}
 
@@ -533,13 +592,15 @@ int setUserAttributeS( INOUT_PTR USER_INFO *userInfoPtr,
 	REQUIRES( isAttribute( attribute ) || \
 			  isInternalAttribute( attribute ) );
 
-#ifdef USE_KEYSETS
 	switch( attribute )
 		{
 		case CRYPT_USERINFO_PASSWORD:
+#ifdef USE_KEYSETS
 			return( setUserPassword( userInfoPtr, data, dataLength ) );
-		}
+#else
+			return( CRYPT_ERROR_NOTAVAIL );
 #endif /* USE_KEYSETS */
+		}
 
 	/* Anything else has to be a configuration option */
 	REQUIRES( attribute > CRYPT_OPTION_FIRST && \
@@ -571,7 +632,7 @@ int deleteUserAttribute( INOUT_PTR USER_INFO *userInfoPtr,
 		case CRYPT_USERINFO_CAKEY_CERTSIGN:
 		case CRYPT_USERINFO_CAKEY_CRLSIGN:
 		case CRYPT_USERINFO_CAKEY_OCSPSIGN:
-			return( CRYPT_ERROR_NOTFOUND );
+			return( exitErrorNotFound( userInfoPtr, attribute ) );
 		}
 
 	/* Anything else has to be a configuration option */

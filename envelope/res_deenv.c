@@ -1589,6 +1589,7 @@ static int addPasswordInfo( IN_PTR const CONTENT_LIST *contentListPtr,
 			{
 			status = pgpPasswordToKey( iCryptContext, CRYPT_UNUSED,
 							password, passwordLength, encrInfo->keySetupAlgo,
+							encrInfo->keySetupParam,
 							( encrInfo->saltOrIVsize > 0 ) ? \
 								encrInfo->saltOrIV : NULL, encrInfo->saltOrIVsize,
 							encrInfo->keySetupIterations );

@@ -107,7 +107,7 @@ static int readKdfParamData( INOUT_PTR STREAM *stream,
 	/* We've finally got through to the bit that matters, the HMAC 
 	   algorithm */
 	status = readAlgoIDex( stream, kdfAlgo, &algoIDparams, 
-						   ALGOID_CLASS_HASH );
+						   ALGOID_CLASS_MAC );
 	if( cryptStatusError( status ) )
 		return( status );
 	*kdfParam = algoIDparams.hashParam;
@@ -196,11 +196,15 @@ static int readGenericSecretParams( INOUT_PTR STREAM *stream,
 		if( cryptStatusError( status ) )
 			return( status );
 		}
+	if( cryptStatusError( status ) )
+		return( status );	/* Residual error from peekTag() */
 
 	/* Read the encryption and MAC algorithm parameters */
 	status = streamOffsetFromPosition( stream, startOffset, &objectSize );
 	if( cryptStatusError( status ) )
 		return( status );
+	if( objectSize >= AUTHENCPARAM_MAX_SIZE ) 
+		return( CRYPT_ERROR_OVERFLOW );	/* Make sure difference is > 0 */
 	REQUIRES( !checkOverflowSub( AUTHENCPARAM_MAX_SIZE, objectSize ) );
 	status = readAuthEncParamData( stream,
 							&queryInfo->encParamStart, 
@@ -211,6 +215,8 @@ static int readGenericSecretParams( INOUT_PTR STREAM *stream,
 	status = streamOffsetFromPosition( stream, startOffset, &objectSize );
 	if( cryptStatusError( status ) )
 		return( status );
+	if( objectSize >= AUTHENCPARAM_MAX_SIZE ) 
+		return( CRYPT_ERROR_OVERFLOW );	/* Make sure difference is > 0 */
 	REQUIRES( !checkOverflowSub( AUTHENCPARAM_MAX_SIZE, objectSize ) );
 	status = readAuthEncParamData( stream,
 							&queryInfo->macParamStart, 
@@ -222,7 +228,8 @@ static int readGenericSecretParams( INOUT_PTR STREAM *stream,
 	/* The encryption/MAC parameter positions are taken from the start of 
 	   the encoded data, not from the start of the stream so we need to
 	   adjust the position by the offset from the start */
-	queryInfo->kdfParamStart -= startOffset;
+	if( queryInfo->kdfParamLength > 0 )
+		queryInfo->kdfParamStart -= startOffset;
 	queryInfo->encParamStart -= startOffset;
 	queryInfo->macParamStart -= startOffset;
 
@@ -275,6 +282,13 @@ static int writeGenericSecretParams( INOUT_PTR STREAM *stream,
 		{
 		/* The KDF data is optional so it may not be present */
 		kdfDataSize = msgData.length;
+		}
+	else
+		{
+		/* If it was some error other than not-present, we can't 
+		   continue */
+		if( status != CRYPT_ERROR_NOTFOUND )
+			return( status );
 		}
 	setMessageData( &msgData, encAlgoData, AUTHENCPARAM_MAX_SIZE );
 	status = krnlSendMessage( iCryptContext, IMESSAGE_GETATTRIBUTE_S,
@@ -472,6 +486,9 @@ int getGenericSecretParams( IN_HANDLE const CRYPT_CONTEXT iGenericContext,
 	assert( isReadPtr( queryInfo, sizeof( QUERY_INFO ) ) );
 
 	REQUIRES( isHandleRangeValid( iGenericContext ) );
+	REQUIRES( rangeCheck( queryInfo->authEncParamLength, 
+						  16, AUTHENCPARAM_MAX_SIZE ) );
+			  /* Guaranteed by readGenericSecretParams() */
 
 	/* Clear return values */
 	*iCryptContext = *iMacContext = CRYPT_ERROR;
@@ -514,7 +531,7 @@ int getGenericSecretParams( IN_HANDLE const CRYPT_CONTEXT iGenericContext,
 	sMemConnect( &stream, queryInfo->authEncParamData + queryInfo->macParamStart, 
 				 queryInfo->macParamLength );
 	status = readContextAlgoID( &stream, &iAuthEncMacContext, NULL, 
-								DEFAULT_TAG, ALGOID_CLASS_HASH );
+								DEFAULT_TAG, ALGOID_CLASS_MAC );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		{
@@ -821,8 +838,6 @@ int writeCryptContextAlgoID( INOUT_PTR STREAM *stream,
 			{
 			const int noBits = ( algorithm == CRYPT_ALGO_AES ) ? 128 : 64;
 
-			ANALYSER_HINT( ivSize > 0 && ivSize < CRYPT_MAX_IVSIZE );
-
 			paramSize = \
 				( mode == CRYPT_MODE_ECB ) ? sizeofNull() : \
 				( mode == CRYPT_MODE_CBC ) ? sizeofIV : \
@@ -831,6 +846,7 @@ int writeCryptContextAlgoID( INOUT_PTR STREAM *stream,
 			swrite( stream, oid, oidSize );
 			if( mode == CRYPT_MODE_ECB )
 				return( writeNull( stream, DEFAULT_TAG ) );
+			ANALYSER_HINT( ivSize > 0 && ivSize < CRYPT_MAX_IVSIZE );
 			if( mode == CRYPT_MODE_CBC )
 				return( writeOctetString( stream, iv, ivSize, DEFAULT_TAG ) );
 			writeSequence( stream, sizeofIV + sizeofShortInteger( noBits ) );

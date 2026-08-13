@@ -335,7 +335,7 @@ static int testAESGCM( void )
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = capabilityInfo->getInfoFunction( CAPABILITY_INFO_ICV, 
+		status = capabilityInfo->getInfoFunction( CONTEXT_INFO_ICV, 
 												  &contextInfo, icv, 16 );
 		}
 	if( cryptStatusOK( status ) && memcmp( icv, aesGcmICV, 16 ) )
@@ -440,7 +440,7 @@ static int selfTest( void )
 /* Return context subtype-specific information */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type, 
+static int getInfo( IN_ENUM( CONTEXT_INFO ) const CONTEXT_INFO_TYPE type, 
 					INOUT_PTR_OPT CONTEXT_INFO *contextInfoPtr,
 					OUT_PTR void *data, 
 					IN_INT_Z const int length )
@@ -452,18 +452,18 @@ static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type,
 
 	static_assert( AES_EXPANDED_KEYSIZE >= KS_SIZE, "AES context storage" );
 
-	REQUIRES( isEnumRange( type, CAPABILITY_INFO ) );
-	REQUIRES( ( ( type == CAPABILITY_INFO_STATESIZE || \
-				  type == CAPABILITY_INFO_STATEALIGNTYPE ) && \
+	REQUIRES( isEnumRange( type, CONTEXT_INFO ) );
+	REQUIRES( ( ( type == CONTEXT_INFO_STATESIZE || \
+				  type == CONTEXT_INFO_STATEALIGNTYPE ) && \
 				contextInfoPtr == NULL ) || \
-			  ( type == CAPABILITY_INFO_ICV && \
+			  ( type == CONTEXT_INFO_ICV && \
 				contextInfoPtr != NULL ) );
 	REQUIRES( ( contextInfoPtr == NULL ) || \
 			  sanityCheckContext( contextInfoPtr ) );
 
 	switch( type )
 		{
-		case CAPABILITY_INFO_STATESIZE:
+		case CONTEXT_INFO_STATESIZE:
 			{
 			int *valuePtr = ( int * ) data;
 		
@@ -476,7 +476,7 @@ static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type,
 			return( CRYPT_OK );
 			}
 
-		case CAPABILITY_INFO_STATEALIGNTYPE:
+		case CONTEXT_INFO_STATEALIGNTYPE:
 			{
 			int *valuePtr = ( int * ) data;
 
@@ -487,11 +487,13 @@ static int getInfo( IN_ENUM( CAPABILITY_INFO ) const CAPABILITY_INFO_TYPE type,
 			}
 
 #ifdef USE_GCM
-		case CAPABILITY_INFO_ICV:
+		case CONTEXT_INFO_ICV:
 			{
-			CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+			CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 
+			REQUIRES( convInfo != NULL );
 			REQUIRES( convInfo->mode == CRYPT_MODE_GCM );
+			REQUIRES( rangeCheck( length, MIN_ICV_SIZE, AES_BLOCKSIZE ) );
 
 			/* We're about to modify the keying data, make sure that it's 
 			   still valid before we start */
@@ -534,13 +536,14 @@ static int encryptECB( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					   INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					   IN_LENGTH int noBytes )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtrDynamic( buffer, noBytes ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRangeNZ( noBytes ) );
+	REQUIRES( convInfo != NULL );
 
 	return( ( aes_ecb_encrypt( buffer, buffer, noBytes, 
 							   ENC_KEY( convInfo ) ) == EXIT_SUCCESS ) ? \
@@ -552,13 +555,14 @@ static int decryptECB( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					   INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					   IN_LENGTH int noBytes )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtrDynamic( buffer, noBytes ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRangeNZ( noBytes ) );
+	REQUIRES( convInfo != NULL );
 
 	return( ( aes_ecb_decrypt( buffer, buffer, noBytes, 
 							   DEC_KEY( convInfo ) ) == EXIT_SUCCESS ) ? \
@@ -570,13 +574,14 @@ static int encryptCBC( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					   INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					   IN_LENGTH int noBytes )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtrDynamic( buffer, noBytes ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRangeNZ( noBytes ) );
+	REQUIRES( convInfo != NULL );
 
 	/* If we're using crypto hardware, use that */
 #ifdef HAS_DEVCRYPTO
@@ -594,13 +599,14 @@ static int decryptCBC( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					   INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					   IN_LENGTH int noBytes )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtrDynamic( buffer, noBytes ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRangeNZ( noBytes ) );
+	REQUIRES( convInfo != NULL );
 
 	/* If we're using crypto hardware, use that */
 #ifdef HAS_DEVCRYPTO
@@ -620,7 +626,7 @@ static int encryptCFB( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					   INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					   IN_LENGTH int noBytes )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -628,6 +634,7 @@ static int encryptCFB( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRangeNZ( noBytes ) );
+	REQUIRES( convInfo != NULL );
 
 	status = aes_cfb_encrypt( buffer, buffer, noBytes, convInfo->currentIV,
 							  ENC_KEY( convInfo ) );
@@ -647,7 +654,7 @@ static int decryptCFB( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					   INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					   IN_LENGTH int noBytes )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -655,6 +662,7 @@ static int decryptCFB( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRangeNZ( noBytes ) );
+	REQUIRES( convInfo != NULL );
 
 	status = aes_cfb_decrypt( buffer, buffer, noBytes, convInfo->currentIV,
 							  ENC_KEY( convInfo ) );
@@ -677,7 +685,7 @@ static int encryptGCM( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					   INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					   IN_LENGTH int noBytes )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -685,6 +693,7 @@ static int encryptGCM( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRangeNZ( noBytes ) );
+	REQUIRES( convInfo != NULL );
 
 	status = gcm_encrypt( buffer, noBytes, GCM_KEY( convInfo ) );
 	if( status != EXIT_SUCCESS )
@@ -710,7 +719,7 @@ static int decryptGCM( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					   INOUT_BUFFER_FIXED( noBytes ) BYTE *buffer, 
 					   IN_LENGTH int noBytes )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -718,6 +727,7 @@ static int decryptGCM( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isIntegerRangeNZ( noBytes ) );
+	REQUIRES( convInfo != NULL );
 
 	status = gcm_decrypt( buffer, noBytes, GCM_KEY( convInfo ) );
 	if( status != EXIT_SUCCESS )
@@ -753,12 +763,13 @@ static int initParams( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					   IN_PTR_OPT const void *data, 
 					   IN_INT const int dataLength )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( contextInfoPtr->type == CONTEXT_CONV );
 	REQUIRES( isEnumRange( paramType, KEYPARAM ) );
+	REQUIRES( convInfo != NULL );
 
 	/* Normally we implement the IV handling ourselves, however the AES code 
 	   implements these modes natively and maintains its own CFB and GCM 
@@ -849,7 +860,7 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 					IN_BUFFER( keyLength ) const void *key, 
 					IN_LENGTH_SHORT const int keyLength )
 	{
-	CONV_INFO *convInfo = contextInfoPtr->ctxConv;
+	CONV_INFO *convInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 #ifdef HAS_DEVCRYPTO
 	const int hwCryptInfo = getSysVar( SYSVAR_HWCRYPT );
 #endif /* HAS_DEVCRYPTO */
@@ -859,6 +870,7 @@ static int initKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( keyLength >= MIN_KEYSIZE && keyLength <= AES_KEYSIZE );
+	REQUIRES( convInfo != NULL );
 
 	/* Copy the key to internal storage */
 	if( convInfo->userKey != key )

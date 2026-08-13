@@ -449,8 +449,8 @@ typedef struct {
 	int altMacKeySize;						/* Alt.MAC key for revocations */
 	BOOLEAN useMACsend, useMACreceive;		/* Use MAC to verify integrity */
 
-	/* Whether the certificate issue is being authorised by an RA user 
-	   rather than a standard user */
+	/* Assorted state information: Whether the certificate issue is being 
+	   authorised by an RA user rather than a standard user */
 	BOOLEAN userIsRA;
 
 	/* Other protocol information.  CMP uses an extremely clunky 

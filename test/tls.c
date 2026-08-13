@@ -3418,7 +3418,25 @@ int testSessionTLS12BulkTransferClientServer( void )
 	}
 int testSessionTLS12LocalServerSocketClientServer( void )
 	{
+	/* This is a real pain to test in a one-size-fits-all manner because of 
+	   IPv4 vs. IPv6 conflicts and braindead defaults in some OSes.  While 
+	   cryptlib's internal TCP I/O has extremely extensive workarounds for 
+	   various issues and special-case handling, the local-socket code here 
+	   can't replicate all of this and just uses fairly generic code which 
+	   falls prey to various booby-traps. The most obvious one is whether 
+	   localhost becomes ::1 or 127.0.0.1, which is influenced by various 
+	   configuration factors (Linux) and braindead handling (Windows).  The 
+	   end result is that the client fails with an ECONNREFUSED which means 
+	   that the server thread is stuck in the accept() in 
+	   connectServerSocket(), so it never exits and the client ends up 
+	   waiting forever in waitForThread() for the server thread stuck in 
+	   accept().  To deal with this we skip the test, since there's no way 
+	   to tell which systems will hang and which won't */
+#ifdef WINDOWS_THREADS
 	return( tls12ClientServer( TLS_TEST_LOCALSERVER ) );
+#else
+	return( TRUE );
+#endif /* WINDOWS_THREADS */
 	}
 int testSessionTLS12SNIClientServer( void )
 	{

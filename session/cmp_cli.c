@@ -37,7 +37,7 @@ static const MAP_TABLE clibReqToReqMapTbl[] = {
 	{ CRYPT_ERROR, CRYPT_ERROR }, { CRYPT_ERROR, CRYPT_ERROR }
 	};
 
-CHECK_RETVAL_RANGE( 0, CTAG_PB_LAST ) \
+CHECK_RETVAL_RANGE( CTAG_PB_IR, CTAG_PB_LAST - 1 ) \
 static int clibReqToReq( IN_ENUM( CRYPT_REQUESTTYPE ) const int reqType )
 	{
 	int value, status;
@@ -86,7 +86,18 @@ static int initClientInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									 MESSAGE_CHECK_PKC_SIGN ) )
 			{
 			/* The private key can't be used for signature creation, use
-			   the alternate authentication key instead */
+			   the alternate authentication key instead.  This code path is
+			   only ever exercised from the PnP PKI code which, if the 
+			   algorithm supports it (which in practice only applies to 
+			   RSA), creates two keys, one signing-only and one encryption-
+			   only by setting ACLs for the key and assigning the signature-
+			   ACL'd one to iAuthOutContext to authenticate the encryption-
+			   only privateKey.
+			   
+			   To make debugging easier we force an exception here if it 
+			   isn't set correctly rather than triggering one a long way 
+			   downstream */
+			REQUIRES( isHandleRangeValid( sessionInfoPtr->iAuthOutContext ) );
 			protocolInfo->authContext = sessionInfoPtr->iAuthOutContext;
 			protocolInfo->cryptOnlyKey = TRUE;
 			}
@@ -500,7 +511,7 @@ static int clientTransactWrapper( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 ****************************************************************************/
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-void initCMPclientProcessing( SESSION_INFO *sessionInfoPtr )
+void initCMPclientProcessing( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 

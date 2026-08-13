@@ -13,6 +13,12 @@
 /#include/! s/bn_/CRYPT_bn_/g
 /#include/! s/zlibVersion/CRYPT_zlibVersion/g
 /#include/! s/zlibCompileFlags/CRYPT_zlibCompileFlags/g
+/#include/! s/z_errmsg/CRYPT_z_errmsg/g
+/#include/! s/z_verbose/CRYPT_z_verbose/g
+/#include/! s/z_error/CRYPT_z_error/g
+/#include/! s/zError/CRYPT_zError/g
+/#include/! s/zcalloc/CRYPT_zcalloc/g
+/#include/! s/zcfree/CRYPT_zcfree/g
 /#include/! s/deflate/CRYPT_deflate/g
 /#include/! s/inflate/CRYPT_inflate/g
 /#include/! s/compress/CRYPT_compress/g

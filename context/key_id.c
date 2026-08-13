@@ -5,7 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>
 #define PKC_CONTEXT		/* Indicate that we're working with PKC contexts */
 #include "crypt.h"
 #if defined( INC_ALL )
@@ -36,7 +35,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 static int calculateFlatKeyID( IN_BUFFER( keyInfoSize ) const void *keyInfo,
 							   IN_LENGTH_SHORT_MIN( 16 ) const int keyInfoSize,
 							   OUT_BUFFER_FIXED( keyIdLen ) BYTE *keyID,
-							   IN_LENGTH_SHORT_MIN( KEYID_SIZE ) const int keyIdLen,
+							   IN_LENGTH_SHORT_MIN( KEYID_SIZE ) \
+									const int keyIdLen,
 							   IN_ALGO const CRYPT_ALGO_TYPE hashAlgo )
 	{
 	HASH_FUNCTION_ATOMIC hashFunctionAtomic;
@@ -49,14 +49,19 @@ static int calculateFlatKeyID( IN_BUFFER( keyInfoSize ) const void *keyInfo,
 	assert( isReadPtrDynamic( keyInfo, keyInfoSize ) );
 	assert( isWritePtrDynamic( keyID, keyIdLen ) );
 
+	/* We've always got the full SPKI at this point even if we started a key 
+	   load with just a few bytes of ECC curve ID 
+	   (see context/keyload.c:setEncodedKey(), which starts with as little as
+	   2 bytes) because the key-load process generates the rest of the key
+	   data before we get to calculating the ID */
 	REQUIRES( isShortIntegerRangeMin( keyInfoSize, 16 ) );
-	REQUIRES( keyIdLen == KEYID_SIZE || keyIdLen == 32 );
-	REQUIRES( isHashAlgo( hashAlgo ) );
+	REQUIRES( ( hashAlgo == CRYPT_ALGO_SHA1 && keyIdLen == KEYID_SIZE ) || \
+			  ( hashAlgo == CRYPT_ALGO_SHA2 && keyIdLen == 32 ) );
 
 	/* Get the hash algorithm information */
 	getHashAtomicParameters( hashAlgo, 0, &hashFunctionAtomic, NULL );
 
-	/* Hash the key info to get the key ID */
+	/* Hash the key information to get the key ID */
 #ifndef CONFIG_CUSTOM_1
 	hashFunctionAtomic( keyID, keyIdLen, keyInfo, keyInfoSize );
 #else
@@ -87,15 +92,20 @@ static int calculateFlatKeyID( IN_BUFFER( keyInfoSize ) const void *keyInfo,
 *																			*
 ****************************************************************************/
 
+/* Calculate a keyID when the only key data present is a raw encoded
+   SubjectPublicKeyInfo record.  This only occurs when the object is a 
+   crypto device object rather than a native one and we don't have access to 
+   the key components */
+
 #ifdef USE_DEVICES
 
 /* Instantiate static context data from raw encoded public-key data */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4, 5 ) ) \
 static int createStaticContext( OUT_PTR CONTEXT_INFO *staticContextInfo,
 								OUT_PTR PKC_INFO *contextData,
 								IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
-								const CAPABILITY_INFO *capabilityInfoPtr,
+								IN_PTR const CAPABILITY_INFO *capabilityInfoPtr,
 								IN_BUFFER( publicKeyDataLength ) \
 									const void *publicKeyData,
 								IN_LENGTH_SHORT_MIN( MIN_PKCSIZE ) \
@@ -109,13 +119,14 @@ static int createStaticContext( OUT_PTR CONTEXT_INFO *staticContextInfo,
 	assert( isWritePtr( contextData, sizeof( PKC_INFO ) ) );
 	assert( isReadPtrDynamic( publicKeyData, publicKeyDataLength ) );
 
+	REQUIRES( isPkcAlgo( cryptAlgo ) );
 	REQUIRES( ( isEccAlgo( cryptAlgo ) && \
 				isShortIntegerRangeMin( publicKeyDataLength, 
 										MIN_PKCSIZE_ECCPOINT ) ) || \
 			  ( !isEccAlgo( cryptAlgo ) && \
 				isShortIntegerRangeMin( publicKeyDataLength,
 										MIN_PKCSIZE ) ) );
-	ENSURES( capabilityInfoPtr != NULL );
+	REQUIRES( capabilityInfoPtr != NULL );
 
 	/* Clear return values */
 	memset( staticContextInfo, 0, sizeof( CONTEXT_INFO ) );
@@ -169,6 +180,13 @@ static int createStaticContext( OUT_PTR CONTEXT_INFO *staticContextInfo,
 			break;
 #endif /* USE_X25519 || USE_ED25519 */
 
+#if defined( USE_MLKEM )
+		case CRYPT_ALGO_MLKEM:
+			/* Currently not supported since it's only used for DH-style 
+			   ephemeral keyex so no key is ever stored */
+			retIntError();
+#endif /* USE_MLKEM */
+
 		default:
 			retIntError();
 		}
@@ -196,37 +214,38 @@ static int createStaticContext( OUT_PTR CONTEXT_INFO *staticContextInfo,
 	return( CRYPT_OK );
 	}
 
-/* Calculate a keyID when the only key data present is a raw encoded
-   SubjectPublicKeyInfo record.  This occurs when the object is a device
-   object and we don't have access to the key components.
+/* Calculate a keyID from an encoded SubjectPublicKeyInfo record.  This is 
+   a bit more complicated than the standard keyID calculation because while 
+   the hash-of-SPKI form is rather easier to calculate, the other oddball 
+   forms aren't since they first require breaking down the SPKI into its 
+   components via a native object and then re-encoding them in the various 
+   ways that we need to calculate the other forms of keyID */
 
-   This is a bit more complicated than the standard keyID calculation 
-   because while the hash-of-SPKI form is rather easier to calculate, the 
-   other oddball forms aren't since they first require breaking down the 
-   SPKI into its components via a native object and then re-encoding them in 
-   the various ways that we need to calculate the other forms of keyID */
-
+#ifdef USE_PGPKEYS 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int calculatePGPKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 							  IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo );
+#endif /* USE_PGPKEYS */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int calculateKeyIDFromEncoded( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 									  IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
-									  OUT_BUFFER_OPT_FIXED( 32 ) BYTE *keyID,
+									  OUT_BUFFER_OPT_FIXED( keyIDlength  ) \
+											BYTE *keyID,
 									  IN_LENGTH_SHORT_Z const int keyIDlength, 
 									  IN_ALGO const CRYPT_ALGO_TYPE hashAlgo )
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 						DATAPTR_GET( contextInfoPtr->capabilityInfo );
 	CONTEXT_INFO staticContextInfo;
-	PKC_INFO staticContextData, *publicKey = contextInfoPtr->ctxPKC;
+	PKC_INFO staticContextData;
+	PKC_INFO *publicKey = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const BOOLEAN isPgpAlgo = \
 		( cryptAlgo == CRYPT_ALGO_RSA || cryptAlgo == CRYPT_ALGO_DSA || \
-		  cryptAlgo == CRYPT_ALGO_ELGAMAL ) ? TRUE : FALSE;
-	void *keyIDptr = ( keyID != NULL ) ? keyID : publicKey->keyID;
-	const int keyIDsize = ( keyID != NULL ) ? keyIDlength : KEYID_SIZE;
-	int status;
+		  cryptAlgo == CRYPT_ALGO_ELGAMAL || \
+		  cryptAlgo == CRYPT_ALGO_ECDSA ) ? TRUE : FALSE;
+	void *keyIDptr;
+	int keyIDsize, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( keyID == NULL || isWritePtr( keyID, keyIDlength ) );
@@ -237,6 +256,20 @@ static int calculateKeyIDFromEncoded( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			  ( keyID != NULL && keyIDlength == 32 ) );
 	REQUIRES( isHashAlgo( hashAlgo ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( publicKey != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	if( keyID == NULL )
+		{
+		keyIDptr = publicKey->keyID;
+		keyIDsize = KEYID_SIZE;
+		}
+	else
+		{
+		keyIDptr = keyID;
+		keyIDsize = keyIDlength;
+		}
 
 	/* Calculate the keyID for the pre-encoded key data */
 	status = calculateFlatKeyID( publicKey->publicKeyInfo, 
@@ -268,7 +301,7 @@ static int calculateKeyIDFromEncoded( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	/* If we're not using PGP algorithms and the key size has already been
 	   set by device-specific code then there's nothing further to do */
 #ifndef USE_PGPKEYS 
-	if( contextInfoPtr->ctxPKC->keySizeBits != 0 )
+	if( publicKey->keySizeBits != 0 )
 		return( CRYPT_OK );
 #endif /* !USE_PGPKEYS */
 
@@ -304,7 +337,10 @@ static int calculateKeyIDFromEncoded( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	   explicitly copy the key size information from the static native 
 	   context that we've created */
 	if( TEST_FLAG( contextInfoPtr->flags, CONTEXT_FLAG_DUMMY ) )
-		contextInfoPtr->ctxPKC->keySizeBits = staticContextData.keySizeBits;
+		{
+		ENSURES( staticContextData.keySizeBits > 0 );
+		publicKey->keySizeBits = staticContextData.keySizeBits;
+		}
 
 	/* If it's a PGP algorithm, copy across any relevant PGP keyIDs */
 #ifdef USE_PGPKEYS 
@@ -315,16 +351,14 @@ static int calculateKeyIDFromEncoded( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			{
 			memcpy( publicKey->pgp2KeyID, staticContextData.pgp2KeyID, 
 					PGP_KEYID_SIZE );
-			SET_FLAG( contextInfoPtr->ctxPKC->flags, 
-					  PKCINFO_FLAG_PGPKEYID_SET );
+			SET_FLAG( publicKey->flags, PKCINFO_FLAG_PGPKEYID_SET );
 			}
 		if( TEST_FLAG( staticContextData.flags, 
 					   PKCINFO_FLAG_OPENPGPKEYID_SET ) )
 			{
 			memcpy( publicKey->openPgpKeyID, staticContextData.openPgpKeyID, 
 					PGP_KEYID_SIZE );
-			SET_FLAG( contextInfoPtr->ctxPKC->flags, 
-					  PKCINFO_FLAG_OPENPGPKEYID_SET );
+			SET_FLAG( publicKey->flags, PKCINFO_FLAG_OPENPGPKEYID_SET );
 			}
 		}
 #endif /* USE_PGPKEYS */
@@ -350,7 +384,7 @@ static int calculateOpenPGPKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	{
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 						DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	PKC_INFO *publicKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *publicKey = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	HASH_FUNCTION hashFunction;
 	HASHINFO hashInfo;
 	STREAM stream;
@@ -362,6 +396,7 @@ static int calculateOpenPGPKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( isPkcAlgo( cryptAlgo ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( publicKey != NULL );
 
 	/* Generate an OpenPGP key ID.  Note that the creation date isn't 
 	   necessarily present if the key came from a non-PGP source, in which 
@@ -401,12 +436,11 @@ static int calculateOpenPGPKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 				  HASH_STATE_START );
 	hashFunction( hashInfo, hash, CRYPT_MAX_HASHSIZE, buffer, length, 
 				  HASH_STATE_END );
-	REQUIRES( !checkOverflowSub( hashSize, PGP_KEYID_SIZE ) );
+	REQUIRES_SC( !checkOverflowSub( hashSize, PGP_KEYID_SIZE ) );
 	memcpy( publicKey->openPgpKeyID, hash + hashSize - PGP_KEYID_SIZE, 
 			PGP_KEYID_SIZE );
 	sMemClose( &stream );
-	SET_FLAG( contextInfoPtr->ctxPKC->flags, 
-			  PKCINFO_FLAG_OPENPGPKEYID_SET );
+	SET_FLAG( publicKey->flags, PKCINFO_FLAG_OPENPGPKEYID_SET );
 	zeroise( buffer, ( CRYPT_MAX_PKCSIZE * 4 ) + 50 );
 	zeroise( hashInfo, sizeof( HASHINFO ) );
 	zeroise( hash, CRYPT_MAX_HASHSIZE );
@@ -418,38 +452,37 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int calculatePGPKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 							  IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( isPkcAlgo( cryptAlgo ) );
+	REQUIRES( pkcInfo != NULL );
 
-	/* If it's an RSA key, we need to calculate the PGP 2 key ID alongside 
-	   the cryptlib one */
+	/* If it's an RSA key then we need to calculate the PGP 2 key ID 
+	   alongside the cryptlib one */
 	if( cryptAlgo == CRYPT_ALGO_RSA )
 		{
-		PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
-		BYTE buffer[ ( CRYPT_MAX_PKCSIZE * 4 ) + 50 + 8 ];
+		BYTE buffer[ CRYPT_MAX_PKCSIZE + 50 + 8 ];
 		int length;
 
 		status = exportBignum( buffer, CRYPT_MAX_PKCSIZE, &length,
 							   &pkcInfo->rsaParam_n );
 		if( cryptStatusError( status ) )
 			return( status );
-		if( length > PGP_KEYID_SIZE )
+		if( length >= PGP_KEYID_SIZE )
 			{
 			REQUIRES( !checkOverflowSub( length, PGP_KEYID_SIZE ) );
 			memcpy( pkcInfo->pgp2KeyID, 
 					buffer + length - PGP_KEYID_SIZE, PGP_KEYID_SIZE );
-			SET_FLAG( contextInfoPtr->ctxPKC->flags, 
-					  PKCINFO_FLAG_PGPKEYID_SET );
+			SET_FLAG( pkcInfo->flags, PKCINFO_FLAG_PGPKEYID_SET );
 			}
 		}
 
 	/* If the OpenPGP ID is already set by having the key loaded from a PGP
 	   keyset, we're done */
-	if( TEST_FLAG( contextInfoPtr->ctxPKC->flags, 
-				   PKCINFO_FLAG_OPENPGPKEYID_SET ) )
+	if( TEST_FLAG( pkcInfo->flags, PKCINFO_FLAG_OPENPGPKEYID_SET ) )
 		return( CRYPT_OK );
 
 	/* If it's a non-PGP algorithm then we can't do anything with it */
@@ -471,24 +504,34 @@ static int writePKCS3Key( INOUT_PTR STREAM *stream,
 						  const PKC_INFO *dlpKey,
 						  IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 	{
-	const DH_DOMAINPARAMS *domainParams = dlpKey->domainParams;
-	const BIGNUM *p = ( domainParams != NULL ) ? \
-					  &domainParams->p : &dlpKey->dlpParam_p;
-	const BIGNUM *g = ( domainParams != NULL ) ? \
-					  &domainParams->g : &dlpKey->dlpParam_g;
-	const int parameterSize = sizeofShortObject( \
-											sizeofBignum( p ) + \
-											3 +		/* INTEGER value 0 */
-											sizeofBignum( g ) );
-	const int componentSize = sizeofBignum( &dlpKey->dlpParam_y );
+	const DH_DOMAINPARAMS *domainParams;
+	const BIGNUM *p, *g;
 	ALGOID_PARAMS algoIDparams;
-	int totalSize, status;
+	int parameterSize, componentSize, totalSize, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( dlpKey, sizeof( PKC_INFO ) ) );
 
 	REQUIRES( sanityCheckPKCInfo( dlpKey ) );
 	REQUIRES( isDlpAlgo( cryptAlgo ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	domainParams = dlpKey->domainParams;
+	if( domainParams != NULL )
+		{
+		p = &domainParams->p;
+		g = &domainParams->g;
+		}
+	else
+		{
+		p = &dlpKey->dlpParam_p;
+		g = &dlpKey->dlpParam_g;
+		}
+	parameterSize = sizeofShortObject( sizeofBignum( p ) + 3 +		
+									   sizeofBignum( g ) );
+									   /* 3 = encoded INTEGER value 0 */
+	componentSize = sizeofBignum( &dlpKey->dlpParam_y );
 
 	/* Implement a cut-down version of writeDlpSubjectPublicKey(), writing a 
 	   zero value for q */
@@ -507,30 +550,29 @@ static int writePKCS3Key( INOUT_PTR STREAM *stream,
 	return( writeBignum( stream, &dlpKey->dlpParam_y ) );
 	}
 
-/* Generate an X.509 key ID, which is the SHA-1 hash of the 
-   SubjectPublicKeyInfo.  There are about half a dozen incompatible ways of 
-   generating X.509 keyIdentifiers, the following is conformant with the 
-   PKIX specification ("use whatever you like as long as it's unique") but 
-   differs slightly from one common method that hashes the SubjectPublicKey 
-   without the BIT STRING encapsulation.  The problem with that method is 
-   that some DLP-based algorithms use a single integer as the 
-   SubjectPublicKey, leading to potential key ID clashes */
+/* Generate an X.509 key ID, which is a hash of the SubjectPublicKeyInfo.  
+   There are about half a dozen incompatible ways of generating X.509 
+   keyIdentifiers, the following is conformant with the PKIX specification 
+   ("use whatever you like as long as it's unique") but differs slightly 
+   from one common method that hashes the SubjectPublicKey without the BIT 
+   STRING encapsulation.  The problem with that method is that some DLP-
+   based algorithms use a single integer as the SubjectPublicKey, leading 
+   to potential key ID clashes */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int calculateKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
-						   OUT_BUFFER_OPT_FIXED( 32 ) BYTE *keyID,
+						   OUT_BUFFER_OPT_FIXED( keyIDlength ) BYTE *keyID,
 						   IN_LENGTH_SHORT_Z const int keyIDlength, 
 						   IN_ALGO const CRYPT_ALGO_TYPE hashAlgo )
 	{
 	CRYPT_ALGO_TYPE cryptAlgo;
-	PKC_INFO *publicKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *publicKey = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 						DATAPTR_GET( contextInfoPtr->capabilityInfo );
 	STREAM stream;
 	BYTE buffer[ ( CRYPT_MAX_PKCSIZE * 4 ) + 50 + 8 ];
-	void *keyIDptr = ( keyID != NULL ) ? keyID : publicKey->keyID;
-	const int keyIDsize = ( keyID != NULL ) ? keyIDlength : KEYID_SIZE;
-	int status;
+	void *keyIDptr;
+	int keyIDsize, status;
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( keyID == NULL || isWritePtr( keyID, keyIDlength ) );
@@ -541,8 +583,21 @@ static int calculateKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			  ( keyID != NULL && keyIDlength == 32 ) );
 	REQUIRES( isHashAlgo( hashAlgo ) );
 	REQUIRES( capabilityInfoPtr != NULL );
+	REQUIRES( publicKey != NULL );
 
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
 	cryptAlgo = capabilityInfoPtr->cryptAlgo;
+	if( keyID == NULL )
+		{
+		keyIDptr = publicKey->keyID;
+		keyIDsize = KEYID_SIZE;
+		}
+	else
+		{
+		keyIDptr = keyID;
+		keyIDsize = keyIDlength;
+		}
 
 	/* If the public key info is present in pre-encoded form, calculate the
 	   key ID directly from that */
@@ -577,8 +632,11 @@ static int calculateKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = calculateFlatKeyID( buffer, stell( &stream ), 
-									 keyIDptr, keyIDsize, hashAlgo );
+		const int streamPos = stell( &stream );
+		
+		REQUIRES_SC( isShortIntegerRangeNZ( streamPos ) );
+		status = calculateFlatKeyID( buffer, streamPos, keyIDptr, keyIDsize, 
+									 hashAlgo );
 		}
 	sMemClose( &stream );	/* zeroises the stream buffer */
 	if( cryptStatusError( status ) )
@@ -604,12 +662,13 @@ static int calculateKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 STDC_NONNULL_ARG( ( 1 ) ) \
 void initKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES_V( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES_V( contextInfoPtr->type == CONTEXT_PKC );
+	REQUIRES_V( pkcInfo != NULL );
 
 	/* Set the access method pointers */
 	FNPTR_SET( pkcInfo->calculateKeyIDFunction, calculateKeyID );
@@ -617,10 +676,10 @@ void initKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 #else
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-static int calculateKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
-						   OUT_BUFFER_OPT_FIXED( 32 ) BYTE *keyID,
-						   IN_LENGTH_SHORT_Z const int keyIDlength, 
-						   IN_ALGO const CRYPT_ALGO_TYPE hashAlgo )
+static int calculateKeyIDDummy( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
+								OUT_BUFFER_OPT_FIXED( 32 ) BYTE *keyID,
+								IN_LENGTH_SHORT_Z const int keyIDlength, 
+								IN_ALGO const CRYPT_ALGO_TYPE hashAlgo )
 	{
 	MESSAGE_DATA msgData;
 
@@ -628,7 +687,14 @@ static int calculateKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC );
+	REQUIRES( ( keyID == NULL && keyIDlength == 0 ) || \
+			  ( keyID != NULL && keyIDlength == 32 ) );
 	REQUIRES( isHashAlgo( hashAlgo ) );
+
+	/* This signals that we should set the context-internal keyID value, but
+	   since there isn't one with USE_PKC undefined there's nothing to do */
+	if( keyID == NULL )
+		return( CRYPT_OK );
 
 	/* If we're not using ASN.1 then we can't calculate keyIDs, but then no 
 	   code that requires keyIDs is actually enabled so we just set a dummy
@@ -641,12 +707,13 @@ static int calculateKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 STDC_NONNULL_ARG( ( 1 ) ) \
 void initKeyID( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES_V( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES_V( contextInfoPtr->type == CONTEXT_PKC );
+	REQUIRES_V( pkcInfo != NULL );
 
 	/* Set the access method pointers */
 	FNPTR_SET( pkcInfo->calculateKeyIDFunction, calculateKeyIDDummy );

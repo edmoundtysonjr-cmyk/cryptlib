@@ -627,7 +627,14 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* Peek ahead into the stream to extract the pad length and type 
 	   information.  We have to leave this in place in the stream because 
 	   it's going to be read into the session buffer on so we can't read it 
-	   from the stream above but have to manually extract it here */
+	   from the stream above but have to manually extract it here.
+	   
+	   Note that for OpenSSH's homebrew EtM mode, which we never enable
+	   except for fuzzing and other testing, this reports a decryption
+	   problem before the MAC is checked.  Apart from the fact that it's
+	   never enabled in production, there's no padding oracle because
+	   AES-CTR is a stream cipher, and nothing else is decrypted or acted on
+	   until we've passed the MAC check later on */
 	static_assert( LENGTH_SIZE + 1 + ID_SIZE <= SSH_MIN_PACKET_SIZE,
 				   "Header length calculation" );
 	sshInfo->padLength = byteToInt( sshInfo->headerBuffer[ LENGTH_SIZE ] );

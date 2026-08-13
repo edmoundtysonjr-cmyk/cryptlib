@@ -96,8 +96,6 @@
 
 /* Non-debug version, no-op out the various checks */
 
-#define TEMP_INT( a )
-#define TEMP_VAR( a )
 #define FORALL( a, b, c, d )
 #define EXISTS( a, b, c, d )
 
@@ -137,16 +135,18 @@ typedef enum {
    it's no longer possible to spot a case where a subtype bit for object A 
    has inadvertently been set for object B.
 
-   To resolve this, we divide the subtype bit field into two smaller bit 
-   fields (classes) with the high two bits designating which class the 
-   subtype is in (actually we use the bits one below the high bit since 
-   this may be interpreted as a sign bit by some preprocessors even if it's 
-   declared as a xxxxUL, so in the following discussion we're talking about 
-   logical rather than physical high bits).  Class A is always 01xxx..., 
-   class B is always 10xxx...  If we get an entry that has 11xxx... we know 
-   that the ACL entry is inconsistent.  This isn't pretty, but it's the 
-   least ugly way to do it that still allows the ACL table to be built 
-   using the preprocessor.
+   To resolve this, we divide the subtype bit field into smaller bit fields 
+   (classes) with the high two bits designating which class the subtype is 
+   in (actually we use the bits one below the high bit since this may be 
+   interpreted as a sign bit by some preprocessors even if it's declared as 
+   a xxxxUL, so in the following discussion we're talking about logical 
+   rather than physical high bits).  Class A is always 001xxx..., class B is 
+   always 010xxx..., class C is always 100xxx....  This isn't pretty, but 
+   it's the least ugly way to do it that still allows the ACL table to be 
+   built using the preprocessor.  Note that this also means that the 
+   highest subtype that we can have is 28, which results in a value of
+   1 << ( 28 - 1 ).  Anything higher than that would shift the bit into
+   the class bits.
 
    Note that the device and keyset values must be in the same class, since 
    they're interchangeable for many message types and this simplifies some 
@@ -256,17 +256,19 @@ typedef int OBJECT_SUBTYPE;
 
 #define MESSAGE_MASK				0xFF
 
-/* The message types that can be sent to an object via krnlSendMessage(). 
-   By default messages can only be sent to externally visible objects, there 
-   are also internal versions that can be sent to all objects.  The object 
-   messages have the following arguments:
+/* The message types that can be sent to an object via krnlSendMessage() 
+   (although one or two are generated internally by the kernel in response
+   to other messages, for example MESSAGE_CHANGENOTIFY). By default messages 
+   can only be sent to externally visible objects, there are also internal 
+   versions that can be sent to all objects.  The object messages have the 
+   following arguments:
 
 	Type								DataPtr			Value
 	---------------------------			-------			-----
 	MESSAGE_DESTROY						NULL			0
 	MESSAGE_INC/DECREFCOUNT				NULL			0
 	MESSAGE_GETDEPENDENT				&objectHandle	objectType
-	MESSAGE_SETDEPENDENT				&objectHandle	incRefCount
+	MESSAGE_SETDEPENDENT				&objectHandle	setDepType
 	MESSAGE_CLEARDEPENDENT				NULL			0
 	MESSAGE_CLONE						NULL			cloneContext
 	MESSAGE_GET/SETATTRIBUTE			&value			attributeType
@@ -275,7 +277,7 @@ typedef int OBJECT_SUBTYPE;
 	MESSAGE_CHECK						NULL			requestedUse
 	MESSAGE_SELFTEST					NULL			0
 
-	MESSAGE_CHANGENOTIFY				&value			attributeType
+	MESSAGE_CHANGENOTIFY				NULL			0
 
 	MESSAGE_CTX_ENCRYPT/DECRYPT/SIGN/-
 		SIGCHECK/SIGN_MSG/
@@ -585,7 +587,7 @@ typedef enum {
    to the data itself */
 
 typedef struct {
-	BUFFER_FIXED( length ) \
+	BUFFER_OPT_FIXED( length ) \
 	void *data;						/* Data */
 	int length;						/* Length */
 	} MESSAGE_DATA;
@@ -634,7 +636,10 @@ extern const int messageValueCursorPrevious, messageValueCursorLast;
 	  ( attribute ) < CRYPT_IATTRIBUTE_LAST )
 
 /* Check whether a message is in a given message class, used in object 
-   message handlers */
+   message handlers.  Note that isActionMessage() excludes 
+   MESSAGE_CTX_GENKEY which is a special-case action message (vs. encrypt,
+   decrypt, sign, etc), so it's included in the ACTION_PERM bitmap further
+   down but not routed to the same handler as the other actions */
 
 #define isAttributeMessage( message ) \
 	( ( message ) >= MESSAGE_GETATTRIBUTE && \
@@ -772,24 +777,25 @@ extern const int messageValueCursorPrevious, messageValueCursorLast;
 #define ACTION_PERM_NONE_EXTERNAL_ALL	0xAAA
 #define ACTION_PERM_ALL_MAX				0xFFF
 
-#define ACTION_PERM_BASE	MESSAGE_CTX_ENCRYPT
-#define ACTION_PERM_MASK	0x03
-#define ACTION_PERM_BITS	2
-#define ACTION_PERM_COUNT	6
+#define ACTION_PERM_BASE	MESSAGE_CTX_ENCRYPT	/* First action message */
+#define ACTION_PERM_BITS	2			/* Number of bits for each perm.*/
+#define ACTION_PERM_COUNT	6			/* Number of permissions */
+#define ACTION_PERM_MASK	0x03		/* Mask for permission bits */
+
+#define ACTION_MAP_INVALID	( -1 )
 
 #define ACTION_MAP( action ) \
 		( ( ( action ) < MESSAGE_CTX_ENCRYPT || \
-			( action ) > MESSAGE_CTX_GENKEY ) ? ( 32 - 1 ) : \
+			( action ) > MESSAGE_CTX_GENKEY ) ? ACTION_MAP_INVALID : \
 		  ( action ) < MESSAGE_CTX_SIGN_MSG ? \
 			( action ) - ACTION_PERM_BASE : \
 			( action ) - ( ACTION_PERM_BASE + 2 ) )
 		/* A complex macro to map an action like MESSAGE_CTX_SIGN to a value
 		   that can be used to create a permission bitmap by acting as a 
 		   shift amount for the base permission.  If the value is out of 
-		   range (programming error) it's given a shift count that will 
-		   typically result in an all-zero permission value, so 
-		   ACTION_PERM_NONE, however we also have to be careful not to use a
-		   too-large amount or some compilers will just optimise it away.
+		   range (programming error) it's turned into an invalid value that's
+		   checked for by the macros that use it and turned into 
+		   ACTION_PERM_NOTAVAIL.
 		   
 		   Failing that, if it's before one of the two alternative signature-
 		   type actions then it's mapped to the value, if it's at or above 
@@ -800,21 +806,30 @@ extern const int messageValueCursorPrevious, messageValueCursorLast;
 		   This rather complex expression relies on the fact that in almost 
 		   all cases where it's used the preprocessor can evaluate the 
 		   result at compile time from constant values, so the final 
-		   expression is a single integer constant */
+		   expression is a single integer constant which then feeds into the
+		   macros that follow */
 
 #define MK_ACTION_PERM( action, perm ) \
-		( ( perm ) << ( ACTION_MAP( action ) * ACTION_PERM_BITS ) )
+		( ( ACTION_MAP( action ) == ACTION_MAP_INVALID ) ? \
+		  ACTION_PERM_NOTAVAIL : \
+		  ( ( perm ) << ( ACTION_MAP( action ) * ACTION_PERM_BITS ) ) )
+		/* Turn an action + desired permission into a permission bitmap */
 #define EXTRACT_ACTION_PERM( perm, action ) \
-		( ( perm ) >> ( ACTION_MAP( action ) * ACTION_PERM_BITS ) )
-		/* Turn an action + desired permission into a permission bitmap 
-		   and extract a permission from an action and permission bitmap */
+		( ( ACTION_MAP( action ) == ACTION_MAP_INVALID ) ? \
+		  ACTION_PERM_NOTAVAIL : \
+		  ( ( ( perm ) >> ( ACTION_MAP( action ) * ACTION_PERM_BITS ) ) & \
+			ACTION_PERM_MASK ) )
+		/* Extract a permission from an action and permission bitmap.  This
+		   one is only used in one location, 
+		   kernel/msg_acl.c:checkActionPermitted() to return an error 
+		   status */
 
 #define MK_ACTION_PERM_NONE_EXTERNAL( action ) \
 		( ( action ) & ACTION_PERM_NONE_EXTERNAL_ALL )
 		/* Mask actions so no external access is permitted */
 
 #define ACTION_PERM_LAST	\
-		( 1 << ( ( ( ACTION_PERM_COUNT ) * ACTION_PERM_BITS ) + 1 ) )
+		( 1 << ( ( ( ACTION_PERM_COUNT ) * ACTION_PERM_BITS ) ) )
 		/* Used for range checks */
 
 /* Symbolic defines to allow the action flags to be range-checked alongside 
@@ -911,7 +926,7 @@ typedef struct { //-V802
 	BUFFER_OPT_FIXED( wrappedDataLength ) \
 		void *wrappedData;					/* Wrapped key */
 	int wrappedDataLength;
-	BUFFER_FIXED( keyDataLength ) \
+	BUFFER_OPT_FIXED( keyDataLength ) \
 		void *keyData;						/* Raw key */
 	int keyDataLength;
 	VALUE_HANDLE_OPT CRYPT_HANDLE keyContext;/* Context containing raw key */
@@ -1137,7 +1152,7 @@ typedef struct {
 		const void *strArg2;				/* String args */
 	VALUE_INT int strArgLen1;
 	VALUE_INT_SHORT int strArgLen2;
-	BUFFER_FIXED( sizeof( ERROR_INFO ) ) \
+	BUFFER_OPT_FIXED( sizeof( ERROR_INFO ) ) \
 		void *errorInfo;					/* Error information */
 	} MESSAGE_CREATEOBJECT_INFO;
 
@@ -1393,7 +1408,7 @@ typedef struct {
 #define initMessageExtInfo( messageExtInfo, objectInfo ) \
 		{ \
 		memset( messageExtInfo, 0, sizeof( MESSAGE_FUNCTION_EXTINFO ) ); \
-		( messageExtInfo )->objectInfoPtr = objectInfo; \
+		( messageExtInfo )->objectInfoPtr = ( objectInfo ); \
 		}
 #define setMessageObjectLocked( messageExtInfo ) \
 		( messageExtInfo )->isUnlocked = FALSE
@@ -1434,8 +1449,8 @@ typedef struct {
 									0x01	/* Use krnlMemAlloc() to alloc.*/
 #define CREATEOBJECT_FLAG_DUMMY		0x02	/* Dummy obj.used as placeholder */
 #define CREATEOBJECT_FLAG_PERSISTENT 0x04	/* Obj.backed by key in device */
-#define CREATEOBJECT_FLAG_CRYPTOBJ	0x10	/* Obj.created via crypto object */
-#define CREATEOBJECT_FLAG_MAX		0x1F	/* Maximum possible flag value */
+#define CREATEOBJECT_FLAG_CRYPTOBJ	0x08	/* Obj.created via crypto object */
+#define CREATEOBJECT_FLAG_MAX		0x0F	/* Maximum possible flag value */
 
 #define CREATEOBJECT_FLAG_KRNLMASK	( CREATEOBJECT_FLAG_SECUREMALLOC )
 
@@ -1460,7 +1475,7 @@ PARAMCHECK_MESSAGE( MESSAGE_DESTROY, PARAM_NULL, PARAM_IS( 0 ) ) \
 PARAMCHECK_MESSAGE( MESSAGE_INCREFCOUNT, PARAM_NULL, PARAM_IS( 0 ) ) \
 PARAMCHECK_MESSAGE( MESSAGE_DECREFCOUNT, PARAM_NULL, PARAM_IS( 0 ) ) \
 PARAMCHECK_MESSAGE( MESSAGE_GETDEPENDENT, OUT_PTR, IN_ENUM( OBJECT_TYPE ) ) \
-PARAMCHECK_MESSAGE( MESSAGE_SETDEPENDENT, IN_PTR, IN_PTR ) \
+PARAMCHECK_MESSAGE( MESSAGE_SETDEPENDENT, IN_PTR, IN_ENUM( SETDEP_OPTION ) ) \
 PARAMCHECK_MESSAGE( MESSAGE_CLEARDEPENDENT, PARAM_NULL, PARAM_IS( 0 ) ) \
 PARAMCHECK_MESSAGE( MESSAGE_CLONE, PARAM_NULL, IN_HANDLE ) \
 PARAMCHECK_MESSAGE( MESSAGE_GETATTRIBUTE, OUT_PTR, IN_ATTRIBUTE ) \
@@ -1652,12 +1667,18 @@ int krnlMemfree( INOUT_PTR_PTR void **pointer );
 
 #ifdef NEED_ENUMFIX
   #undef OBJECT_TYPE_LAST
+  #undef MESSAGE_LAST
+  #undef IMESSAGE_LAST
   #undef MESSAGE_COMPARE_LAST
   #undef MESSAGE_CHECK_LAST
   #undef MESSAGE_CHANGENOTIFY_LAST
+  #undef MESSAGE_USERMGMT_LAST
+  #undef MESSAGE_TRUSTMGMT_LAST
   #undef MECHANISM_LAST
   #undef KEYMGMT_ITEM_LAST
   #undef SEMAPHORE_LAST
   #undef MUTEX_LAST
+  #undef SETDEP_OPTION_LAST
+  #undef CATALOGQUERY_ITEM_LAST
 #endif /* NEED_ENUMFIX */
 #endif /* _CRYPTKRN_DEFINED */

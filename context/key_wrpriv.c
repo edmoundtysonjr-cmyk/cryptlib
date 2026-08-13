@@ -1,11 +1,10 @@
 /****************************************************************************
 *																			*
 *							Private Key Write Routines						*
-*						Copyright Peter Gutmann 1992-2024					*
+*						Copyright Peter Gutmann 1992-2025					*
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>
 #define PKC_CONTEXT		/* Indicate that we're working with PKC contexts */
 #include "crypt.h"
 #if defined( INC_ALL )
@@ -38,9 +37,8 @@ static int getSPKIHash( const CONTEXT_INFO *contextInfoPtr,
 						OUT_BUFFER_FIXED_C( 32 ) BYTE *hashValue,
 						IN_LENGTH_FIXED( 32 ) const int hashValueLength ) 
 	{
-	const PKC_CALCULATEKEYID_FUNCTION calculateKeyIDFunction = \
-				( PKC_CALCULATEKEYID_FUNCTION ) \
-				FNPTR_GET( contextInfoPtr->ctxPKC->calculateKeyIDFunction );
+	PKC_CALCULATEKEYID_FUNCTION calculateKeyIDFunction;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isWritePtr( hashValue, hashValueLength ) );
@@ -48,11 +46,17 @@ static int getSPKIHash( const CONTEXT_INFO *contextInfoPtr,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC );
 	REQUIRES( hashValueLength == 32 );
-	REQUIRES( calculateKeyIDFunction != NULL );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Clear return value */
 	REQUIRES( hashValueLength == 32 );
 	memset( hashValue, 0, min( 16, hashValueLength ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	calculateKeyIDFunction = ( PKC_CALCULATEKEYID_FUNCTION ) \
+						FNPTR_GET( pkcInfo->calculateKeyIDFunction );
+	REQUIRES( calculateKeyIDFunction != NULL );
 
 	/* The keyID calculation function can either update the context 
 	   information with various key IDs or just return a single key ID 
@@ -80,18 +84,22 @@ static int writeRsaPrivateKey( INOUT_PTR STREAM *stream,
 							   IN_PTR const CONTEXT_INFO *contextInfoPtr,
 							   IN_BOOL const BOOLEAN useExtFormat )
 	{
-	const PKC_INFO *rsaKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	BYTE spkiHash[ CRYPT_MAX_HASHSIZE + 8 ];
-	int length = sizeofBignum( &rsaKey->rsaParam_p ) + \
-				 sizeofBignum( &rsaKey->rsaParam_q );
-	int status;
+	int length, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( isBooleanValue( useExtFormat ) );
-	REQUIRES( sanityCheckPKCInfo( rsaKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	length = sizeofBignum( &pkcInfo->rsaParam_p ) + \
+			 sizeofBignum( &pkcInfo->rsaParam_q );
 
 	/* Calculate the hash of the SPKI if we're cryptographically binding the 
 	   public-key components to the private key ones */
@@ -103,11 +111,11 @@ static int writeRsaPrivateKey( INOUT_PTR STREAM *stream,
 		}
 
 	/* Add the length of any optional components that may be present */
-	if( !BN_is_zero( &rsaKey->rsaParam_exponent1 ) )
+	if( !BN_is_zero( &pkcInfo->rsaParam_exponent1 ) )
 		{
-		length += sizeofBignum( &rsaKey->rsaParam_exponent1 ) + \
-				  sizeofBignum( &rsaKey->rsaParam_exponent2 ) + \
-				  sizeofBignum( &rsaKey->rsaParam_u );
+		length += sizeofBignum( &pkcInfo->rsaParam_exponent1 ) + \
+				  sizeofBignum( &pkcInfo->rsaParam_exponent2 ) + \
+				  sizeofBignum( &pkcInfo->rsaParam_u );
 		}
 
 	/* If we're using the extended format, write the public-key binding 
@@ -124,13 +132,13 @@ static int writeRsaPrivateKey( INOUT_PTR STREAM *stream,
 
 	/* Write the the PKC fields */
 	writeSequence( stream, length );
-	writeBignumTag( stream, &rsaKey->rsaParam_p, 3 );
-	if( BN_is_zero( &rsaKey->rsaParam_exponent1 ) )
-		return( writeBignumTag( stream, &rsaKey->rsaParam_q, 4 ) );
-	writeBignumTag( stream, &rsaKey->rsaParam_q, 4 );
-	writeBignumTag( stream, &rsaKey->rsaParam_exponent1, 5 );
-	writeBignumTag( stream, &rsaKey->rsaParam_exponent2, 6 );
-	return( writeBignumTag( stream, &rsaKey->rsaParam_u, 7 ) );
+	writeBignumTag( stream, &pkcInfo->rsaParam_p, 3 );
+	if( BN_is_zero( &pkcInfo->rsaParam_exponent1 ) )
+		return( writeBignumTag( stream, &pkcInfo->rsaParam_q, 4 ) );
+	writeBignumTag( stream, &pkcInfo->rsaParam_q, 4 );
+	writeBignumTag( stream, &pkcInfo->rsaParam_exponent1, 5 );
+	writeBignumTag( stream, &pkcInfo->rsaParam_exponent2, 6 );
+	return( writeBignumTag( stream, &pkcInfo->rsaParam_u, 7 ) );
 	}
 
 #ifdef USE_PKCS12
@@ -139,33 +147,38 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int writeRsaPrivateKeyOld( INOUT_PTR STREAM *stream, 
 								  const CONTEXT_INFO *contextInfoPtr )
 	{
-	const PKC_INFO *rsaKey = contextInfoPtr->ctxPKC;
-	const BIGNUM *d = &rsaKey->rsaParam_d;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const BIGNUM *d;
 	BOOLEAN calculatedPrivateExponent = FALSE;
-	int length = sizeofShortInteger( 0 ) + \
-				 sizeofBignum( &rsaKey->rsaParam_n ) + \
-				 sizeofBignum( &rsaKey->rsaParam_e ) + \
-				 sizeofBignum( &rsaKey->rsaParam_p ) + \
-				 sizeofBignum( &rsaKey->rsaParam_q ) + \
-				 sizeofBignum( &rsaKey->rsaParam_exponent1 ) + \
-				 sizeofBignum( &rsaKey->rsaParam_exponent2 ) + \
-				 sizeofBignum( &rsaKey->rsaParam_u );
-	int status;
+	int length, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( sanityCheckPKCInfo( rsaKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	d = &pkcInfo->rsaParam_d;
+	length = sizeofShortInteger( 0 ) + \
+			 sizeofBignum( &pkcInfo->rsaParam_n ) + \
+			 sizeofBignum( &pkcInfo->rsaParam_e ) + \
+			 sizeofBignum( &pkcInfo->rsaParam_p ) + \
+			 sizeofBignum( &pkcInfo->rsaParam_q ) + \
+			 sizeofBignum( &pkcInfo->rsaParam_exponent1 ) + \
+			 sizeofBignum( &pkcInfo->rsaParam_exponent2 ) + \
+			 sizeofBignum( &pkcInfo->rsaParam_u );
 
 	/* The older format is somewhat restricted in terms of what can be
 	   written since all components must be present, even the ones that are
 	   never used (if d isn't present we calculate it on the fly, see 
 	   below).  If anything is missing we can't write the key since nothing 
 	   would be able to read it */
-	if( BN_is_zero( &rsaKey->rsaParam_n ) || \
-		BN_is_zero( &rsaKey->rsaParam_p ) || \
-		BN_is_zero( &rsaKey->rsaParam_exponent1 ) )
+	if( BN_is_zero( &pkcInfo->rsaParam_n ) || \
+		BN_is_zero( &pkcInfo->rsaParam_p ) || \
+		BN_is_zero( &pkcInfo->rsaParam_exponent1 ) )
 		{
 		return( CRYPT_ERROR_NOTAVAIL );
 		}
@@ -180,7 +193,7 @@ static int writeRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 	   unless we create and manage our own bignum data values here */
 	if( BN_is_zero( d ) )
 		{
-		BIGNUM *tmp = ( BIGNUM * ) &rsaKey->tmp1;
+		BIGNUM *tmp = ( BIGNUM * ) &pkcInfo->tmp1;
 		int bnStatus = BN_STATUS;
 
 		/* Use the extended Euclidean algorithm to calculate d from p and q:
@@ -188,12 +201,12 @@ static int writeRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 			phi( n ) = (p - 1) * (q - 1) 
 					 = n - p - q + 1
 			d = e^-1 % phi( n ) */
-		CKPTR( BN_copy( tmp, &rsaKey->rsaParam_n ) );
-		CK( BN_sub( tmp, tmp, &rsaKey->rsaParam_p ) );
-		CK( BN_sub( tmp, tmp, &rsaKey->rsaParam_q ) );
+		CKPTR( BN_copy( tmp, &pkcInfo->rsaParam_n ) );
+		CK( BN_sub( tmp, tmp, &pkcInfo->rsaParam_p ) );
+		CK( BN_sub( tmp, tmp, &pkcInfo->rsaParam_q ) );
 		CK( BN_add_word( tmp, 1 ) );
-		CKPTR( BN_mod_inverse( tmp, &rsaKey->rsaParam_e, tmp, 
-							   ( BN_CTX * ) &rsaKey->bnCTX ) );
+		CKPTR( BN_mod_inverse( tmp, &pkcInfo->rsaParam_e, tmp, 
+							   ( BN_CTX * ) &pkcInfo->bnCTX ) );
 		if( bnStatusError( bnStatus ) )
 			return( getBnStatus( bnStatus ) );
 		d = tmp;
@@ -212,14 +225,14 @@ static int writeRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 						  DEFAULT_TAG );
 	writeSequence( stream, length );
 	writeShortInteger( stream, 0, DEFAULT_TAG );
-	writeBignum( stream, &rsaKey->rsaParam_n );
-	writeBignum( stream, &rsaKey->rsaParam_e );
+	writeBignum( stream, &pkcInfo->rsaParam_n );
+	writeBignum( stream, &pkcInfo->rsaParam_e );
 	writeBignum( stream, d );
-	writeBignum( stream, &rsaKey->rsaParam_p );
-	writeBignum( stream, &rsaKey->rsaParam_q );
-	writeBignum( stream, &rsaKey->rsaParam_exponent1 );
-	writeBignum( stream, &rsaKey->rsaParam_exponent2 );
-	status = writeBignum( stream, &rsaKey->rsaParam_u );
+	writeBignum( stream, &pkcInfo->rsaParam_p );
+	writeBignum( stream, &pkcInfo->rsaParam_q );
+	writeBignum( stream, &pkcInfo->rsaParam_exponent1 );
+	writeBignum( stream, &pkcInfo->rsaParam_exponent2 );
+	status = writeBignum( stream, &pkcInfo->rsaParam_u );
 	if( calculatedPrivateExponent )
 		BN_clear( ( BIGNUM * ) d );
 
@@ -281,7 +294,7 @@ static int writePrivateKeyDlpFunction( INOUT_PTR STREAM *stream,
 									   IN_LENGTH_FIXED( 11 ) \
 										const int accessKeyLen )
 	{
-	const PKC_INFO *dlpKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
 
@@ -295,7 +308,8 @@ static int writePrivateKeyDlpFunction( INOUT_PTR STREAM *stream,
 			  ( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_DH || \
 				capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_DSA || \
 				capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ELGAMAL ) );
-	REQUIRES( sanityCheckPKCInfo( dlpKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 	REQUIRES( isEnumRange( formatType, KEYFORMAT ) );
 	REQUIRES( accessKeyLen == 11 );
 
@@ -316,7 +330,7 @@ static int writePrivateKeyDlpFunction( INOUT_PTR STREAM *stream,
 		if( cryptStatusError( status ) )
 			return( status );
 		writeSequence( stream, sizeofObject( sizeofObject( 32 ) ) + \
-							   sizeofBignum( &dlpKey->dlpParam_x ) );
+							   sizeofBignum( &pkcInfo->dlpParam_x ) );
 		writeSequence( stream, sizeofObject( 32 ) );
 		status = writeOctetString( stream, spkiHash, 32, DEFAULT_TAG );
 		if( cryptStatusError( status ) )
@@ -326,11 +340,16 @@ static int writePrivateKeyDlpFunction( INOUT_PTR STREAM *stream,
 	/* When we're generating a DH key ID only p, q, and g are initialised so 
 	   we write a special-case zero y value.  This is a somewhat ugly side-
 	   effect of the odd way in which DH "public keys" work */
-	if( BN_is_zero( &dlpKey->dlpParam_y ) )
+	REQUIRES( !BN_is_zero( &pkcInfo->dlpParam_y ) );
+#if 0	/* 27/2/26 This code path never seems to be used, if we're 
+				   generating a key ID we shouldn't be writing any private-
+				   key components */
+	if( BN_is_zero( &pkcInfo->dlpParam_y ) )
 		return( writeShortInteger( stream, 0, DEFAULT_TAG ) );
+#endif /* 0 */
 
 	/* Write the key components */
-	return( writeBignum( stream, &dlpKey->dlpParam_x ) );
+	return( writeBignum( stream, &pkcInfo->dlpParam_x ) );
 	}
 
 #if defined( USE_ECDH ) || defined( USE_ECDSA )
@@ -345,7 +364,7 @@ static int writePrivateKeyEccFunction( INOUT_PTR STREAM *stream,
 									   IN_LENGTH_FIXED( 11 ) \
 										const int accessKeyLen )
 	{
-	const PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
 
@@ -358,7 +377,8 @@ static int writePrivateKeyEccFunction( INOUT_PTR STREAM *stream,
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
 			  capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ECDSA );
 			  /* We should never be writing ECDH keys */
-	REQUIRES( sanityCheckPKCInfo( eccKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 	REQUIRES( isEnumRange( formatType, KEYFORMAT ) );
 	REQUIRES( accessKeyLen == 11 );
 
@@ -379,7 +399,7 @@ static int writePrivateKeyEccFunction( INOUT_PTR STREAM *stream,
 		if( cryptStatusError( status ) )
 			return( status );
 		writeSequence( stream, sizeofObject( sizeofObject( 32 ) ) + \
-							   sizeofBignum( &eccKey->eccParam_d ) );
+							   sizeofBignum( &pkcInfo->eccParam_d ) );
 		writeSequence( stream, sizeofObject( 32 ) );
 		status = writeOctetString( stream, spkiHash, 32, DEFAULT_TAG );
 		if( cryptStatusError( status ) )
@@ -387,7 +407,7 @@ static int writePrivateKeyEccFunction( INOUT_PTR STREAM *stream,
 		}
 
 	/* Write the key components */
-	return( writeBignum( stream, &eccKey->eccParam_d ) );
+	return( writeBignum( stream, &pkcInfo->eccParam_d ) );
 	}
 #endif /* USE_ECDH || USE_ECDSA */
 
@@ -403,11 +423,11 @@ static int writePrivateKey25519Function( INOUT_PTR STREAM *stream,
 										 IN_LENGTH_FIXED( 11 ) \
 											const int accessKeyLen )
 	{
-	const PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	const BERNSTEIN_KEY_INFO *bernsteinKey;
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
-	BYTE buffer[ CRYPT_MAX_PKCSIZE + 8 ];
-	int encodedPointSize, status;
+	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -418,9 +438,14 @@ static int writePrivateKey25519Function( INOUT_PTR STREAM *stream,
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
 			  ( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_25519 || \
 				capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_ED25519 ) );
-	REQUIRES( sanityCheckPKCInfo( eccKey ) );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 	REQUIRES( isEnumRange( formatType, KEYFORMAT ) );
 	REQUIRES( accessKeyLen == 11 );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	bernsteinKey = pkcInfo->bernsteinKey;
 
 	/* Make sure that we really intended to call this function */
 	if( accessKeyLen != 11 || memcmp( accessKey, "private_key", 11 ) || \
@@ -438,24 +463,18 @@ static int writePrivateKey25519Function( INOUT_PTR STREAM *stream,
 		if( cryptStatusError( status ) )
 			return( status );
 		writeSequence( stream, sizeofObject( sizeofObject( 32 ) ) + \
-							   sizeofObject( 32 ) );
+							   sizeofObject( MIN_PKCSIZE_BERNSTEIN ) );
 		writeSequence( stream, sizeofObject( 32 ) );
 		status = writeOctetString( stream, spkiHash, 32, DEFAULT_TAG );
 		if( cryptStatusError( status ) )
 			return( status );
 		}
 
-	/* Get the private value in Bernstein special-snowflake form and write 
-	   it */
-	status = export25519ByteString( buffer, CRYPT_MAX_PKCSIZE, 
-									&encodedPointSize, 
-									&eccKey->curve25519Param_priv );
-	if( cryptStatusError( status ) )
-		return( status );
-	ENSURES( encodedPointSize == 32 );
-	status = writeOctetString( stream, buffer, encodedPointSize, 
-							   DEFAULT_TAG );
-	zeroise( buffer, CRYPT_MAX_PKCSIZE );
+	/* Write the key data.  Note that MIN_PKCSIZE_BERNSTEIN and 
+	   MAX_PKCSIZE_BERNSTEIN have the same value, they're just given as MIN 
+	   ... MAX for consistency with other PKC constants */
+	status = writeOctetString( stream, bernsteinKey->privKey, 
+							   MIN_PKCSIZE_BERNSTEIN, DEFAULT_TAG );
 	
 	return( status );
 	}
@@ -473,7 +492,7 @@ static int writePrivateKeyMlkemFunction( INOUT_PTR STREAM *stream,
 										 IN_LENGTH_FIXED( 11 ) \
 											const int accessKeyLen )
 	{
-	const PKC_INFO *pqcKey = contextInfoPtr->ctxPKC;
+	const PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
 
@@ -484,8 +503,9 @@ static int writePrivateKeyMlkemFunction( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( capabilityInfoPtr != NULL );
 	REQUIRES( contextInfoPtr->type == CONTEXT_PKC && \
-			  ( capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_MLKEM ) );
-	REQUIRES( sanityCheckPKCInfo( pqcKey ) );
+			  capabilityInfoPtr->cryptAlgo == CRYPT_ALGO_MLKEM );
+	REQUIRES( pkcInfo != NULL );
+	REQUIRES( sanityCheckPKCInfo( pkcInfo ) );
 	REQUIRES( isEnumRange( formatType, KEYFORMAT ) );
 	REQUIRES( accessKeyLen == 11 );
 
@@ -495,6 +515,7 @@ static int writePrivateKeyMlkemFunction( INOUT_PTR STREAM *stream,
 		  formatType != KEYFORMAT_PRIVATE_EXT ) )
 		retIntError();
 
+	/* Not currently used for anything */
 	return( CRYPT_ERROR_NOTAVAIL );
 	}
 #endif /* USE_MLKEM */
@@ -529,7 +550,7 @@ static int writePrivateKeyNullFunction( INOUT_PTR STREAM *stream,
 STDC_NONNULL_ARG( ( 1 ) ) \
 void initPrivKeyWrite( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
 
@@ -537,6 +558,7 @@ void initPrivKeyWrite( INOUT_PTR CONTEXT_INFO *contextInfoPtr )
 
 	REQUIRES_V( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES_V( contextInfoPtr->type == CONTEXT_PKC );
+	REQUIRES_V( pkcInfo != NULL );
 	REQUIRES_V( capabilityInfoPtr != NULL );
 
 	/* Set the access method pointers */

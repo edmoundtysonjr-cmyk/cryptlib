@@ -5,8 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>
-#include <stdarg.h>
 #include "crypt.h"
 #ifdef INC_ALL
   #include "keyset.h"

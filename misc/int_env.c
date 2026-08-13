@@ -221,7 +221,7 @@ int envelopeUnwrap( IN_BUFFER( inDataLength ) const void *inData,
 	setMessageData( &msgData, ( MESSAGE_CAST ) inData, inDataLength );
 	status = krnlSendMessage( iCryptEnvelope, IMESSAGE_ENV_PUSHDATA,
 							  &msgData, 0 );
-	if( cryptStatusError( status ) && status == CRYPT_ENVELOPE_RESOURCE )
+	if( status == CRYPT_ENVELOPE_RESOURCE )
 		{
 		if( iPrivKey != CRYPT_UNUSED )
 			{
@@ -374,7 +374,7 @@ int envelopeSign( IN_BUFFER_OPT( inDataLength ) const void *inData,
 				contentType == CRYPT_CONTENT_NONE && \
 				isHandleRangeValid( iCmsAttributes ) ) );
 	REQUIRES( isBufsizeRangeMin( outDataMaxLength, 16 ) && \
-			  outDataMaxLength >= inDataLength + 512 );
+			  outDataMaxLength >= inDataLength + 1024 );
 	REQUIRES( isEnumRangeOpt( contentType, CRYPT_CONTENT ) );
 	REQUIRES( isHandleRangeValid( iSigKey ) );
 	REQUIRES( iCmsAttributes == CRYPT_UNUSED || \
@@ -518,6 +518,7 @@ int envelopeSigCheck( IN_BUFFER( inDataLength ) const void *inData,
 	REQUIRES( iSigCheckKey == CRYPT_UNUSED || \
 			  isHandleRangeValid( iSigCheckKey ) );
 	REQUIRES( isEnumRangeOpt( options, ENVELOPE_OPTION ) );
+	ENSURES( isBufsizeRangeMin( minBufferSize, MIN_BUFFER_SIZE ) );
 
 	/* Clear return values.  Note that we can't clear the output buffer 
 	   at this point since this function is frequently used for in-place 
@@ -631,6 +632,9 @@ int envelopeSigCheck( IN_BUFFER( inDataLength ) const void *inData,
 		}
 	if( cryptStatusOK( status ) && iCmsAttributes != NULL )
 		{
+		/* If the caller has requested CMS attributes then not finding any 
+		   is a hard error, so we can't just continue with the attibutes
+		   set to CRYPT_ERROR */
 		status = krnlSendMessage( iCryptEnvelope, IMESSAGE_GETATTRIBUTE,
 								  iCmsAttributes,
 								  CRYPT_ENVINFO_SIGNATURE_EXTRADATA );
@@ -670,6 +674,7 @@ int envelopeSigCheck( IN_BUFFER( inDataLength ) const void *inData,
 				krnlSendNotifier( *iCmsAttributes, IMESSAGE_DECREFCOUNT );
 				*iCmsAttributes = CRYPT_ERROR;
 				}
+			*sigResult = CRYPT_ERROR;
 			}
 		}
 

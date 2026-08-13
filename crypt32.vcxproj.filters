@@ -139,9 +139,6 @@
     <ClCompile Include="bn\ec_mult.c">
       <Filter>Source Files\Bignum Library</Filter>
     </ClCompile>
-    <ClCompile Include="bn\ecp_mont.c">
-      <Filter>Source Files\Bignum Library</Filter>
-    </ClCompile>
     <ClCompile Include="cert\write_pre.c">
       <Filter>Source Files\Certificates</Filter>
     </ClCompile>

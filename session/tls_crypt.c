@@ -109,8 +109,9 @@ static int writePacketMetadataTLS13( OUT_BUFFER( dataMaxLength, *dataLength ) \
 	memset( data, 0, min( 16, dataMaxLength ) );
 	*dataLength = 0;
 
-	/* Write the fixed packet type and TLS 1.2 version, and length 
-	   information to the output buffer */
+	/* Write the fixed packet type and fake TLS 1.2 version, and length 
+	   information to the output buffer.  The GCM and Poly1305 ICVs are the
+	   same size so we have a single size define for both */
 	sMemOpen( &stream, data, dataMaxLength );
 	sputc( &stream, TLS_MSG_APPLICATION_DATA );
 	sputc( &stream, TLS_MAJOR_VERSION );

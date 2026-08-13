@@ -37,7 +37,7 @@ BOOLEAN sanityCheckSessionCMP( IN_PTR const SESSION_INFO *sessionInfoPtr )
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isReadPtr( cmpInfo, sizeof( CMP_INFO ) ) );
 
-	/* Check the general envelope state */
+	/* Check the general session state */
 	if( !sanityCheckSession( sessionInfoPtr ) )
 		{
 		DEBUG_PUTS(( "sanityCheckSessionCMP: Session check" ));
@@ -70,6 +70,8 @@ CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN sanityCheckCMPProtocolInfo( IN_PTR \
 										const CMP_PROTOCOL_INFO *protocolInfo )
 	{
+	assert( isReadPtr( protocolInfo, sizeof( CMP_PROTOCOL_INFO ) ) );
+
 	/* Check the session state information */
 	if( !isEnumRangeOpt( protocolInfo->operation, CMP_MESSAGE ) || \
 		!isBooleanValue( protocolInfo->isCryptlib ) || \
@@ -217,12 +219,15 @@ const char *getCMPMessageName( IN_BYTE const int messageType )
 /* Dump a message to disk for diagnostic purposes.  The CMP messages are
    complex enough that we can't use the normal DEBUG_DUMP() macro but have
    to use a special-purpose wrapper that uses meaningful names for all
-   of the files that are created */
+   of the files that are created.
+   
+   The reason for the IN_ENUM_OPT() annotation is that the first CMP message
+   starts at zero, the same as CMP_MESSAGE_NONE */
 
 STDC_NONNULL_ARG( ( 3 ) ) \
-void debugDumpCMP( IN_ENUM( CMP_MESSAGE ) const CMP_MESSAGE_TYPE type, 
+void debugDumpCMP( IN_ENUM_OPT( CMP_MESSAGE ) const CMP_MESSAGE_TYPE type, 
 				   IN_RANGE( 1, 4 ) const int phase,
-				   const SESSION_INFO *sessionInfoPtr )
+				   IN_PTR const SESSION_INFO *sessionInfoPtr )
 	{
 	static const char *irStrings[] = \
 		{ "cmpi1_ir", "cmpi2_ip", "cmpi3_conf", "cmpi4_confack" };
@@ -258,20 +263,23 @@ void debugDumpCMP( IN_ENUM( CMP_MESSAGE ) const CMP_MESSAGE_TYPE type,
 	if( isServer( sessionInfoPtr ) )
 		{
 		MESSAGE_DATA msgData;
-		int pathLength;
+		int pathLength, status;
 		LOOP_INDEX i;
 
 		strcpy_s( fileName, 1024, fnStringPtr[ phase - 1 ] );
 		strlcat_s( fileName, 1024, "_" );
 		pathLength = strnlen_s( fileName, MAX_PATH_LENGTH );
 		setMessageData( &msgData, fileName + pathLength, 1024 - pathLength );
-		krnlSendMessage( sessionInfoPtr->privateKey, IMESSAGE_GETATTRIBUTE_S, 
-						 &msgData, CRYPT_CERTINFO_DN );
+		status = krnlSendMessage( sessionInfoPtr->privateKey, 
+								  IMESSAGE_GETATTRIBUTE_S, &msgData, 
+								  CRYPT_CERTINFO_DN );
+		if( cryptStatusError( status ) )
+			return;		/* Not much else we can do at this point */
 		LOOP_LARGE( i = 0, i < msgData.length, i++ )
 			{
 			int ch;
 
-			ENSURES( LOOP_INVARIANT_LARGE( i, 0, msgData.length - 1 ) );
+			ENSURES_V( LOOP_INVARIANT_LARGE( i, 0, msgData.length - 1 ) );
 
 			ch = byteToInt( fileName[ pathLength + i ] );
 			if( ch == ' ' || ch == '\'' || ch == '"' || ch == '?' || \
@@ -279,7 +287,7 @@ void debugDumpCMP( IN_ENUM( CMP_MESSAGE ) const CMP_MESSAGE_TYPE type,
 				ch == ',' || ch < ' ' || ch > 'z' )
 				fileName[ pathLength + i ] = '_';
 			}
-		ENSURES( LOOP_BOUND_OK );
+		ENSURES_V( LOOP_BOUND_OK );
 		}
 	else
 #endif /* DUMP_SERVER_MESSAGES */
@@ -329,6 +337,7 @@ int initCMPprotocolInfo( OUT_PTR CMP_PROTOCOL_INFO *protocolInfo,
 	int value, status;
 
 	assert( isWritePtr( protocolInfo, sizeof( CMP_PROTOCOL_INFO ) ) );
+	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
 	REQUIRES( isBooleanValue( isServer ) );
 
@@ -728,6 +737,9 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			if( certReqType != CRYPT_CERTTYPE_REQUEST_CERT && \
 				certReqType != CRYPT_CERTTYPE_REQUEST_REVOCATION )
 				{
+				/* cmpReqType may be CRYPT_REQUESTTYPE_NONE (see below) but 
+				   it's not worth picking apart an exception to an exception 
+				   at this point */
 				retExt( CRYPT_ARGERROR_NUM1,
 						( CRYPT_ARGERROR_NUM1, SESSION_ERRINFO,
 						  "Certificate request object type %d doesn't match "

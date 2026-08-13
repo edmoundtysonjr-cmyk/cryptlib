@@ -582,7 +582,7 @@ typedef enum {
 	TLS_EXT_PASSWORD_SALT,		/* 31: RFC 8492 Password salt */
 	TLS_EXT_TICKET_PINNING,		/* 32: RFC 8672 Server identity pinning */
 	TLS_EXT_CERT_WITH_PSK,		/* 33: RFC 8773 TLS 1.3 Certificate-based auth with PSK */
-	TLS_EXT_DELEGATED_CREDENIALS, /* 34: Draft, Delegated credentials */
+	TLS_EXT_DELEGATED_CREDENTIALS, /* 34: Draft, Delegated credentials */
 	TLS_EXT_SESSIONTICKET,		/* 35: RFC 4507 Session ticket */
 	TLS_EXT_TLMSP,				/* 36: ETSI TS 103 523-2, Middlebox */
 	TLS_EXT_TLMSP_PROXYING,		/* 37: ETSI TS 103 523-2, Security */

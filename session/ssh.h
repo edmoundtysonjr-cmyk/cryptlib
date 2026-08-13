@@ -9,16 +9,6 @@
 
 #define _SSH_DEFINED
 
-#if defined( _MSC_VER ) || defined( __GNUC__ ) || defined( __clang__ ) 
-  #ifdef USE_SSH_EXTENDED
-	#pragma message( "  Building with extended SSH facilities enabled." )
-  #endif /* USE_SSH_EXTENDED */
-  #ifdef USE_SSH_OPENSSH
-	#pragma message( "  Building with nonstandard OpenSSH extensions enabled." )
-	#pragma message( "  Warning: This enables support for the insecure EtM OpenSSH extension." )
-  #endif /* USE_SSH_OPENSSH */
-#endif /* Notify extended SSH facilities */
-
 #ifdef USE_SSH
 
 /****************************************************************************
@@ -399,7 +389,7 @@ typedef struct {
 	/* Optional parameters needed when the algorithm actually represents a 
 	   cipher suite.  The subAlgo is typically an algorithm but may be a 
 	   mode for conventional ciphers, the parameter is typically the key
-	   size */
+	   size but may also be a type indicator for signalling suites */
 	const int subAlgo;
 	const int parameter;
 	} ALGO_STRING_INFO;
@@ -640,7 +630,7 @@ int writeAlgoStringEx( INOUT_PTR STREAM *stream,
 					   IN_INT_SHORT_Z const int subAlgo,
 					   IN_INT_SHORT_OPT const int parameter,
 					   IN_BOOL const BOOLEAN useAltDH,
-					   IN_FLAGS_Z( SSH ) const int algoStringFlags );
+					   IN_FLAGS_Z( SSH ) const int flags );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int writeAlgoList( INOUT_PTR STREAM *stream, 
 				   IN_ARRAY( noAlgoStringInfoEntries ) \

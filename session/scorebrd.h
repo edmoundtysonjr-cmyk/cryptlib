@@ -61,8 +61,11 @@ int lookupScoreboardEntry( INOUT_PTR struct SC *scoreboardIndexInfoPtr,
 						   IN_ENUM( SCOREBOARD_KEY ) \
 								const SCOREBOARD_KEY_TYPE keyType,
 						   IN_BUFFER( keyLength ) const void *key, 
-						   IN_LENGTH_SHORT_MIN( 4 ) const int keyLength, 
-						   OUT_PTR SCOREBOARD_ENTRY_INFO *scoreboardInfo );
+						   IN_RANGE( 4, MAX_SESSIONID_SIZE ) \
+								const int keyLength, 
+						   /* 4 = SCOREBOARD_KEY_MIN = MIN_SESSIONID_SIZE */
+						   OUT_PTR \
+								SCOREBOARD_ENTRY_INFO *scoreboardEntryInfo );
 #if defined( SCOREBOARD_KEY_MIN ) && ( SCOREBOARD_KEY_MIN != 4 )
   /* This is only visible inside session/scorebrd.c so we have to hardcode
      the value for external use */
@@ -71,17 +74,22 @@ int lookupScoreboardEntry( INOUT_PTR struct SC *scoreboardIndexInfoPtr,
 CHECK_RETVAL_RANGE( 0, MAX_INTLENGTH - 1 ) STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
 int addScoreboardEntry( INOUT_PTR struct SC *scoreboardIndexInfoPtr,
 						IN_BUFFER( keyLength ) const void *key, 
-						IN_LENGTH_SHORT_MIN( 4 ) const int keyLength, 
+						IN_RANGE( 4, MAX_SESSIONID_SIZE ) \
+							const int keyLength, 
 						/* 4 = SCOREBOARD_KEY_MIN = MIN_SESSIONID_SIZE */
-						const SCOREBOARD_ENTRY_INFO *scoreboardInfo );
+						IN_PTR \
+							const SCOREBOARD_ENTRY_INFO *scoreboardInfo );
 CHECK_RETVAL_RANGE( 0, MAX_INTLENGTH - 1 ) STDC_NONNULL_ARG( ( 1, 2, 4, 6 ) ) \
 int addScoreboardEntryEx( INOUT_PTR struct SC *scoreboardIndexInfoPtr,
 						  IN_BUFFER( keyLength ) const void *key, 
-						  IN_LENGTH_SHORT_MIN( 4 ) const int keyLength, 
+						  IN_RANGE( 4, MAX_SESSIONID_SIZE ) \
+								const int keyLength, 
 						  /* 4 = SCOREBOARD_KEY_MIN = MIN_SESSIONID_SIZE */
 						  IN_BUFFER( altKeyLength ) const void *altKey, 
-						  IN_LENGTH_SHORT_MIN( 2 ) const int altKeyLength, 
-						  const SCOREBOARD_ENTRY_INFO *scoreboardInfo );
+						  IN_RANGE( MIN_DNS_SIZE, MAX_DNS_SIZE ) \
+								const int altKeyLength, 
+						  IN_PTR \
+							const SCOREBOARD_ENTRY_INFO *scoreboardInfo );
 STDC_NONNULL_ARG( ( 1 ) ) \
 void deleteScoreboardEntry( INOUT_PTR struct SC *scoreboardIndexInfoPtr, 
 							IN_INT_Z const int uniqueID );

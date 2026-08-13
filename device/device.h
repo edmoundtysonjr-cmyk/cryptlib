@@ -444,7 +444,7 @@ int setDeviceAttributeS( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 #if defined( USE_HARDWARE ) || defined( USE_TPM )
 struct CI;
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 4, 7 ) ) \
+CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 4, 7 ) ) \
 int openDeviceStorageObject( OUT_HANDLE_OPT CRYPT_KEYSET *iCryptKeyset,
 							 IN_ENUM_OPT( CRYPT_KEYOPT ) \
 								const CRYPT_KEYOPT_TYPE options,

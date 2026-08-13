@@ -60,6 +60,10 @@
 
 /* Changes for cryptlib - pcg */
 
+/* BN_div_recp() via BN_mod_mul_reciprocal() via BN_mod_exp_recp() isn't
+   entirely constant-time, see the comment in bn/bn_exp.c for more, as
+   well as the cryptlib threat model documentation */
+
 #if defined( INC_ALL )
   #include "bn_lcl.h"
 #else

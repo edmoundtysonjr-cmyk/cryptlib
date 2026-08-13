@@ -64,16 +64,17 @@ static const char *getSigTypeName( IN_ENUM( SIGNATURE ) \
 
 /****************************************************************************
 *																			*
-*							DLP Signature Handling							*
+*							(EC)DLP Signature Handling						*
 *																			*
 ****************************************************************************/
 
-/* Create a DLP signature */
+/* Create a DLP/ECDLP signature */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3, 5 ) ) \
 static int createDlpSignature( OUT_BUFFER_OPT( bufSize, *length ) \
 									void *buffer,
-							   IN_RANGE( 0, CRYPT_MAX_PKCSIZE ) \
+							   IN_RANGE( MIN_CRYPT_OBJECTSIZE, \
+										 CRYPT_MAX_PKCSIZE ) \
 									const int bufSize, 
 							   OUT_LENGTH_BOUNDED_SHORT_Z( bufSize ) \
 									int *length, 
@@ -97,7 +98,7 @@ static int createDlpSignature( OUT_BUFFER_OPT( bufSize, *length ) \
 
 	REQUIRES( ( buffer == NULL && bufSize == 0 ) || \
 			  ( buffer != NULL && \
-			    bufSize > MIN_CRYPT_OBJECTSIZE && \
+			    bufSize >= MIN_CRYPT_OBJECTSIZE && \
 				bufSize <= CRYPT_MAX_PKCSIZE ) );
 	REQUIRES( isHandleRangeValid( iSignContext ) );
 	REQUIRES( isEnumRange( signatureType, SIGNATURE ) );
@@ -256,9 +257,7 @@ static int checkDlpSignature( IN_BUFFER( signatureDataLength ) \
 	assert( isReadPtrDynamic( signatureData, signatureDataLength ) );
 	assert( isReadPtr( sigDataInfo, sizeof( SIG_DATA_INFO ) ) );
 
-	REQUIRES( ( signatureType == SIGNATURE_SSH && \
-				signatureDataLength == 40 ) || \
-			  ( isShortIntegerRangeMin( signatureDataLength, 40 ) ) );
+	REQUIRES( isShortIntegerRangeMin( signatureDataLength, 40 ) );
 	REQUIRES( isHandleRangeValid( iSigCheckContext ) );
 	REQUIRES( isEnumRange( signatureType, SIGNATURE ) );
 	REQUIRES( sanityCheckSigDataInfo( sigDataInfo, signatureType, TRUE ) && \
@@ -414,11 +413,8 @@ static int checkBernsteinSignature( IN_BUFFER( signatureDataLength ) \
 	assert( isReadPtrDynamic( signatureData, signatureDataLength ) );
 	assert( isReadPtr( sigDataInfo, sizeof( SIG_DATA_INFO ) ) );
 
-	REQUIRES( ( signatureType == SIGNATURE_SSH && \
-				rangeCheck( signatureDataLength, MIN_PKCSIZE_BERNSTEIN * 2,
-							MAX_PKCSIZE_BERNSTEIN * 2 ) ) || \
-			  ( isShortIntegerRangeMin( signatureDataLength, \
-										MIN_PKCSIZE_BERNSTEIN * 2 ) ) );
+	REQUIRES( isShortIntegerRangeMin( signatureDataLength, \
+										MIN_PKCSIZE_BERNSTEIN * 2 ) );
 	REQUIRES( isHandleRangeValid( iSigCheckContext ) );
 	REQUIRES( isEnumRange( signatureType, SIGNATURE ) );
 	REQUIRES( sanityCheckSigDataInfo( sigDataInfo, signatureType, TRUE ) && \
@@ -591,7 +587,6 @@ int createSignature( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 				  getAlgoName( signAlgo ), 
 				  getSigTypeName( signatureType ) ) );
 		}
-	ENSURES( isShortIntegerRangeNZ( *signatureLength ) );
 
 	ENSURES( CFI_CHECK_SEQUENCE_3( "IMESSAGE_GETATTRIBUTE", 
 								   "IMESSAGE_DEV_SIGN", "writeSigFunction" ) );

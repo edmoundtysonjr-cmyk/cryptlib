@@ -5,6 +5,11 @@
 
    These are under a BSD-style license, not the usual OpenSSL license.
    
+   The bn_isqrt.c code isn't really necessary since cryptlib has its own
+   BN_isqrt() and there's perfect-square-check code as part of 
+   checkPrimeFactors(), we just keep it in here because it matches what
+   bn_bpsw.c expects.
+   
    This code isn't used because it relies on the ability to perform 
    operations on negative numbers which aren't supported by cryptlib's BN
    routines, so it will compile and link but will reject the values used */

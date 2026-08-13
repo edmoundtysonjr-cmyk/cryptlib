@@ -262,6 +262,7 @@ typedef struct {
 	int headerBytesRequired;			/* Bytes required for header */
 
 	/* The mask value used to mask client -> server packets */
+	BUFFER_FIXED( TLS_WS_MASKSIZE ) \
 	BYTE mask[ TLS_WS_MASKSIZE + 8 ];
 	int maskPos;						/* Position in mask buffer */
 
@@ -304,6 +305,7 @@ typedef struct {
 	   in-place processing, however when used with encrypt-then-MAC we need 
 	   to store the read IV in order that it can be MAC'd once the packet is 
 	   processed */
+	BUFFER_FIXED( CRYPT_MAX_IVSIZE ) \
 	BYTE iv[ CRYPT_MAX_IVSIZE + 8 ];
 
 	/* When performing manual certificate checking the handshake is 
@@ -392,8 +394,9 @@ typedef struct {
 	/* If we're using the SSH CTR-mode ciphers, we need to store the explicit
 	   counter values */
 #ifdef USE_SSH_CTR
+	BUFFER_FIXED( CRYPT_MAX_IVSIZE ) \
 	BYTE readCTR[ CRYPT_MAX_IVSIZE + 8 ], writeCTR[ CRYPT_MAX_IVSIZE + 8 ];
-#endif /* USE_CTR */
+#endif /* USE_SSH_CTR */
 
 	/* A trace of the handshake packets that we've seen, used to detect 
 	   anomalies in the handshake process.  This is necessitated by the fact 
@@ -494,9 +497,8 @@ typedef struct {
 										/* Allowed sub-protocol types */
 
 	/* Session type-specific information: The send and receive buffer size,
-	   the alternative transport protocol for request/response sessions if
-	   HTTP isn't being used, the minimum allowed size for the server's
-	   private key */
+	   the start of the payload data in the buffer, and the maximum possible
+	   packet size */
 	const int bufSize;					/* Send/receive buffer sizes */
 	const int sendBufStartOfs;			/* Payload data start */
 	const int maxPacketSize;			/* Maximum packet (payload data) size */
@@ -584,7 +586,6 @@ typedef struct AL {
 #define sessionSSH		sessionInfo.sshInfo
 #define sessionTLS		sessionInfo.tlsInfo
 #define sessionSCEP		sessionInfo.scepInfo
-#define sessionSCVP		sessionInfo.scvpInfo
 #define sessionTSP		sessionInfo.tspInfo
 
 /* The structure that stores the information on a session */
@@ -706,7 +707,7 @@ typedef struct SI {
 	   packet in the read buffer that we can't process until the remainder
 	   arrives, the following variables holds the eventual length of the
 	   pending data packet and the amount of data remaining to be read */
-	int pendingPacketLength;			/* Lending of pending data packet */
+	int pendingPacketLength;			/* Length of pending data packet */
 	int pendingPacketRemaining;			/* Bytes remaining to be read */
 
 	/* Unlike payload data, the packet header can't be read in sections but
@@ -899,17 +900,18 @@ const SESSION_ATTRIBUTE_LIST *findSessionInfoEx( const SESSION_INFO *sessionInfo
 													const CRYPT_ATTRIBUTE_TYPE attributeID,
 												 IN_BUFFER( valueLength ) const void *value, 
 												 IN_LENGTH_SHORT const int valueLength );
-STDC_NONNULL_ARG( ( 1 ) ) \
 void lockEphemeralAttributes( INOUT_PTR SESSION_ATTRIBUTE_LIST *attributeListHead );
 STDC_NONNULL_ARG( ( 1, 2 ) ) \
+RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int deleteSessionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					   INOUT_PTR SESSION_ATTRIBUTE_LIST *attributeListPtr );
 STDC_NONNULL_ARG( ( 1 ) ) \
 void deleteSessionInfoAll( INOUT_PTR SESSION_INFO *sessionInfoPtr );
-CHECK_RETVAL_ENUM( CRYPT_ATTRIBUTE ) \
-CRYPT_ATTRIBUTE_TYPE checkMissingInfo( IN_PTR_OPT \
-											const SESSION_ATTRIBUTE_LIST *attributeListHead,
-									   IN_BOOL const BOOLEAN isServer );
+CHECK_RETVAL \
+int checkMissingInfo( IN_PTR_OPT \
+							const SESSION_ATTRIBUTE_LIST *attributeListHead,
+					  OUT_ATTRIBUTE_Z CRYPT_ATTRIBUTE_TYPE *missingInfoType,
+					  IN_BOOL const BOOLEAN isServer );
 
 /* Prototypes for functions in session.c */
 
@@ -1079,6 +1081,6 @@ int setSubprotocolEAP( INOUT_PTR SESSION_INFO *sessionInfoPtr );
   int setAccessMethodTSP( INOUT_PTR SESSION_INFO *sessionInfoPtr );
 #else
   #define setAccessMethodTSP( x )	CRYPT_ARGERROR_NUM1
-#endif /* USE_TCP */
+#endif /* USE_TSP */
 #endif /* USE_SESSIONS */
 #endif /* _SES_DEFINED */

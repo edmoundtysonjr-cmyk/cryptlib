@@ -69,7 +69,7 @@ BOOLEAN pgpCheckAlgo( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 	REQUIRES_B( isEnumRangeExternal( cryptAlgo, CRYPT_ALGO ) );
 	REQUIRES_B( isEnumRangeOpt( cryptMode, CRYPT_MODE ) );
 
-	if( cryptStatusError( cryptlibToPgpAlgo( cryptAlgo, &dummy ) ) )
+	if( cryptStatusError( cryptlibToPgpAlgo( cryptAlgo, 0, &dummy ) ) )
 		return( FALSE );
 	if( isConvAlgo( cryptAlgo ) )
 		{
@@ -233,7 +233,7 @@ static int writeSignatureInfoPacket( INOUT_PTR STREAM *stream,
 	{
 	BYTE keyID[ PGP_KEYID_SIZE + 8 ];
 	int hashAlgo, signAlgo DUMMY_INIT;	/* int vs.enum */
-	int pgpHashAlgo, pgpCryptAlgo DUMMY_INIT, status;
+	int pgpHashAlgo, pgpCryptAlgo DUMMY_INIT, hashParam DUMMY_INIT, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
@@ -243,6 +243,11 @@ static int writeSignatureInfoPacket( INOUT_PTR STREAM *stream,
 	/* Get the signature information */
 	status = krnlSendMessage( iHashContext, IMESSAGE_GETATTRIBUTE, 
 							  &hashAlgo, CRYPT_CTXINFO_ALGO );
+	if( cryptStatusOK( status ) )
+		{
+		status = krnlSendMessage( iHashContext, IMESSAGE_GETATTRIBUTE, 
+								  &hashParam, CRYPT_CTXINFO_BLOCKSIZE );
+		}
 	if( cryptStatusOK( status ) )
 		{
 		status = krnlSendMessage( iSignContext, IMESSAGE_GETATTRIBUTE, 
@@ -258,9 +263,9 @@ static int writeSignatureInfoPacket( INOUT_PTR STREAM *stream,
 		}
 	if( cryptStatusError( status ) )
 		return( status );
-	status = cryptlibToPgpAlgo( hashAlgo, &pgpHashAlgo );
+	status = cryptlibToPgpAlgo( hashAlgo, hashParam, &pgpHashAlgo );
 	if( cryptStatusOK( status ) )
-		status = cryptlibToPgpAlgo( signAlgo, &pgpCryptAlgo );
+		status = cryptlibToPgpAlgo( signAlgo, 0, &pgpCryptAlgo );
 	ENSURES( cryptStatusOK( status ) );
 	INJECT_FAULT( ENVELOPE_PGP_CORRUPT_ONEPASS_ID, 
 				  ENVELOPE_PGP_CORRUPT_ONEPASS_ID_1 );
@@ -1308,7 +1313,7 @@ static int emitPostamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 STDC_NONNULL_ARG( ( 1 ) ) \
 void initPGPEnveloping( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	{
-	int value, dummy, status;
+	int hashAlgo, hashParam DUMMY_INIT, cryptAlgo, dummy, status;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 
@@ -1328,30 +1333,34 @@ void initPGPEnveloping( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	   we have to drop back to fixed values if the caller has selected 
 	   something exotic */
 	status = krnlSendMessage( envelopeInfoPtr->ownerHandle, 
-							  IMESSAGE_GETATTRIBUTE, &value, 
+							  IMESSAGE_GETATTRIBUTE, &hashAlgo, 
 							  CRYPT_OPTION_ENCR_HASH );
+	if( cryptStatusOK( status ) )
+		{
+		status = krnlSendMessage( envelopeInfoPtr->ownerHandle, 
+								  IMESSAGE_GETATTRIBUTE, &hashParam, 
+								  CRYPT_OPTION_ENCR_HASHPARAM );
+		}
 	if( cryptStatusError( status ) || \
-		cryptStatusError( cryptlibToPgpAlgo( value, &dummy ) ) )
+		cryptStatusError( cryptlibToPgpAlgo( hashAlgo, hashParam, 
+											 &dummy ) ) )
+		{
 		envelopeInfoPtr->defaultHash = CRYPT_ALGO_SHA1;
+		envelopeInfoPtr->defaultHashParam = 20;
+		}
 	else
 		{
-		envelopeInfoPtr->defaultHash = value;	/* int vs.enum */
-		status = krnlSendMessage( envelopeInfoPtr->ownerHandle, 
-								  IMESSAGE_GETATTRIBUTE, &value, 
-								  CRYPT_OPTION_ENCR_HASHPARAM );
-		if( cryptStatusOK( status ) )
-			envelopeInfoPtr->defaultHashParam = value;
-		else
-			envelopeInfoPtr->defaultHashParam = bitsToBytes( 256 );
+		envelopeInfoPtr->defaultHash = hashAlgo;	/* int vs.enum */
+		envelopeInfoPtr->defaultHashParam = hashParam;
 		}
 	status = krnlSendMessage( envelopeInfoPtr->ownerHandle, 
-							  IMESSAGE_GETATTRIBUTE, &value, 
+							  IMESSAGE_GETATTRIBUTE, &cryptAlgo, 
 							  CRYPT_OPTION_ENCR_ALGO );
 	if( cryptStatusError( status ) || \
-		cryptStatusError( cryptlibToPgpAlgo( value, &dummy ) ) )
+		cryptStatusError( cryptlibToPgpAlgo( cryptAlgo, 0, &dummy ) ) )
 		envelopeInfoPtr->defaultAlgo = CRYPT_ALGO_AES;
 	else
-		envelopeInfoPtr->defaultAlgo = value;	/* int vs.enum */
+		envelopeInfoPtr->defaultAlgo = cryptAlgo;	/* int vs.enum */
 	envelopeInfoPtr->defaultMAC = CRYPT_ALGO_NONE;
 
 	/* Turn off segmentation of the envelope payload.  PGP has a single 

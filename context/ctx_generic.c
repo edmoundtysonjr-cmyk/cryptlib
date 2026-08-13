@@ -49,13 +49,14 @@ static int initKey( CONTEXT_INFO *contextInfoPtr,
 					IN_BUFFER( keyLength ) const void *key, 
 					IN_LENGTH_KEY const int keyLength )
 	{
-	GENERIC_INFO *genericInfo = contextInfoPtr->ctxGeneric;
+	GENERIC_INFO *genericInfo = DATAPTR_GET( contextInfoPtr->keyingInfo );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 	assert( isReadPtrDynamic( key, keyLength ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( keyLength >= MIN_KEYSIZE && keyLength <= CRYPT_MAX_KEYSIZE );
+	REQUIRES( genericInfo != NULL );
 
 	/* Copy the key to internal storage */
 	if( genericInfo->genericSecret != key )

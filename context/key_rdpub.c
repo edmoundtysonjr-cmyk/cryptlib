@@ -5,7 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <stdio.h>
 #define PKC_CONTEXT		/* Indicate that we're working with PKC contexts */
 #include "crypt.h"
 #if defined( INC_ALL )
@@ -26,7 +25,7 @@
    AlgorithmIdentifier and the actual public/private key components, with the
    (p, q, g) set classed as domain parameters and included in the
    AlgorithmIdentifier and y being the actual key.
-
+	
 	params = SEQ {
 		p INTEGER,
 		q INTEGER,				-- q for DSA
@@ -72,7 +71,7 @@ static int readRsaSubjectPublicKey( INOUT_PTR STREAM *stream,
 									OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
 	CRYPT_ALGO_TYPE cryptAlgo DUMMY_INIT;
-	PKC_INFO *rsaKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -80,6 +79,7 @@ static int readRsaSubjectPublicKey( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( actionFlags, sizeof( int ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Clear return value */
 	*actionFlags = ACTION_PERM_NONE;
@@ -115,18 +115,18 @@ static int readRsaSubjectPublicKey( INOUT_PTR STREAM *stream,
 	/* Read the BIT STRING encapsulation and the public key fields */
 	readBitStringHole( stream, NULL, MIN_PKCSIZE_THRESHOLD, DEFAULT_TAG );
 	readSequence( stream, NULL );
-	status = readBignum( stream, &rsaKey->rsaParam_n, RSAPARAM_MIN_N, 
+	status = readBignum( stream, &pkcInfo->rsaParam_n, RSAPARAM_MIN_N, 
 						 RSAPARAM_MAX_N, NULL, BIGNUM_CHECK_VALUE_PKC );
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignum( stream, &rsaKey->rsaParam_e,
+		status = readBignum( stream, &pkcInfo->rsaParam_e,
 							 RSAPARAM_MIN_E, RSAPARAM_MAX_E, 
-							 &rsaKey->rsaParam_n, BIGNUM_CHECK_VALUE );
+							 &pkcInfo->rsaParam_n, BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( rsaKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -138,7 +138,7 @@ static int readDlpSubjectPublicKey( INOUT_PTR STREAM *stream,
 									OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
 	CRYPT_ALGO_TYPE readCryptAlgo DUMMY_INIT;
-	PKC_INFO *dlpKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	ALGOID_PARAMS algoIDparams DUMMY_INIT_STRUCT;
 	int status;
 
@@ -150,6 +150,7 @@ static int readDlpSubjectPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( cryptAlgo == CRYPT_ALGO_DH || \
 			  cryptAlgo == CRYPT_ALGO_DSA || \
 			  cryptAlgo == CRYPT_ALGO_ELGAMAL );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Clear return value */
 	*actionFlags = ACTION_PERM_NONE;
@@ -176,31 +177,31 @@ static int readDlpSubjectPublicKey( INOUT_PTR STREAM *stream,
 
 	/* Read the header and key parameters */
 	readSequence( stream, NULL );
-	status = readBignum( stream, &dlpKey->dlpParam_p, DLPPARAM_MIN_P, 
+	status = readBignum( stream, &pkcInfo->dlpParam_p, DLPPARAM_MIN_P, 
 						 DLPPARAM_MAX_P, NULL, BIGNUM_CHECK_VALUE_PKC );
 	if( cryptStatusError( status ) )
 		return( status );
 	if( hasReversedParams( cryptAlgo ) )
 		{
-		status = readBignum( stream, &dlpKey->dlpParam_g, DLPPARAM_MIN_G, 
-							 DLPPARAM_MAX_G, &dlpKey->dlpParam_p,
+		status = readBignum( stream, &pkcInfo->dlpParam_g, DLPPARAM_MIN_G, 
+							 DLPPARAM_MAX_G, &pkcInfo->dlpParam_p,
 							 BIGNUM_CHECK_VALUE );
 		if( cryptStatusOK( status ) )
 			{
-			status = readBignum( stream, &dlpKey->dlpParam_q, DLPPARAM_MIN_Q, 
-								 DLPPARAM_MAX_Q, &dlpKey->dlpParam_p,
+			status = readBignum( stream, &pkcInfo->dlpParam_q, DLPPARAM_MIN_Q, 
+								 DLPPARAM_MAX_Q, &pkcInfo->dlpParam_p,
 								 BIGNUM_CHECK_VALUE );
 			}
 		}
 	else
 		{
-		status = readBignum( stream, &dlpKey->dlpParam_q, DLPPARAM_MIN_Q, 
-							 DLPPARAM_MAX_Q, &dlpKey->dlpParam_p,
+		status = readBignum( stream, &pkcInfo->dlpParam_q, DLPPARAM_MIN_Q, 
+							 DLPPARAM_MAX_Q, &pkcInfo->dlpParam_p,
 							 BIGNUM_CHECK_VALUE );
 		if( cryptStatusOK( status ) )
 			{
-			status = readBignum( stream, &dlpKey->dlpParam_g, DLPPARAM_MIN_G, 
-								 DLPPARAM_MAX_G, &dlpKey->dlpParam_p,
+			status = readBignum( stream, &pkcInfo->dlpParam_g, DLPPARAM_MIN_G, 
+								 DLPPARAM_MAX_G, &pkcInfo->dlpParam_p,
 								 BIGNUM_CHECK_VALUE );
 			}
 		}
@@ -229,13 +230,13 @@ static int readDlpSubjectPublicKey( INOUT_PTR STREAM *stream,
 
 	/* Read the BIT STRING encapsulation and the public key fields */
 	readBitStringHole( stream, NULL, MIN_PKCSIZE_THRESHOLD, DEFAULT_TAG );
-	status = readBignum( stream, &dlpKey->dlpParam_y, DLPPARAM_MIN_Y, 
-						 DLPPARAM_MAX_Y, &dlpKey->dlpParam_p, 
+	status = readBignum( stream, &pkcInfo->dlpParam_y, DLPPARAM_MIN_Y, 
+						 DLPPARAM_MAX_Y, &pkcInfo->dlpParam_p, 
 						 BIGNUM_CHECK_VALUE_PKC );
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( dlpKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -250,7 +251,7 @@ static int readEccSubjectPublicKey( INOUT_PTR STREAM *stream,
 	{
 	CRYPT_ALGO_TYPE readCryptAlgo DUMMY_INIT;
 	CRYPT_ECCCURVE_TYPE curveType;
-	PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	ALGOID_PARAMS algoIDparams DUMMY_INIT_STRUCT;
 	BYTE buffer[ MAX_PKCSIZE_ECCPOINT + 8 ];
 	int length, fieldSize, status;
@@ -262,6 +263,7 @@ static int readEccSubjectPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_ECDSA || \
 			  cryptAlgo == CRYPT_ALGO_ECDH );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Clear return value */
 	*actionFlags = ACTION_PERM_NONE;
@@ -297,7 +299,7 @@ static int readEccSubjectPublicKey( INOUT_PTR STREAM *stream,
 	status = readECCOID( stream, &curveType, &fieldSize );
 	if( cryptStatusError( status ) )
 		return( status );
-	eccKey->curveType = curveType;
+	pkcInfo->curveType = curveType;
 
 	/* Set the maximum permitted actions.  Because of the special-case data 
 	   formatting requirements for ECC algorithms (which are a part of the 
@@ -338,7 +340,7 @@ static int readEccSubjectPublicKey( INOUT_PTR STREAM *stream,
 	status = sread( stream, buffer, length );
 	if( cryptStatusError( status ) )
 		return( status );
-	status = importECCPoint( &eccKey->eccParam_qx, &eccKey->eccParam_qy,
+	status = importECCPoint( &pkcInfo->eccParam_qx, &pkcInfo->eccParam_qy,
 							 buffer, length, MIN_PKCSIZE_ECC_THRESHOLD, 
 							 CRYPT_MAX_PKCSIZE_ECC, fieldSize, NULL, 
 							 BIGNUM_CHECK_VALUE_ECC );
@@ -346,7 +348,7 @@ static int readEccSubjectPublicKey( INOUT_PTR STREAM *stream,
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( eccKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -361,8 +363,8 @@ static int read25519SubjectPublicKey( INOUT_PTR STREAM *stream,
 									  OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
 	CRYPT_ALGO_TYPE readCryptAlgo DUMMY_INIT;
-	PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
-	BYTE buffer[ MAX_PKCSIZE_BERNSTEIN + 8 ];
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	BERNSTEIN_KEY_INFO *bernsteinKey;
 	int length, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -372,9 +374,14 @@ static int read25519SubjectPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_25519 || \
 			  cryptAlgo == CRYPT_ALGO_ED25519 );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Clear return value */
 	*actionFlags = ACTION_PERM_NONE;
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	bernsteinKey = pkcInfo->bernsteinKey;
 
 	/* Read the SubjectPublicKeyInfo header field and make sure that the ECC 
 	   parameter data is present */
@@ -408,29 +415,22 @@ static int read25519SubjectPublicKey( INOUT_PTR STREAM *stream,
 									   ACTION_PERM_NONE_EXTERNAL );
 		}
 
-	/* Read the BIT STRING encapsulation and the public key fields.  Instead 
-	   of encoding the necessary information as an obvious OID + SEQUENCE 
-	   combination for the parameters it's all stuffed into an ad-hoc BIT 
-	   STRING that we have to pick apart manually.  Note that we can't use 
-	   the ECC p value for a range check because it hasn't been set yet, all 
-	   that we have at this point is a curve ID */
+	/* Read the BIT STRING encapsulation and the public key fields.  Note
+	   that MIN_PKCSIZE_BERNSTEIN and MAX_PKCSIZE_BERNSTEIN have the same 
+	   value, they're just given as MIN ... MAX for consistency with other
+	   PKC constants */
 	status = readBitStringHole( stream, &length, MIN_PKCSIZE_BERNSTEIN, 
 								DEFAULT_TAG );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( length != 32 )
+	if( length != MAX_PKCSIZE_BERNSTEIN )
 		return( CRYPT_ERROR_BADDATA );
 	REQUIRES( rangeCheck( length, 1, MAX_PKCSIZE_BERNSTEIN ) );
-	status = sread( stream, buffer, length );
-	if( cryptStatusError( status ) )
-		return( status );
-	status = import25519ByteString( &eccKey->curve25519Param_pub, 
-									buffer, length );
-	zeroise( buffer, MAX_PKCSIZE_BERNSTEIN );
+	status = sread( stream, bernsteinKey->pubKey, MAX_PKCSIZE_BERNSTEIN );
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( eccKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -473,7 +473,7 @@ static int readSshRsaPublicKey( INOUT_PTR STREAM *stream,
 								INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 								OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
-	PKC_INFO *rsaKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	char buffer[ CRYPT_MAX_TEXTSIZE + 8 ];
 	int length, status;
 
@@ -482,6 +482,7 @@ static int readSshRsaPublicKey( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( actionFlags, sizeof( int ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Clear return value */
 	*actionFlags = ACTION_PERM_NONE;
@@ -500,19 +501,19 @@ static int readSshRsaPublicKey( INOUT_PTR STREAM *stream,
 								   ACTION_PERM_NONE_EXTERNAL );
 
 	/* Read the SSH public key information */
-	status = readBignumInteger32( stream, &rsaKey->rsaParam_e, 
+	status = readBignumInteger32( stream, &pkcInfo->rsaParam_e, 
 								  RSAPARAM_MIN_E, RSAPARAM_MAX_E, 
 								  NULL, BIGNUM_CHECK_VALUE );
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumInteger32( stream, &rsaKey->rsaParam_n,
+		status = readBignumInteger32( stream, &pkcInfo->rsaParam_n,
 									  RSAPARAM_MIN_N, RSAPARAM_MAX_N,
 									  NULL, BIGNUM_CHECK_VALUE_PKC );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( rsaKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -523,7 +524,7 @@ static int readSshDlpPublicKey( INOUT_PTR STREAM *stream,
 								IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 								OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
-	PKC_INFO *dsaKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	char buffer[ CRYPT_MAX_TEXTSIZE + 8 ];
 	const BOOLEAN isDH = ( cryptAlgo == CRYPT_ALGO_DH ) ? TRUE : FALSE;
 	int length, status;
@@ -534,6 +535,7 @@ static int readSshDlpPublicKey( INOUT_PTR STREAM *stream,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_DH || cryptAlgo == CRYPT_ALGO_DSA );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Clear return value */
 	*actionFlags = ACTION_PERM_NONE;
@@ -560,20 +562,20 @@ static int readSshDlpPublicKey( INOUT_PTR STREAM *stream,
 									   ACTION_PERM_NONE_EXTERNAL );
 
 		/* Read the SSH public key information */
-		status = readBignumInteger32( stream, &dsaKey->dlpParam_p, 
+		status = readBignumInteger32( stream, &pkcInfo->dlpParam_p, 
 									  DLPPARAM_MIN_P, DLPPARAM_MAX_P,
 									  NULL, BIGNUM_CHECK_VALUE_PKC );
 		if( cryptStatusOK( status ) )
 			{
-			status = readBignumInteger32( stream, &dsaKey->dlpParam_g,
+			status = readBignumInteger32( stream, &pkcInfo->dlpParam_g,
 										  DLPPARAM_MIN_G, DLPPARAM_MAX_G,
-										  &dsaKey->dlpParam_p,
+										  &pkcInfo->dlpParam_p,
 										  BIGNUM_CHECK_VALUE );
 			}
 		if( cryptStatusError( status ) )
 			return( status );
 
-		ENSURES( sanityCheckPKCInfo( dsaKey ) );
+		ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 		return( CRYPT_OK );
 		}
@@ -592,34 +594,34 @@ static int readSshDlpPublicKey( INOUT_PTR STREAM *stream,
 								   ACTION_PERM_NONE_EXTERNAL );
 
 	/* Read the SSH public key information */
-	status = readBignumInteger32( stream, &dsaKey->dlpParam_p, 
+	status = readBignumInteger32( stream, &pkcInfo->dlpParam_p, 
 								  DLPPARAM_MIN_P, DLPPARAM_MAX_P, 
 								  NULL, BIGNUM_CHECK_VALUE_PKC );
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumInteger32( stream, &dsaKey->dlpParam_q,
+		status = readBignumInteger32( stream, &pkcInfo->dlpParam_q,
 									  DLPPARAM_MIN_Q, DLPPARAM_MAX_Q,
-									  &dsaKey->dlpParam_p, 
+									  &pkcInfo->dlpParam_p, 
 									  BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumInteger32( stream, &dsaKey->dlpParam_g,
+		status = readBignumInteger32( stream, &pkcInfo->dlpParam_g,
 									  DLPPARAM_MIN_G, DLPPARAM_MAX_G,
-									  &dsaKey->dlpParam_p,
+									  &pkcInfo->dlpParam_p,
 									  BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumInteger32( stream, &dsaKey->dlpParam_y,
+		status = readBignumInteger32( stream, &pkcInfo->dlpParam_y,
 									  DLPPARAM_MIN_Y, DLPPARAM_MAX_Y,
-									  &dsaKey->dlpParam_p,
+									  &pkcInfo->dlpParam_p,
 									  BIGNUM_CHECK_VALUE_PKC );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( dsaKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -632,7 +634,7 @@ static int readSshEccPublicKey( INOUT_PTR STREAM *stream,
 								IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 								OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
-	PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	BYTE buffer[ MAX_PKCSIZE_ECCPOINT + 8 ];
 	int length, fieldSize, status;
 
@@ -645,8 +647,9 @@ static int readSshEccPublicKey( INOUT_PTR STREAM *stream,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_ECDSA );
+	REQUIRES( pkcInfo != NULL );
 
-	/* No need to clear return value as usual since it's set in the 
+	/* No need to clear return values as usual since it's set in the 
 	   following line of code, and clearing it leads to compiler warnings
 	   about unused assignments */
 
@@ -664,9 +667,9 @@ static int readSshEccPublicKey( INOUT_PTR STREAM *stream,
 	status = readString32( stream, buffer, CRYPT_MAX_TEXTSIZE, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( length < 19 )		/* "ecdsa-sha2-nistXXXX" */
+	if( length < 19 )		/* "ecdsa-sha2-nistpXXX" */
 		return( CRYPT_ERROR_BADDATA );
-	if( memcmp( buffer, "ecdsa-sha2-nist", 15 ) )
+	if( memcmp( buffer, "ecdsa-sha2-nistp", 16 ) )
 		return( CRYPT_ERROR_BADDATA );
 
 	/* Read and process the parameter information.  At this point we know 
@@ -675,29 +678,29 @@ static int readSshEccPublicKey( INOUT_PTR STREAM *stream,
 	status = readString32( stream, buffer, CRYPT_MAX_TEXTSIZE, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( length != 8 )		/* "nistXXXX" */
+	if( length != 8 )		/* "nistpXXX" */
 		return( CRYPT_ERROR_NOTAVAIL );
 	if( !memcmp( buffer, "nistp256", 8 ) )
-		eccKey->curveType = CRYPT_ECCCURVE_P256;
+		pkcInfo->curveType = CRYPT_ECCCURVE_P256;
 	else
 		{
 		if( !memcmp( buffer, "nistp384", 8 ) )
-			eccKey->curveType = CRYPT_ECCCURVE_P384;
+			pkcInfo->curveType = CRYPT_ECCCURVE_P384;
 		else
 			{
 			if( !memcmp( buffer, "nistp521", 8 ) )
-				eccKey->curveType = CRYPT_ECCCURVE_P521;
+				pkcInfo->curveType = CRYPT_ECCCURVE_P521;
 			else
 				return( CRYPT_ERROR_NOTAVAIL );
 			}
 		}
-	status = getECCFieldSize( eccKey->curveType, &fieldSize, FALSE );
+	status = getECCFieldSize( pkcInfo->curveType, &fieldSize, FALSE );
 	if( cryptStatusError( status ) )
 		return( status );
 
 	/* Read the ECC public key.  See the comments in 
 	   readEccSubjectPublicKey() for why the checks are done the way they 
-	   are, and in particular we can't use readInteger32() which would 
+	   are, and in particular why we can't use readInteger32() which would 
 	   include the ability to check the value read because what's stored is
 	   an encoded point and not a (potentially signed) integer */
 	status = readString32( stream, buffer, MAX_PKCSIZE_ECCPOINT, &length );
@@ -706,7 +709,7 @@ static int readSshEccPublicKey( INOUT_PTR STREAM *stream,
 	if( length < MIN_PKCSIZE_ECCPOINT_THRESHOLD || \
 		length > MAX_PKCSIZE_ECCPOINT )
 		return( CRYPT_ERROR_BADDATA );
-	status = importECCPoint( &eccKey->eccParam_qx, &eccKey->eccParam_qy,
+	status = importECCPoint( &pkcInfo->eccParam_qx, &pkcInfo->eccParam_qy,
 							 buffer, length, MIN_PKCSIZE_ECC_THRESHOLD, 
 							 CRYPT_MAX_PKCSIZE_ECC, fieldSize, NULL, 
 							 BIGNUM_CHECK_VALUE_ECC );
@@ -714,7 +717,7 @@ static int readSshEccPublicKey( INOUT_PTR STREAM *stream,
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( eccKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -728,8 +731,9 @@ static int readSsh25519PublicKey( INOUT_PTR STREAM *stream,
 								  IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 								  OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
-	PKC_INFO *ed25519Key = contextInfoPtr->ctxPKC;
-	BYTE buffer[ MAX_PKCSIZE_ECCPOINT + 8 ];
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	BERNSTEIN_KEY_INFO *bernsteinKey;
+	BYTE buffer[ CRYPT_MAX_TEXTSIZE + 8 ];
 	int length, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -738,8 +742,13 @@ static int readSsh25519PublicKey( INOUT_PTR STREAM *stream,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_ED25519 );
+	REQUIRES( pkcInfo != NULL );
 
-	/* No need to clear return value as usual since it's set in the 
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	bernsteinKey = pkcInfo->bernsteinKey;
+
+	/* No need to clear return values as usual since it's set in the 
 	   following line of code, and clearing it leads to compiler warnings
 	   about unused assignments */
 
@@ -756,15 +765,17 @@ static int readSsh25519PublicKey( INOUT_PTR STREAM *stream,
 	if( length != 11 || memcmp( buffer, "ssh-ed25519", 11 ) )
 		return( CRYPT_ERROR_BADDATA );
 
-	/* Read the Ed25519 public key */
-	status = readBignumInteger32( stream, &ed25519Key->curve25519Param_pub, 
-								  MIN_PKCSIZE_BERNSTEIN, 
-								  MAX_PKCSIZE_BERNSTEIN, 
-								  NULL, BIGNUM_CHECK_VALUE_FIXEDLEN );
+	/* Read the Ed25519 public key.  Note that MIN_PKCSIZE_BERNSTEIN and 
+	   MAX_PKCSIZE_BERNSTEIN have the same value, they're just given as MIN 
+	   ... MAX for consistency with other PKC constants */
+	status = readInteger32( stream, bernsteinKey->pubKey, &length,
+							MIN_PKCSIZE_BERNSTEIN, MAX_PKCSIZE_BERNSTEIN, 
+							BIGNUM_CHECK_VALUE_FIXEDLEN );
 	if( cryptStatusError( status ) )
 		return( status );
+	ENSURES( length == MIN_PKCSIZE_BERNSTEIN );
 
-	ENSURES( sanityCheckPKCInfo( ed25519Key ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -811,7 +822,7 @@ static int readTlsDlpPublicKey( INOUT_PTR STREAM *stream,
 								OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags,
 								IN_BOOL const BOOLEAN readExtKey )
 	{
-	PKC_INFO *dhKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -821,8 +832,9 @@ static int readTlsDlpPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_DH );
 	REQUIRES( isBooleanValue( readExtKey ) );
+	REQUIRES( pkcInfo != NULL );
 
-	/* No need to clear return value as usual since it's set in the 
+	/* No need to clear return values as usual since it's set in the 
 	   following line of code, and clearing it leads to compiler warnings
 	   about unused assignments */
 
@@ -836,27 +848,27 @@ static int readTlsDlpPublicKey( INOUT_PTR STREAM *stream,
 								   ACTION_PERM_NONE_EXTERNAL );
 
 	/* Read the TLS public key information */
-	status = readBignumInteger16U( stream, &dhKey->dlpParam_p, 
+	status = readBignumInteger16U( stream, &pkcInfo->dlpParam_p, 
 								   DLPPARAM_MIN_P, DLPPARAM_MAX_P,
 								   NULL, BIGNUM_CHECK_VALUE_PKC );
 	if( cryptStatusOK( status ) && readExtKey )
 		{
-		status = readBignumInteger16U( stream, &dhKey->dlpParam_q, 
+		status = readBignumInteger16U( stream, &pkcInfo->dlpParam_q, 
 									   DLPPARAM_MIN_Q, DLPPARAM_MAX_Q,
-									   &dhKey->dlpParam_p, 
-									   BIGNUM_CHECK_VALUE );
+									   &pkcInfo->dlpParam_p, 
+									   BIGNUM_CHECK_VALUE_PKC );
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumInteger16U( stream, &dhKey->dlpParam_g, 
+		status = readBignumInteger16U( stream, &pkcInfo->dlpParam_g, 
 									   DLPPARAM_MIN_G, DLPPARAM_MAX_G,
-									   &dhKey->dlpParam_p, 
-									   BIGNUM_CHECK_VALUE_PKC );
+									   &pkcInfo->dlpParam_p, 
+									   BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( dhKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -893,7 +905,7 @@ static int readTlsEccPublicKey( INOUT_PTR STREAM *stream,
 								IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 								OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
-	PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	const MAP_TABLE *tlsCurveInfoPtr;
 	int value, curveID, tlsCurveInfoNoEntries, status;
 
@@ -903,6 +915,11 @@ static int readTlsEccPublicKey( INOUT_PTR STREAM *stream,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_ECDH );
+	REQUIRES( pkcInfo != NULL );
+
+	/* No need to clear return values as usual since it's set in the 
+	   following line of code, and clearing it leads to compiler warnings
+	   about unused assignments */
 
 	/* Set the maximum permitted actions.  TLS keys are only used 
 	   internally so we restrict the usage to internal-only.  Since ECDH 
@@ -922,8 +939,11 @@ static int readTlsEccPublicKey( INOUT_PTR STREAM *stream,
 	status = value = readUint16( stream );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( value < 19 || value > 28 )
+	if( value < 23 || value > 28 )
+		{
+		/* Minimum and maximum values in tlsCurveInfo[] table */
 		return( CRYPT_ERROR_NOTAVAIL );
+		}
 
 	/* Look up the curve ID based on the TLS NamedCurve ID */
 	status = getEccTlsInfoTbl( &tlsCurveInfoPtr, &tlsCurveInfoNoEntries );
@@ -933,9 +953,9 @@ static int readTlsEccPublicKey( INOUT_PTR STREAM *stream,
 					   tlsCurveInfoNoEntries );
 	if( cryptStatusError( status ) )
 		return( status );
-	eccKey->curveType = curveID;
+	pkcInfo->curveType = curveID;
 
-	ENSURES( sanityCheckPKCInfo( eccKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -949,8 +969,8 @@ static int readTlsPQCPublicKey( INOUT_PTR STREAM *stream,
 								IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 								OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
-	PKC_INFO *pqcKey = contextInfoPtr->ctxPKC;
-	MLKEM_KEY_INFO *mlkemKey = pqcKey->mlkemKey;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
+	MLKEM_KEY_INFO *mlkemKey;
 	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -959,6 +979,15 @@ static int readTlsPQCPublicKey( INOUT_PTR STREAM *stream,
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_MLKEM );
+	REQUIRES( pkcInfo != NULL );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	mlkemKey = pkcInfo->mlkemKey;
+
+	/* No need to clear return values as usual since it's set in the 
+	   following line of code, and clearing it leads to compiler warnings
+	   about unused assignments */
 
 	/* Set the maximum permitted actions.  TLS keys are only used 
 	   internally so we restrict the usage to internal-only */
@@ -972,7 +1001,7 @@ static int readTlsPQCPublicKey( INOUT_PTR STREAM *stream,
 		return( status );
 	mlkemKey->pubKeySize = MLKEM768_PUBLICKEYBYTES;
 
-	ENSURES( sanityCheckPKCInfo( pqcKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -1000,7 +1029,7 @@ static int readTlsPQCPublicKey( INOUT_PTR STREAM *stream,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int readPgpHeader( INOUT_PTR STREAM *stream, 
-						  time_t *pgpCreationTime,
+						  OUT_PTR time_t *pgpCreationTime,
 						  IN_BOOL const BOOLEAN openPgpOnly )
 	{
 	time_t timeValue DUMMY_INIT;
@@ -1042,9 +1071,8 @@ static int readPgpHeader( INOUT_PTR STREAM *stream,
 		{
 		int value DUMMY_INIT;
 
-		/* If there was an error on read and it wasn't due to an out-of-
-		   range value, exit */
-		if( cryptStatusError( status ) && status != CRYPT_ERROR_BADDATA )
+		/* If the read error wasn't due to an out-of-range value, exit */
+		if( status != CRYPT_ERROR_BADDATA )
 			return( status );
 
 		/* Retry the read as a UINT32, allowing it if it has the magic 
@@ -1073,7 +1101,7 @@ static int readPgpRsaPublicKey( INOUT_PTR STREAM *stream,
 								INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 								OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
-	PKC_INFO *rsaKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int value, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -1081,12 +1109,13 @@ static int readPgpRsaPublicKey( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( actionFlags, sizeof( int ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Clear return value */
 	*actionFlags = ACTION_PERM_NONE;
 
 	/* Read the header info */
-	status = readPgpHeader( stream, &rsaKey->pgpCreationTime, FALSE );
+	status = readPgpHeader( stream, &pkcInfo->pgpCreationTime, FALSE );
 	if( cryptStatusError( status ) )
 		return( status );
 
@@ -1131,22 +1160,22 @@ static int readPgpRsaPublicKey( INOUT_PTR STREAM *stream,
 		}
 
 	/* Read the PGP public key information */
-	status = readBignumInteger16Ubits( stream, &rsaKey->rsaParam_n, 
+	status = readBignumInteger16Ubits( stream, &pkcInfo->rsaParam_n, 
 									   bytesToBits( RSAPARAM_MIN_N ), 
 									   bytesToBits( RSAPARAM_MAX_N ),
 									   NULL, BIGNUM_CHECK_VALUE_PKC );
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumInteger16Ubits( stream, &rsaKey->rsaParam_e, 
+		status = readBignumInteger16Ubits( stream, &pkcInfo->rsaParam_e, 
 										   bytesToBits( RSAPARAM_MIN_E ), 
 										   bytesToBits( RSAPARAM_MAX_E ),
-										   &rsaKey->rsaParam_n,
+										   &pkcInfo->rsaParam_n,
 										   BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( rsaKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -1157,7 +1186,7 @@ static int readPgpDlpPublicKey( INOUT_PTR STREAM *stream,
 								IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 								OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
-	PKC_INFO *dlpKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	int value, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -1167,12 +1196,13 @@ static int readPgpDlpPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_DSA || \
 			  cryptAlgo == CRYPT_ALGO_ELGAMAL );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Clear return value */
 	*actionFlags = ACTION_PERM_NONE;
 
 	/* Read the header info */
-	status = readPgpHeader( stream, &dlpKey->pgpCreationTime, TRUE );
+	status = readPgpHeader( stream, &pkcInfo->pgpCreationTime, TRUE );
 	if( cryptStatusError( status ) )
 		return( status );
 
@@ -1205,38 +1235,38 @@ static int readPgpDlpPublicKey( INOUT_PTR STREAM *stream,
 		}
 
 	/* Read the PGP public key information */
-	status = readBignumInteger16Ubits( stream, &dlpKey->dlpParam_p, 
+	status = readBignumInteger16Ubits( stream, &pkcInfo->dlpParam_p, 
 									   bytesToBits( DLPPARAM_MIN_P ), 
 									   bytesToBits( DLPPARAM_MAX_P ),
 									   NULL, BIGNUM_CHECK_VALUE_PKC );
 	if( cryptStatusOK( status ) && value == PGP_ALGO_DSA )
 		{
-		status = readBignumInteger16Ubits( stream, &dlpKey->dlpParam_q, 
+		status = readBignumInteger16Ubits( stream, &pkcInfo->dlpParam_q, 
 										   bytesToBits( DLPPARAM_MIN_Q ), 
 										   bytesToBits( DLPPARAM_MAX_Q ),
-										   &dlpKey->dlpParam_p,
+										   &pkcInfo->dlpParam_p,
 										   BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumInteger16Ubits( stream, &dlpKey->dlpParam_g, 
+		status = readBignumInteger16Ubits( stream, &pkcInfo->dlpParam_g, 
 										   bytesToBits( DLPPARAM_MIN_G ), 
 										   bytesToBits( DLPPARAM_MAX_G ),
-										   &dlpKey->dlpParam_p,
+										   &pkcInfo->dlpParam_p,
 										   BIGNUM_CHECK_VALUE );
 		}
 	if( cryptStatusOK( status ) )
 		{
-		status = readBignumInteger16Ubits( stream, &dlpKey->dlpParam_y, 
+		status = readBignumInteger16Ubits( stream, &pkcInfo->dlpParam_y, 
 										   bytesToBits( DLPPARAM_MIN_Y ), 
 										   bytesToBits( DLPPARAM_MAX_Y ),
-										   &dlpKey->dlpParam_p,
+										   &pkcInfo->dlpParam_p,
 										   BIGNUM_CHECK_VALUE_PKC );
 		}
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( dlpKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -1250,7 +1280,7 @@ static int readPgpEccPublicKey( INOUT_PTR STREAM *stream,
 								OUT_FLAGS_Z( ACTION_PERM ) int *actionFlags )
 	{
 	CRYPT_ECCCURVE_TYPE curveType;
-	PKC_INFO *eccKey = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 	STREAM oidStream;
 	BYTE buffer[ MAX_PKCSIZE_ECCPOINT + 8 ];
 	BYTE oidBuffer[ MAX_OID_SIZE + 8 ];
@@ -1263,12 +1293,13 @@ static int readPgpEccPublicKey( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
 	REQUIRES( cryptAlgo == CRYPT_ALGO_ECDSA || \
 			  cryptAlgo == CRYPT_ALGO_ECDH );
+	REQUIRES( pkcInfo != NULL );
 
 	/* Clear return value */
 	*actionFlags = ACTION_PERM_NONE;
 
 	/* Read the header info */
-	status = readPgpHeader( stream, &eccKey->pgpCreationTime, TRUE );
+	status = readPgpHeader( stream, &pkcInfo->pgpCreationTime, TRUE );
 	if( cryptStatusError( status ) )
 		return( status );
 
@@ -1310,7 +1341,7 @@ static int readPgpEccPublicKey( INOUT_PTR STREAM *stream,
 	status = length = sgetc( stream );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( length < MIN_OID_SIZE - 2 || length >= MAX_OID_SIZE - 2 )
+	if( length < MIN_OID_SIZE - 2 || length > MAX_OID_SIZE - 2 )
 		return( CRYPT_ERROR_BADDATA );
 	oidBuffer[ 0 ] = 0x06;		/* OID tag */
 	oidBuffer[ 1 ] = intToByte( length );
@@ -1323,7 +1354,7 @@ static int readPgpEccPublicKey( INOUT_PTR STREAM *stream,
 	sMemDisconnect( &oidStream );
 	if( cryptStatusError( status ) )
 		return( status );
-	eccKey->curveType = curveType;
+	pkcInfo->curveType = curveType;
 
 	/* Read the ECC public key.  Since the encoded ECC point is stored 
 	   (incorrectly) as an MPI, for once we can use a checked-read function */
@@ -1333,7 +1364,7 @@ static int readPgpEccPublicKey( INOUT_PTR STREAM *stream,
 								 BIGNUM_CHECK_VALUE_ECC );
 	if( cryptStatusError( status ) )
 		return( status );
-	status = importECCPoint( &eccKey->eccParam_qx, &eccKey->eccParam_qy,
+	status = importECCPoint( &pkcInfo->eccParam_qx, &pkcInfo->eccParam_qy,
 							 buffer, length, MIN_PKCSIZE_ECC_THRESHOLD, 
 							 CRYPT_MAX_PKCSIZE_ECC, fieldSize, NULL, 
 							 BIGNUM_CHECK_VALUE_ECC );
@@ -1341,7 +1372,7 @@ static int readPgpEccPublicKey( INOUT_PTR STREAM *stream,
 	if( cryptStatusError( status ) )
 		return( status );
 
-	ENSURES( sanityCheckPKCInfo( eccKey ) );
+	ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
 	return( CRYPT_OK );
 	}
@@ -1361,13 +1392,14 @@ static int completePubkeyRead( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 							   IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 							   IN_FLAGS( ACTION_PERM ) const int actionFlags )
 	{
-	PKC_INFO *pkcInfo = contextInfoPtr->ctxPKC;
+	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
 
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
 
 	REQUIRES( sanityCheckContext( contextInfoPtr ) );
-	REQUIRES( isEnumRange( cryptAlgo, CRYPT_ALGO ) );
+	REQUIRES( isPkcAlgo( cryptAlgo ) );
 	REQUIRES( isFlagRange( actionFlags, ACTION_PERM ) );
+	REQUIRES( pkcInfo != NULL );
 
 	/* If we're working with hardware contexts rather than native software
 	   ones then the keying information may never be processed by cryptlib, 
@@ -1410,7 +1442,7 @@ static int completePubkeyRead( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 #if defined( USE_X25519 ) || defined( USE_ED25519 )
 			case CRYPT_ALGO_25519:
 			case CRYPT_ALGO_ED25519:
-				pkcInfo->keySizeBits = bytesToBits( 32 );
+				pkcInfo->keySizeBits = bytesToBits( MIN_PKCSIZE_BERNSTEIN );
 				break;
 #endif /* USE_X25519 || USE_ED25519 */
 
@@ -1430,6 +1462,8 @@ static int completePubkeyRead( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 		ENSURES( pkcInfo->keySizeBits >= bytesToBits( MIN_PKCSIZE_ECC ) && \
 				 pkcInfo->keySizeBits <= bytesToBits( CRYPT_MAX_PKCSIZE ) );
 #endif /* USE_MLKEM  */
+				 /* These check the size of any PKC so the apparent 
+				    disparity between min-AlgoA and max-AlgoB is intended */
 		}
 
 	/* If it's statically-initialised context data used in the self-test 
@@ -1774,13 +1808,13 @@ int decodeDLValuesFunction( IN_BUFFER( bufSize ) const BYTE *buffer,
 #ifdef USE_PGPKEYS
 		case CRYPT_FORMAT_PGP:
 			status = readBignumInteger16Ubits( &stream, value1, 
-											   DLPPARAM_MIN_SIG_R,
+											   bytesToBits( DLPPARAM_MIN_SIG_R ),
 											   bytesToBits( CRYPT_MAX_PKCSIZE ),
 											   maxRange, BIGNUM_CHECK_VALUE );
 			if( cryptStatusError( status ) )
 				break;
 			status = readBignumInteger16Ubits( &stream, value2, 
-											   DLPPARAM_MIN_SIG_S,
+											   bytesToBits( DLPPARAM_MIN_SIG_S ),
 											   bytesToBits( CRYPT_MAX_PKCSIZE ),
 											   maxRange, BIGNUM_CHECK_VALUE );
 			break;

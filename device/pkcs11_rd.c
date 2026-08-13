@@ -123,7 +123,10 @@ static int getAttributeValue( INOUT_PTR PKCS11_INFO *pkcs11Info,
 	if( status != CKR_OK )
 		{
 		if( valueTemplate.pValue != valueBuffer )
+			{
 			clFree( "getAttributeValue", valueTemplate.pValue );
+			valueTemplate.pValue = NULL;
+			}
 		return( pkcs11MapError( status, CRYPT_ERROR_NOTFOUND ) );
 		}
 	*value = valueTemplate.pValue;
@@ -185,7 +188,9 @@ static int getObjectLabel( INOUT_PTR PKCS11_INFO *pkcs11Info,
 		   interpretation of PKCS #11 it's possible that some 
 		   implementations do this */
 		*labelLength = min( 26, maxLabelSize - 1 );	/* -1 for terminator */
-		strlcpy_s( label, maxLabelSize, "Label-less PKCS #11 object" );
+		cryptStatus = strlcpy_s( label, maxLabelSize, 
+								 "Label-less PKCS #11 object" );
+		ENSURES( cryptStatusOK( cryptStatus ) );
 		}
 	else
 		{

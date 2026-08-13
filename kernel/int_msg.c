@@ -663,6 +663,11 @@ int setPropertyAttribute( IN_HANDLE const int objectHandle,
 				/* Precondition: The lock count is positive or zero */
 				REQUIRES( objectInfoPtr->lockCount >= 0 );
 
+				/* Make sure that we don't try and increment a lock count a 
+				   suspicious number of times */
+				if( objectInfoPtr->lockCount >= MAX_INTLENGTH_SHORT - 1 )
+					return( CRYPT_ERROR_OVERFLOW );
+
 				REQUIRES( !checkOverflowInc( objectInfoPtr->lockCount ) );
 				objectInfoPtr->lockCount++;
 

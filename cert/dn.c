@@ -532,11 +532,11 @@ const DN_COMPONENT_INFO *findDNInfoByLabel( IN_BUFFER( labelLength ) const char 
 
 		certInfoOID = &certInfoOIDs[ i ];
 		if( certInfoOID->nameLen == labelLength && \
-			!strCompare( certInfoOID->name, label, labelLength ) )
+			strSame( label, certInfoOID->name, labelLength ) )
 			return( certInfoOID );
 		if( certInfoOID->altName != NULL && \
 			certInfoOID->altNameLen == labelLength && \
-			!strCompare( certInfoOID->altName, label, labelLength ) )
+			strSame( label, certInfoOID->altName, labelLength ) )
 			return( certInfoOID );
 		}
 	ENSURES_N( LOOP_BOUND_OK );
@@ -761,7 +761,8 @@ int insertDNstring( INOUT_PTR DATAPTR_DN *dnListHeadPtr,
 			{
 			ENSURES( LOOP_INVARIANT_SMALL( i, 0, valueLength - 1 ) );
 
-			countryCode[ i ] = intToByte( toUpper( dnStrPtr[ i ] ) );
+			countryCode[ i ] = \
+					intToByte( toUpper( byteToInt( dnStrPtr[ i ] ) ) );
 			}
 		ENSURES( LOOP_BOUND_OK );
 		if( flags & DN_FLAG_NOCHECK )

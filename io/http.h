@@ -48,8 +48,12 @@
 #define HTTP_FLAG_TEXTMSG	0x08	/* HTTP content is plain text, probably
 									   an error message */
 #define HTTP_FLAG_GET		0x10	/* Operation is HTTP GET */
+#ifdef USE_WEBSOCKETS
 #define HTTP_FLAG_UPGRADE	0x20	/* Operation is HTTP Upgrade */
 #define HTTP_FLAG_MAX		0x3F	/* Maximum possible flag value */
+#else
+#define HTTP_FLAG_MAX		0x1F	/* Maximum possible flag value */
+#endif /* USE_WEBSOCKETS */
 
 /* The minimum and maximum HTTP status codes */
 
@@ -118,7 +122,7 @@ CHECK_RETVAL_RANGE( 0, 8 ) STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int checkHTTPID( IN_BUFFER( dataLength ) const char *data, 
 				 IN_LENGTH_SHORT const int dataLength, 
 				 INOUT_PTR STREAM *stream );
-STDC_NONNULL_ARG( ( 1, 4 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 4 ) ) \
 int retTextLineError( INOUT_PTR STREAM *stream, 
 					  IN_ERROR const int status, 
 					  IN_BOOL const BOOLEAN isTextLineError, 

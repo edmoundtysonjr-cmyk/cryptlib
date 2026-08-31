@@ -59,12 +59,12 @@ int createKeyexContextTLS( OUT_HANDLE_OPT CRYPT_CONTEXT *iCryptContext,
 			  keyexAlgo == CRYPT_ALGO_25519 || \
 			  keyexAlgo == CRYPT_ALGO_MLKEM );
 
+	/* Clear return value */
+	*iCryptContext = CRYPT_ERROR;
+
 	/* If we're fuzzing the input then we don't need to go through any of 
 	   the following crypto calisthenics */
 	FUZZ_SKIP_REMAINDER();
-
-	/* Clear return value */
-	*iCryptContext = CRYPT_ERROR;
 
 	/* Create the keyex context.  We have to use distinct algorithm-specific 
 	   labels because for client-side TLS 1.3 we need to create multiple 
@@ -134,12 +134,12 @@ int initKeyexContextTLS( OUT_HANDLE_OPT CRYPT_CONTEXT *iCryptContext,
 	REQUIRES( isEnumRangeOpt( eccCurve, CRYPT_ECCCURVE ) );
 	REQUIRES( isBooleanValue( isTLSLTS ) );
 
+	/* Clear return value */
+	*iCryptContext = CRYPT_ERROR;
+
 	/* If we're fuzzing the input then we don't need to go through any of 
 	   the following crypto calisthenics */
 	FUZZ_SKIP_REMAINDER();
-
-	/* Clear return value */
-	*iCryptContext = CRYPT_ERROR;
 
 	/* If we're loading a built-in DH key, match the key size to the server 
 	   authentication key size.  If there's no server key present then we 
@@ -350,26 +350,26 @@ static const TLS_GROUP_INFO groupInfoTbl[] = {
 #endif /* USE_X25519 && PREFER_X25519 */
 	{ TLS_GROUP_SECP256R1, CRYPT_ALGO_ECDH, CRYPT_ECCCURVE_P256,
 	  DESCRIPTION( "ECDH P256" ) bitsToBytes( 256 ), 
-	  TLS_MINOR_VERSION_TLS12, TRUE },
+	  TLS_MINOR_VERSION_TLS11, TRUE },
 	{ TLS_GROUP_BRAINPOOLP256R1, CRYPT_ALGO_ECDH, 
 	  CRYPT_ECCCURVE_BRAINPOOL_P256, 
 	  DESCRIPTION( "Brainpool P256" ) bitsToBytes( 256 ), 
-	  TLS_MINOR_VERSION_TLS12, TRUE },
+	  TLS_MINOR_VERSION_TLS11, TRUE },
 #ifdef USE_SHA2_EXT
 	{ TLS_GROUP_SECP384R1, CRYPT_ALGO_ECDH, CRYPT_ECCCURVE_P384, 
 	  DESCRIPTION( "ECDH P384" ) bitsToBytes( 384 ), 
-	  TLS_MINOR_VERSION_TLS12, TRUE  },
+	  TLS_MINOR_VERSION_TLS11, TRUE  },
 	{ TLS_GROUP_SECP521R1, CRYPT_ALGO_ECDH, CRYPT_ECCCURVE_P521, 
 	  DESCRIPTION( "ECDH P521" ) bitsToBytes( 521 ), 
-	  TLS_MINOR_VERSION_TLS12, TRUE },
+	  TLS_MINOR_VERSION_TLS11, TRUE },
 	{ TLS_GROUP_BRAINPOOLP384R1, CRYPT_ALGO_ECDH, 
 	  CRYPT_ECCCURVE_BRAINPOOL_P384, 
 	  DESCRIPTION( "Brainpool P384" ) bitsToBytes( 384 ), 
-	  TLS_MINOR_VERSION_TLS12, TRUE },
+	  TLS_MINOR_VERSION_TLS11, TRUE },
 	{ TLS_GROUP_BRAINPOOLP512R1, CRYPT_ALGO_ECDH, 
 	  CRYPT_ECCCURVE_BRAINPOOL_P512,
 	  DESCRIPTION( "Brainpool P512" ) bitsToBytes( 512 ), 
-	  TLS_MINOR_VERSION_TLS12, TRUE },
+	  TLS_MINOR_VERSION_TLS11, TRUE },
 #endif /* USE_SHA2_EXT */
 	{ TLS_GROUP_FFDHE2048, CRYPT_ALGO_DH, CRYPT_ECCCURVE_NONE, 
 	  DESCRIPTION( "DH 2048" ) bitsToBytes( 2048 ), 
@@ -414,6 +414,11 @@ const TLS_GROUP_INFO *getTLSGroupInfoEntry( IN_ENUM( TLS_GROUP ) \
 	LOOP_INDEX i;
 
 	REQUIRES_N( isEnumRange( groupType, TLS_GROUP ) );
+	
+	/* We're actually only ever called from one location in 
+	   session/tls_hello.c:fixupServerCryptoOptions() so there's just one 
+	   value that we can be passed */
+	REQUIRES_N( groupType == TLS_GROUP_SECP256R1 );
 
 	LOOP_MED( i = 0, 
 			  i < FAILSAFE_ARRAYSIZE( groupInfoTbl, TLS_GROUP_INFO ) && \
@@ -589,9 +594,13 @@ int readSupportedGroups( INOUT_PTR STREAM *stream,
 
 		/* If we're not using an ECC server key then any curve that we 
 		   support is OK, otherwise we have to make sure that the requested 
-		   curve matches the key */
+		   curve matches the key.  We allow a small amount of wiggle room to 
+		   deal with keygen differences */
+		REQUIRES( !checkOverflowSub( groupInfoPtr->keySize, \
+									 bitsToBytes( 8 ) ) );
 		if( sessionInfoPtr->privateKeyAlgo == CRYPT_ALGO_ECDSA && \
-			groupInfoPtr->keySize != serverKeySize )
+			( serverKeySize > groupInfoPtr->keySize || \
+			  serverKeySize < groupInfoPtr->keySize - bitsToBytes( 8 ) ) )
 			continue;
 
 		/* Because we can have both TLS classic and TLS 1.3 preferred groups 
@@ -610,7 +619,9 @@ int readSupportedGroups( INOUT_PTR STREAM *stream,
 		   if the client proposes 25519 before they propose P256 then that's 
 		   what'll get selected rather than the MTI P256 */
 		if( preferredGroupInfoPtr == NULL && \
-			groupInfoPtr->minTlsVersion <= TLS_MINOR_VERSION_TLS12 )
+			groupInfoPtr->minTlsVersion <= \
+							min( sessionInfoPtr->sessionTLS->maxVersion, \
+								 TLS_MINOR_VERSION_TLS12 ) )
 			{
 			DEBUG_PRINT(( "  Set preferred keyex group to %s.\n", 
 						  groupInfoPtr->description ));
@@ -634,7 +645,7 @@ int readSupportedGroups( INOUT_PTR STREAM *stream,
 #endif /* USE_TLS13 */
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( noSupportedGroups >= 32 )
+	if( noSupportedGroups > 32 )
 		{
 		*extErrorInfoSet = TRUE;
 		retExt( CRYPT_ERROR_OVERFLOW,
@@ -777,9 +788,10 @@ int writeSupportedGroups( INOUT_PTR STREAM *stream,
 		}
 	ENSURES( LOOP_BOUND_OK );
 	ENSURES( cryptStatusOK( status ) );
-	endPos = stell( &localStream );
+	status = endPos = stell( &localStream );
 	sMemDisconnect( &localStream );
-	ENSURES( rangeCheck( endPos, 2, 32 ) );
+	ENSURES( !cryptStatusError( status ) && \
+			 rangeCheck( endPos, 2, 32 ) );
 
 	writeUint16( stream, endPos );
 	return( swrite( stream, buffer, endPos ) );
@@ -835,7 +847,7 @@ static int completeTLS13PqcKeyex( INOUT_PTR \
 	   location and size */
 	memset( &keyAgreeParams, 0, sizeof( KEYAGREE_PARAMS ) );
 	REQUIRES( rangeCheck( mlkemDataLength, 1, KEYAGREE_DATA_SIZE ) );
-	status = sread( stream, &keyAgreeParams.publicValue, mlkemDataLength );
+	status = sread( stream, keyAgreeParams.publicValue, mlkemDataLength );
 	if( cryptStatusError( status ) )
 		return( status );
 #ifndef CONFIG_FUZZ
@@ -863,6 +875,12 @@ static int completeTLS13PqcKeyex( INOUT_PTR \
 				keyAgreeParams.wrappedKey, keyAgreeParams.wrappedKeyLen );
 		handshakeInfo->tls13PqcSecretValueLen = keyAgreeParams.wrappedKeyLen;
 		}
+	else
+		{
+		/* We've already got the secret key value present from earlier */
+		REQUIRES( rangeCheck( handshakeInfo->tls13PqcSecretValueLen, 
+							  MIN_HASHSIZE, CRYPT_MAX_HASHSIZE ) );
+		}
 #else
 	handshakeInfo->tls13PqcSecretValueLen = 32;
 #endif /* CONFIG_FUZZ */
@@ -870,7 +888,7 @@ static int completeTLS13PqcKeyex( INOUT_PTR \
 	/* Now we've got through to the, again, implicitly-located and -sized 
 	   25519 keyex data, process that */
 	memset( &keyAgreeParams, 0, sizeof( KEYAGREE_PARAMS ) );
-	status = sread( stream, &keyAgreeParams.publicValue, X25519_PUBKEY_SIZE );
+	status = sread( stream, keyAgreeParams.publicValue, X25519_PUBKEY_SIZE );
 	if( cryptStatusError( status ) )
 		return( status );
 #ifndef CONFIG_FUZZ
@@ -913,7 +931,19 @@ static int completeTLS13PqcKeyex( INOUT_PTR \
 	}
 #endif /* USE_TLS13 && USE_MLKEM */
 
-/* Complete the keyex */
+/* Complete the keyex.  Note that due to the huge mass of cryptovariables
+   used in TLS 1.3 and their often large sizes (for example with post-magic 
+   algorithms, see the definition of TLS_HANDSHAKE_INFO in session/tls.h) 
+   some of the buffers in the TLS_HANDSHAKE_INFO are reused for variables 
+   that are active at different (non-overlapping) times, or with different 
+   algorithms (the one exception, technically, is 
+   session/tls13_crypy.c:loadHSKeysTLS13() which sMemConnect()s to 
+   handshakeInfo->tls13KeyexValue which is also later the output as 
+   handshakeInfo->premasterSecret.  The read happens before the data is 
+   overwritten but at the point the stream is still connected to it).  
+   
+   When adding new algorithms requiring even more variables, or when 
+   changing this code, check that there are no conflicts caused by this */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 6 ) ) \
 int completeTLSKeyex( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
@@ -932,6 +962,7 @@ int completeTLSKeyex( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
 
 	REQUIRES( sanityCheckTLSHandshakeInfo( handshakeInfo ) );
+	REQUIRES( !isTLS13 || handshakeInfo->keyexGroupInfo != NULL );
 	REQUIRES( isBooleanValue( isServer ) );
 	REQUIRES( isBooleanValue( isTLSLTS ) );
 	REQUIRES( isBooleanValue( isTLS13 ) );
@@ -1062,12 +1093,13 @@ int completeTLSKeyex( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 			|<- fldSize --> |<- fldSize --> | */
 	if( handshakeInfo->keyexAlgo == CRYPT_ALGO_ECDH && !isTLSLTS )
 		{
-		const int xCoordLen = ( keyAgreeParams.wrappedKeyLen - 1 ) / 2;
+		int xCoordLen;
 
 		REQUIRES( keyAgreeParams.wrappedKeyLen >= MIN_PKCSIZE_ECCPOINT && \
 				  keyAgreeParams.wrappedKeyLen <= MAX_PKCSIZE_ECCPOINT && \
 				  ( keyAgreeParams.wrappedKeyLen & 1 ) == 1 && \
 				  keyAgreeParams.wrappedKey[ 0 ] == 0x04 );
+		xCoordLen = ( keyAgreeParams.wrappedKeyLen - 1 ) / 2;
 		REQUIRES( boundsCheck( 1, xCoordLen, CRYPT_MAX_PKCSIZE ) );
 		memmove( keyAgreeParams.wrappedKey, 
 				 keyAgreeParams.wrappedKey + 1, xCoordLen );

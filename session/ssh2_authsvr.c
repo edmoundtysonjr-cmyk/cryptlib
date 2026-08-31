@@ -390,6 +390,10 @@ static int sendResponseSuccess( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	
+	/* Insert a random delay before we communicate anything back to the 
+	   client */
+	delayRandom();
+	
 	status = openPacketStreamSSH( &stream, sessionInfoPtr, 
 								  SSH_MSG_USERAUTH_SUCCESS );
 	if( cryptStatusError( status ) )
@@ -407,6 +411,10 @@ static int sendResponseFailure( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	int status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
+
+	/* Insert a random delay before we communicate anything back to the 
+	   client */
+	delayRandom();
 
 	/* Straight failure response */
 	status = openPacketStreamSSH( &stream, sessionInfoPtr, 
@@ -432,6 +440,10 @@ static int sendResponseFailureInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
 	REQUIRES( isBooleanValue( allowPubkeyAuth ) );
+
+	/* Insert a random delay before we communicate anything back to the 
+	   client */
+	delayRandom();
 
 	/* Failure response but really a means of telling the client how they 
 	   can authenticate.  What to send as the allowed method is a bit 
@@ -595,7 +607,6 @@ static int processPasswordAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* Move on to the password associated with the user name */
-	REQUIRES( DATAPTR_ISVALID( attributeListPtr->next ) );
 	attributeListPtr = DATAPTR_GET( attributeListPtr->next );
 	ENSURES( attributeListPtr != NULL && \
 			 attributeListPtr->attributeID == CRYPT_SESSINFO_PASSWORD );
@@ -653,6 +664,7 @@ static int readPublicKey( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
 	REQUIRES( isBooleanValue( isInitialPKMessage ) );
+	REQUIRES( sessionInfoPtr->iKeyexAuthContext == CRYPT_ERROR );
 
 	/* Skip the first of the three copies of the algorithm name (see the 
 	   comment in ssh2_cli.c for more on this).  We don't do anything with 
@@ -770,7 +782,7 @@ static int checkPublicKeySig( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isReadPtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
-	assert( isReadPtr( userName, userNameLength ) );
+	assert( isReadPtrDynamic( userName, userNameLength ) );
 
 	REQUIRES( userNameLength > 0 && userNameLength <= CRYPT_MAX_TEXTSIZE );
 
@@ -914,6 +926,7 @@ static int processPubkeyAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	int status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
+	assert( isReadPtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
 	assert( isReadPtr( authInfo, sizeof( AUTH_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
@@ -1063,7 +1076,7 @@ static int readAuthPacketHeader( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									SSH_AUTHTYPE_TYPE *authType )
 	{
 	const BOOLEAN allowPubkeyAuth = \
-			( sessionInfoPtr->cryptKeyset != CRYPT_ERROR ) ? TRUE : FALSE;
+			isHandleRangeValid( sessionInfoPtr->cryptKeyset ) ? TRUE : FALSE;
 	const AUTHTYPE_INFO *authTypeInfoTblPtr = allowPubkeyAuth ? \
 			authTypeInfoTbl : authTypeInfoPasswordTbl;
 	const int authTypeInfoTblSize = allowPubkeyAuth ? \
@@ -1146,7 +1159,7 @@ static int readAuthPacketHeader( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	ENSURES( i < authTypeInfoTblSize );
 	if( authTypeInfoPtr == NULL )
 		{
-		zeroise( &authInfo->password, CRYPT_MAX_TEXTSIZE );
+		zeroise( authInfo->password, CRYPT_MAX_TEXTSIZE );
 				 /* Need to keep other fields intact for error message */
 
 		retExtSan( CRYPT_ERROR_BADDATA,
@@ -1208,7 +1221,7 @@ static int readAuthPacketBody( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	int status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
-	assert( isReadPtr( authInfo, sizeof( AUTH_INFO ) ) );
+	assert( isWritePtr( authInfo, sizeof( AUTH_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
 	REQUIRES( isEnumRange( authType, SSH_AUTHTYPE ) );
@@ -1472,7 +1485,7 @@ static int processUserAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		if( cryptStatusError( status ) )
 			{
 			sMemDisconnect( &stream );
-			zeroise( &authInfo.password, CRYPT_MAX_TEXTSIZE );
+			zeroise( authInfo.password, CRYPT_MAX_TEXTSIZE );
 					 /* Need to keep other fields intact for error 
 					    message */
 
@@ -1493,7 +1506,7 @@ static int processUserAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		if( attributeListPtr == NULL )
 			{
 			sMemDisconnect( &stream );
-			zeroise( &authInfo.password, CRYPT_MAX_TEXTSIZE );
+			zeroise( authInfo.password, CRYPT_MAX_TEXTSIZE );
 					 /* Need to keep other fields intact for error 
 					    message */
 
@@ -1671,7 +1684,7 @@ static int processUserAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								CRYPT_MAX_TEXTSIZE, ATTR_FLAG_EPHEMERAL );
 	if( cryptStatusError( status ) )
 		{
-		zeroise( &authInfo.password, CRYPT_MAX_TEXTSIZE );
+		zeroise( authInfo.password, CRYPT_MAX_TEXTSIZE );
 				 /* Need to keep other fields intact for error message */
 
 		retExtSan( status,
@@ -1811,7 +1824,9 @@ static int processFixedAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			{
 			/* The user has authenticated successfully and this fact has 
 			   been verified in a (reasonably) failsafe manner, we're 
-			   done */
+			   done.  We also set the authentication-complete check value 
+			   that enables data to be exchanged over the SSH link */
+			sessionInfoPtr->authComplete = TRUE;
 			return( CRYPT_OK );
 			}
 		ENSURES( cryptStatusError( authInfo.status ) );
@@ -1830,6 +1845,109 @@ static int processFixedAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* The user still hasn't successfully authenticated after multiple 
 	   attempts, we're done */
 	return( authInfo.status );
+	}
+
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
+static int processAuthConfirmation( INOUT_PTR SESSION_INFO *sessionInfoPtr,
+									IN_PTR \
+										const SSH_HANDSHAKE_INFO *handshakeInfo,
+									INOUT_PTR FAILSAFE_AUTH_INFO *authInfo )
+	{
+	SSH_INFO *sshInfo = sessionInfoPtr->sessionSSH;
+	int status;
+
+	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
+	assert( isReadPtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
+	assert( isWritePtr( authInfo, sizeof( FAILSAFE_AUTH_INFO ) ) );
+
+	/* We should only get here if confirmation of user authentication is 
+	   required */
+	REQUIRES( sshInfo->confirmUserAuth == TRUE );
+
+	/* If the caller accepted the previously-performed authentication then 
+	   we're done.  We also set the authentication-complete check value that 
+	   enables data to be exchanged over the SSH link.
+		   
+	   Note that this isn't the authentication itself but merely the caller 
+	   indicating whether they want to accept the previous authentication 
+	   results.  Since this is done through cryptSetAttribute() there isn't 
+	   any failsafe way to indicate this, the caller can only pass in 
+	   TRUE -> AUTHRESPONSE_SUCCESS or FALSE -> AUTHRESPONSE_FAILURE */
+	if( sessionInfoPtr->authResponse == AUTHRESPONSE_SUCCESS )
+		{
+		const SESSION_ATTRIBUTE_LIST *attributeListPtr;
+
+		/* The caller has confirmed an authentication attempt, make sure 
+		   that this is plausible: There's a user name followed by a 
+		   dynamically-added password present, and we haven't already 
+		   completed the authentication in some other manner */
+		attributeListPtr = findSessionInfo( sessionInfoPtr, 
+											CRYPT_SESSINFO_USERNAME );
+		if( attributeListPtr != NULL )
+			{
+			////////////////////////////////////////////////////////////////
+			// Check that attributeListPtr->flags has ATTR_FLAG_FIXEDWIDTHTEXT
+			// once this is implemented to replace ATTR_FLAG_EPHEMERAL
+			////////////////////////////////////////////////////////////////
+			attributeListPtr = DATAPTR_GET( attributeListPtr->next );
+			if( attributeListPtr != NULL && \
+				( attributeListPtr->attributeID != CRYPT_SESSINFO_PASSWORD || \
+				  !TEST_FLAG( attributeListPtr->flags, ATTR_FLAG_EPHEMERAL ) ) )
+				attributeListPtr = NULL;
+			}
+		if( attributeListPtr == NULL || sessionInfoPtr->authComplete )
+			{
+			authInfo->status = CRYPT_ERROR_PERMISSION;
+			retExt( CRYPT_ERROR_PERMISSION,
+					( CRYPT_ERROR_PERMISSION, SESSION_ERRINFO, 
+					  "Authentication confirmation doesn't correspond to "
+					  "a confirmation-needed authentication attempt" ) );
+			}
+
+		/* Acknowledge the successful authentication and record that we're 
+		   done */			
+		status = sendResponseSuccess( sessionInfoPtr );
+		if( cryptStatusError( status ) )
+			{
+			authInfo->status = status;
+			return( status );
+			}
+		authInfo->status = CRYPT_OK;
+		authInfo->userAuthInfo = USERAUTH_SUCCESS;
+		sessionInfoPtr->authComplete = TRUE;
+		sshInfo->confirmUserAuth = FALSE;
+
+		return( CRYPT_OK );
+		}
+
+	/* The caller denied the authentication, inform the client and let them 
+	   have another go at authenticating.  We set allowPubkeyAuth to FALSE 
+	   and authState to AUTHSTATE_IN_PROGRESS_PWONLY because the only retry-
+	   able method at this point is password authentication, so we can 
+	   assume CREDENTIAL_USERNAME_PRESENT rather than having to figure out 
+	   which part of the Lucy-and-Charlie-Brown process we're in.
+		   
+	   The signalling here is a bit awkward because for whatever the caller 
+	   decides is the final failed authentication attempt the client doesn't 
+	   get a failureInfo message but has the connection closed on them since 
+	   there's no way to tell in advance when the caller will decide to end 
+	   the negotiation */
+	status = sendResponseFailureInfo( sessionInfoPtr, FALSE );
+	if( cryptStatusError( status ) )
+		{
+		authInfo->status = status;
+		return( status );
+		}
+	sessionInfoPtr->authResponse = AUTHRESPONSE_NONE;
+	authInfo->status = processUserAuth( sessionInfoPtr, handshakeInfo, 
+										&authInfo->userAuthInfo, 
+										CREDENTIAL_USERNAME_PRESENT, 
+										AUTHSTATE_IN_PROGRESS_PWONLY );
+	ENSURES( !( authInfo->status == OK_SPECIAL && \
+				( authInfo->userAuthInfo == USERAUTH_NOOP || \
+				  authInfo->userAuthInfo == USERAUTH_NOOP_2 ) ) );
+
+	return( authInfo->status );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
@@ -1889,52 +2007,43 @@ int processServerAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									AUTHSTATE_FINAL_MESSAGE );
 			}
 		sshInfo->authRead = TRUE;
-		}
-	else
-		{
-		/* If the caller accepted the authentication then we're done */
-		if( sessionInfoPtr->authResponse == AUTHRESPONSE_SUCCESS )
-			return( sendResponseSuccess( sessionInfoPtr ) );
-
-		/* The caller denied the authentication, inform the client and let
-		   them have another go at authenticating.  We set allowPubkeyAuth 
-		   to FALSE and authState to AUTHSTATE_IN_PROGRESS_PWONLY because 
-		   the only retry-able method at this point is password 
-		   authentication, so we can assume CREDENTIAL_USERNAME_PRESENT
-		   rather than having to figure out which part of the Lucy-and-
-		   Charlie-Brown process we're in.
-		   
-		   The signalling here is a bit awkward because for whatever the 
-		   caller decides is the final failed authentication attempt the 
-		   client doesn't get a failureInfo message but has the connection 
-		   closed on them since there's no way to tell in advance when the 
-		   caller will decide to end the negotiation */
-		status = sendResponseFailureInfo( sessionInfoPtr, FALSE );
-		if( cryptStatusError( status ) )
-			return( status );
-		sessionInfoPtr->authResponse = AUTHRESPONSE_NONE;
-		authInfo.status = processUserAuth( sessionInfoPtr, handshakeInfo, 
-									&authInfo.userAuthInfo, 
-									CREDENTIAL_USERNAME_PRESENT, 
-									AUTHSTATE_IN_PROGRESS_PWONLY );
 		ENSURES( !( authInfo.status == OK_SPECIAL && \
 					( authInfo.userAuthInfo == USERAUTH_NOOP || \
 					  authInfo.userAuthInfo == USERAUTH_NOOP_2 ) ) );
 		}
+	else
+		{
+		status = processAuthConfirmation( sessionInfoPtr, handshakeInfo, 
+										  &authInfo );
+		REQUIRES( authInfo.status == status );
+		}
+
 	ENSURES( ( cryptStatusOK( authInfo.status ) && \
+			   authInfo.canary == OK_SPECIAL && \
 			   authInfo.userAuthInfo == USERAUTH_SUCCESS ) || \
 			 ( ( cryptStatusError( authInfo.status ) || \
 				 authInfo.status == OK_SPECIAL ) && \
+			   authInfo.canary == OK_SPECIAL && \
 			   authInfo.userAuthInfo != USERAUTH_SUCCESS ) );
 	if( !memcmp( &authInfo, &failsafeAuthSuccessTemplate, \
 				 sizeof( FAILSAFE_AUTH_INFO ) ) )
 		{
 		/* The user has authenticated successfully and this fact has been 
-		   verified in a (reasonably) failsafe manner, we're done */
+		   verified in a (reasonably) failsafe manner, we're done.  We also
+		   set the authentication-complete check value that enables data to 
+		   be exchanged over the SSH link */
+		sessionInfoPtr->authComplete = TRUE;
 		return( CRYPT_OK );
 		}
 	ENSURES( cryptStatusError( authInfo.status ) );
-	return( ( authInfo.status == OK_SPECIAL ) ? CRYPT_ENVELOPE_RESOURCE : \
-												authInfo.status );
+	if( authInfo.status == OK_SPECIAL && \
+		authInfo.userAuthInfo == USERAUTH_CALLERCHECK ) 
+		{
+		/* The caller has to confirm the authentication, remember this for 
+		   the next round */
+		sshInfo->confirmUserAuth = TRUE;
+		return( CRYPT_ENVELOPE_RESOURCE );
+		}
+	return( authInfo.status );
 	}
 #endif /* USE_SSH */

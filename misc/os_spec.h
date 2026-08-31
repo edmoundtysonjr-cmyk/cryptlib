@@ -924,33 +924,6 @@ typedef int					BOOLEAN_INT;
 #ifdef EBCDIC_CHARS
   #include <stdarg.h>
 
-  #define ASCII_ALPHA			0x01
-  #define ASCII_LOWER			0x02
-  #define ASCII_NUMERIC			0x04
-  #define ASCII_SPACE			0x08
-  #define ASCII_UPPER			0x10
-  #define ASCII_HEX				0x20
-  extern const BYTE asciiCtypeTbl[];
-
-  #define isAlnum( ch ) \
-		  ( asciiCtypeTbl[ byteToInt( ch ) ] & ( ASCII_ALPHA | ASCII_NUMERIC ) )
-  #define isAlpha( ch ) \
-		  ( asciiCtypeTbl[ byteToInt( ch ) ] & ASCII_ALPHA )
-  #define isDigit( ch ) \
-		  ( asciiCtypeTbl[ byteToInt( ch ) ] & ASCII_NUMERIC )
-  #define isPrint( ch ) \
-		  ( ( byteToInt( ch ) ) >= 0x20 && ( byteToInt( ch ) ) <= 0x7E )
-  #define isXDigit( ch ) \
-		  ( asciiCtypeTbl[ byteToInt( ch ) ] & ASCII_HEX )
-  #define toLower( ch ) \
-		  ( ( asciiCtypeTbl[ byteToInt( ch ) ] & ASCII_UPPER ) ? \
-			( byteToInt( ch ) ) + 32 : ( byteToInt( ch ) ) )
-  #define toUpper( ch ) \
-		  ( ( asciiCtypeTbl[ byteToInt( ch ) ] & ASCII_LOWER ) ? \
-			( byteToInt( ch ) ) - 32 : ( byteToInt( ch ) ) )
-
-  /* We can't annotate these functions because os_spec.h is pulled in before
-     analyse.h, so the required annotations don't exist yet */
   int strCompare( const char *src, const char *dest, const int length );
   int strCompareZ( const char *src, const char *dest );
   int sPrintf_s( char *buffer, const int bufSize, const char *format, ... );
@@ -963,6 +936,9 @@ typedef int					BOOLEAN_INT;
 /* Compare two strings in a case-insensitive manner.  These are then mapped 
    to the abstract functions strCompare() (with length) and strCompareZ() 
    (zero-terminated) */
+
+#if 0	/* Replaced with deterministic versions, see the long comment for
+		   character classification functions further down */
 
 #if defined( __UNIX__ ) && !( defined( __CYGWIN__ ) )
   #include <strings.h>
@@ -992,6 +968,8 @@ typedef int					BOOLEAN_INT;
   #include <strings.h>
   #define strnicmp	strncasecmp
   #define stricmp	strcasecmp
+#elif defined( __Nucleus__ )
+  #include <nu_string.h>
 #elif defined( __ARINC653__ ) || defined( __CMSIS__ ) || \
 	  defined( __embOS__ ) || defined( __BEOS__ ) || \
 	  defined( __IAR_SYSTEMS_ICC__ ) || defined( __ITRON__ ) || \
@@ -1009,26 +987,124 @@ typedef int					BOOLEAN_INT;
 #endif /* OS-specific case-insensitive string compares */
 
 #ifndef EBCDIC_CHARS
-  #if defined( __Nucleus__ )
-	#include <nu_ctype.h>
-	#include <nu_string.h>
-  #else
-	#include <ctype.h>
-  #endif /* OS-specific includes */
-
-  #define isAlnum( ch )			isalnum( byteToInt( ch ) )
-  #define isAlpha( ch )			isalpha( byteToInt( ch ) )
-  #define isDigit( ch )			isdigit( byteToInt( ch ) )
-  #define isPrint( ch )			isprint( byteToInt( ch ) )
-  #define isXDigit( ch )		isxdigit( byteToInt( ch ) )
-  #define toLower( ch )			tolower( byteToInt( ch ) )
-  #define toUpper( ch )			toupper( byteToInt( ch ) )
-
   #define strCompareZ( str1, str2 )	\
 								stricmp( str1, str2 )
   #define strCompare( str1, str2, len )	\
 								strnicmp( str1, str2, len )
 #endif /* EBCDIC_CHARS */
+#endif /* 0 */
+
+/* Character classification functions.  These are a huge problem due to i18n 
+   and the way that the C standard/Posix handle it.  For example for 
+   strcasecmp() Posix says 
+   (https://pubs.opengroup.org/onlinepubs/000095399/functions/strcasecmp.html) 
+   "In the POSIX [= "C"] locale, strcasecmp() and strncasecmp() shall behave 
+   as if the strings had been converted to lowercase and then a byte 
+   comparison performed. The results are unspecified in other locales", the 
+   usual locale booby trap where the behaviour of standard functions suddenly 
+   changes based on an invisible setting that you have no control over 
+   elsewhere in the system, see e.g. 
+   https://open-std.org/JTC1/SC22/WG14/www/docs/n3054.pdf section 7.4.
+
+   This means that not only can't we rely on string-compares, we also can't 
+   rely on most of the standard isxyz() functions to reliably report that 
+   characters are in an expected range or even to not segfault (see
+   https://drewdevault.com/blog/A-story-of-two-libcs/, which dissects 
+   glibc's isalnum(), A-Z, a-z, 0-9, and finds that it depends on "five 
+   macros, whether or not you’re using a C++ compiler, the endianness of 
+   your machine, a look-up table, thread-local storage, and two pointer 
+   dereferences").  In particular since we're dealing with potentially 
+   hostile input we need versions of these functions that can't be abused to 
+   produce unexpected behaviour, which means that we have to provide them 
+   ourselves.  For example:
+
+	setlocale( LC_ALL, "cyka_blyat.cp1251" );
+	printf( "isalnum = %d", isalnum( '\xE0' ) );
+
+   reports 'true' (0xE0 = CP1251 Cyrillic 'a' which renders identically to 
+   0x61 ASCII 'a') for a character that's not expected to be alnum.  The 
+   same happens with tolower()/toupper() which are locale-dependent, an 
+   example being the Turkish dotless i which produces the non-transitive 
+   conversion sequence '\dotless-i' -> 'I' -> 'i', where '\dotless-i' = 
+   8859-9 0xFD (this occurs because there's also a dotted I, so i -> 
+   dotted-I, dotless-i -> I).  This makes the functions nondeterministic,
+   we can't tell what result one will produce, and since the state is
+   global but any thread can change it at any time two successive calls
+   to the same function with the same data can produce different results.
+
+   The booby-trapped functions that we need to replace with deterministic
+   forms are isalnum(), isalpha(), isprint(), tolower(), and toupper().  
+   For these, the musl library (and several others) has a clever 
+   implementation:
+
+	isalpha( int c ) -> ( ( unsigned ) c | 0x20 ) - 'a' < 26
+	isdigit( int c ) -> ( unsigned ) c - '0' < 10
+
+   that relies on ASCII text encoding (which is the case here since we 
+   always use ASCII internally) and assorted clever tricks based on that.  
+   It also has the advantage that it only evaluates each argument once so 
+   it can be used as a macro.
+
+   Alongside these we also need to replace isdigit() and isxdigit() because 
+   many embedded systems have extremely naive implementations of all of the 
+   isxxx() functions, typically some variant of '_ctypes[(ch)+1] & (_U | _L)' 
+   (_U and _L are the bitmasks for upper- and lowercase in a 257-byte table, 
+   the +1 offset being present to allow for EOF = -1 as an input).  These 
+   only work in the presence of out-of-range input because the system 
+   typically has no memory protection and so random memory reads aren't 
+   trapped.
+
+   Since we're never performing these operations intensively (they're 
+   typically used to check individual characters or short strings), we make 
+   them actual functions with explicit comparisons that make their operation 
+   easier to understand.  We could also use the EBCDIC-path asciiCtypeTbl[] 
+   for the lookups but the explicit-range-check function forms also allow 
+   for input range checking */
+
+#if defined( _MSC_VER )
+  /* Make sure that we don't use the locale-dependent forms */
+  #pragma deprecated( isalnum, isalpha, isdigit, islower, isprint, isspace, isupper, isxdigit, tolower, toupper )
+#elif defined( __GNUC__ ) || defined( __clang__ )
+  #pragma GCC poison isalnum isalpha isdigit islower isprint isspace isupper isxdigit tolower toupper
+#endif /* GCC || clang */
+
+CHECK_RETVAL_BOOL \
+BOOLEAN isAlpha( IN_BYTE const int ch );
+CHECK_RETVAL_BOOL \
+BOOLEAN isAlNum( IN_BYTE const int ch );
+CHECK_RETVAL_BOOL \
+BOOLEAN isPrint( IN_BYTE const int ch );
+CHECK_RETVAL_BOOL \
+BOOLEAN isDigit( IN_BYTE const int ch );
+CHECK_RETVAL_BOOL \
+BOOLEAN isXDigit( IN_BYTE const int ch );
+CHECK_RETVAL_RANGE_NOERROR( 0, 0xFF ) \
+int toLower( IN_BYTE const int ch );
+CHECK_RETVAL_RANGE_NOERROR( 0, 0xFF ) \
+int toUpper( IN_BYTE const int ch );
+
+/* Similarly deterministic forms of the string-compare functions.  When 
+   calling these functions to compare against a literal string, the literal
+   should be the second value, e.g. 
+   strSame( string, "[Autodetect]", 12 ) */
+
+#if defined( _MSC_VER )
+  /* Make sure that we don't use the locale-dependent forms */
+  #pragma deprecated( stricmp, _stricmp, strnicmp, _strnicmp )
+#elif defined( __GNUC__ ) || defined( __clang__ )
+  #pragma GCC poison stricmp strnicmp
+#endif /* GCC || clang */
+
+#pragma deprecated( strCompare, strCompareZ )
+
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+BOOLEAN strSame( IN_STRING_LEN( length ) const char *src, 
+				 IN_STRING_LEN( length ) const char *dest, 
+				 IN_LENGTH_ATTRIBUTE const int length );
+#ifdef USE_DNSSRV
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+BOOLEAN strSameZ( IN_STRING const char *src, IN_STRING const char *dest );
+#endif /* USE_DNSSRV */
 
 /****************************************************************************
 *																			*
@@ -1080,7 +1156,7 @@ typedef int					BOOLEAN_INT;
 	  ( defined( __IBMC__ ) && !defined( __IBM__ALIGN ) ) || \
 	  defined( __KEIL__ ) || defined( __SUNPRO_C ) || \
 	  defined( __TI_COMPILER_VERSION__ )
-  #define ALIGN_SPECIFIER( alignment )		__attribute__(( aligned( alignment ) ) )
+  #define ALIGN_SPECIFIER( alignment )		__attribute__(( aligned( alignment ) ))
 #elif defined( __CC_ARM ) || \
 	  ( defined( __IBMC__ ) && defined( __IBM__ALIGN ) ) 
   #define ALIGN_SPECIFIER( alignment )		__align( alignment )
@@ -1166,9 +1242,9 @@ typedef int					BOOLEAN_INT;
 		( ( pointer ) == ptr_align( pointer, ALIGN_AMOUNT ) )
 
 /* Occasionally we need to provide opaque storage for state data that's used
-  by the function that we're calling.  The state data may have specific
-  alignment requirements so we declare a data type that will result in the 
-  state data being appropriately aligned.  It's used as follows:
+   by the function that we're calling.  The state data may have specific
+   alignment requirements so we declare a data type that will result in the 
+   state data being appropriately aligned.  It's used as follows:
 
 	typedef ALIGN_DATA_TYPE( THING_STATE[ 8 ] ); 
   

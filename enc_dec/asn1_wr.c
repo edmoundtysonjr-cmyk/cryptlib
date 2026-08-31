@@ -322,6 +322,7 @@ RETVAL_RANGE_NOERROR( 0, MAX_INTLENGTH_SHORT ) STDC_NONNULL_ARG( ( 1 ) ) \
 int signedBignumSize( IN_PTR TYPECAST( BIGNUM * ) const struct BN *bignum )
 	{
 	const int length = BN_num_bytes( bignum );
+	const int highBit = BN_high_bit( bignum );
 
 	assert( isReadPtr( bignum, sizeof( BIGNUM ) ) );
 
@@ -330,13 +331,16 @@ int signedBignumSize( IN_PTR TYPECAST( BIGNUM * ) const struct BN *bignum )
 	   individually check the return value of each function call for a
 	   condition that can only be caused by an internal error, so we throw
 	   an exception in debug mode but otherwise convert the condition to
-	   a no-op length value */
-	if( cryptStatusError( length ) )
+	   a no-op length value.
+	   
+	   For the same reason we don't check for a length of zero, which will
+	   be caught later by writeBignumInteger() via exportBignum() */
+	if( cryptStatusError( length ) || cryptStatusError( highBit ) )
 		retIntError_Ext( 0 );
 
 	/* Return the bignum length plus a leading zero byte if the high bit is 
 	   set */
-	return( length + ( ( BN_high_bit( ( BIGNUM * ) bignum ) ) ? 1 : 0 ) );
+	return( length + highBit );
 	}
 #endif /* USE_PKC */
 

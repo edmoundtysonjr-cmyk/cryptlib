@@ -51,7 +51,7 @@ static int writePacketMetadata( OUT_BUFFER( dataMaxLength, *dataLength ) \
 								IN_LENGTH_Z const int payloadLength )
 	{
 	STREAM stream;
-	int status;
+	int position DUMMY_INIT, status;
 
 	assert( isWritePtrDynamic( data, dataMaxLength ) );
 	assert( isWritePtr( dataLength, sizeof( int ) ) );
@@ -78,10 +78,13 @@ static int writePacketMetadata( OUT_BUFFER( dataMaxLength, *dataLength ) \
 	sputc( &stream, version );
 	status = writeUint16( &stream, payloadLength );
 	if( cryptStatusOK( status ) )
-		*dataLength = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
-
-	return( status );
+	if( cryptStatusError( status ) )
+		return( status );
+	*dataLength = position;
+	
+	return( CRYPT_OK );
 	}
 
 #ifdef USE_TLS13
@@ -96,7 +99,7 @@ static int writePacketMetadataTLS13( OUT_BUFFER( dataMaxLength, *dataLength ) \
 									 IN_LENGTH_Z const int payloadLength )
 	{
 	STREAM stream;
-	int status;
+	int position DUMMY_INIT, status;
 
 	assert( isWritePtrDynamic( data, dataMaxLength ) );
 	assert( isWritePtr( dataLength, sizeof( int ) ) );
@@ -119,10 +122,13 @@ static int writePacketMetadataTLS13( OUT_BUFFER( dataMaxLength, *dataLength ) \
 	REQUIRES( !checkOverflowAdd( payloadLength, GCMICV_SIZE ) );
 	status = writeUint16( &stream, payloadLength + GCMICV_SIZE );
 	if( cryptStatusOK( status ) )
-		*dataLength = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
+	if( cryptStatusError( status ) )
+		return( status );
+	*dataLength = position;
 
-	return( status );
+	return( CRYPT_OK );
 	}
 #endif /* USE_TLS13 */
 
@@ -176,14 +182,15 @@ int encryptData( const SESSION_INFO *sessionInfoPtr,
 	   there's always at least one byte of padding present */
 	if( sessionInfoPtr->cryptBlocksize > 1 )
 		{
-		const int paddedSize = getPaddedSize( payloadLength + 1 );
-		const int padSize = paddedSize - payloadLength;
+		int paddedSize, padSize;
 		LOOP_INDEX i;
 
-		ENSURES( !cryptStatusError( paddedSize ) );
 		REQUIRES( !checkOverflowAdd( payloadLength, 1 ) );
+		paddedSize = getPaddedSize( payloadLength + 1 );
+		ENSURES( !cryptStatusError( paddedSize ) );
 		ENSURES( isBufsizeRangeMin( paddedSize, 16 ) ); 
 		REQUIRES( !checkOverflowSub( paddedSize, payloadLength ) );
+		padSize = paddedSize - payloadLength;
 		ENSURES( padSize > 0 && padSize <= 255 && \
 				 length + padSize <= dataMaxLength );
 
@@ -547,7 +554,8 @@ int checkMacTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   payload, this can happen with some versions of OpenSSL that send 
 	   zero-length blocks as a kludge to work around pre-TLS 1.1 chosen-IV
 	   attacks */
-	if( TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_ENCTHENMAC ) && \
+	if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
+				   TLS_PFLAG_ENCTHENMAC ) && \
 		tlsInfo->ivSize > 0 )
 		{
 		/* When using encrypt-then-MAC and TLS 1.1+ explicit IVs, the IV is
@@ -743,6 +751,7 @@ int initCryptBernstein( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		iMacContext = sessionInfoPtr->iAuthOutContext;
 		iCryptContext = sessionInfoPtr->iCryptOutContext;
 		}
+	REQUIRES( tlsInfo->aeadSaltSize >= BERNSTEIN_IV_SIZE );
 
 	/* Assemble the Chacha20 IV */
 	sMemOpen( &stream, ivBuffer, CRYPT_MAX_IVSIZE );
@@ -882,7 +891,9 @@ static int macDataTLSBernstein( IN_HANDLE const CRYPT_CONTEXT iHashContext,
 		return( status );
 
 	/* Set up the assorted unnecessary additional values that need to be 
-	   MAC'd */
+	   MAC'd.  We only encode as many length bytes as will actually be 
+	   present, so one byte for the AAD length and two for the payload 
+	   length */
 	aadPadLength = ( 16 - ( aadLength % 16 ) ) % 16;
 	payloadPadLength = ( 16 - ( payloadLength % 16 ) ) % 16;
 	memset( lengthBuffer, 0, 16 );
@@ -899,8 +910,11 @@ static int macDataTLSBernstein( IN_HANDLE const CRYPT_CONTEXT iHashContext,
 		krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH, 
 						 ( MESSAGE_CAST ) zeroes, aadPadLength );
 		}
-	krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH, 
-					 ( MESSAGE_CAST ) payload, payloadLength );
+	if( payloadLength > 0 )
+		{
+		krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH, 
+						 ( MESSAGE_CAST ) payload, payloadLength );
+		}
 	if( payloadPadLength > 0 )
 		{
 		krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH, 
@@ -1196,7 +1210,8 @@ int completeTLSHashedMAC( IN_HANDLE const CRYPT_CONTEXT md5context,
 						  IN_RANGE( 1, 64 ) const int labelLength, 
 						  IN_BUFFER( masterSecretLen ) \
 								const BYTE *masterSecret, 
-						  IN_LENGTH_SHORT const int masterSecretLen )
+						  IN_LENGTH_SHORT_MIN( 16 ) \
+								const int masterSecretLen )
 	{
 	MECHANISM_DERIVE_INFO mechanismInfo;
 	MESSAGE_DATA msgData;
@@ -1215,6 +1230,7 @@ int completeTLSHashedMAC( IN_HANDLE const CRYPT_CONTEXT md5context,
 	REQUIRES( labelLength > 0 && labelLength <= 64 && \
 			  labelLength + MD5MAC_SIZE + SHA1MAC_SIZE <= \
 						64 + ( CRYPT_MAX_HASHSIZE * 2 ) );
+	REQUIRES( isShortIntegerRangeMin( masterSecretLen, 16 ) );
 
 	/* Clear return value */
 	*hashValuesLen = 0;
@@ -1264,7 +1280,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 2, 4, 5, 7 ) ) \
 int completeTLS12HashedMAC( IN_HANDLE const CRYPT_CONTEXT sha2context,
 							OUT_BUFFER( hashValuesMaxLen, *hashValuesLen ) \
 								BYTE *hashValues, 
-							IN_LENGTH_SHORT_MIN( TLS_HASHEDMAC_SIZE ) \
+							IN_LENGTH_SHORT_MIN( CRYPT_MAX_HASHSIZE ) \
 								const int hashValuesMaxLen,
 							OUT_LENGTH_BOUNDED_Z( hashValuesMaxLen ) \
 								int *hashValuesLen,
@@ -1272,7 +1288,8 @@ int completeTLS12HashedMAC( IN_HANDLE const CRYPT_CONTEXT sha2context,
 							IN_RANGE( 1, 64 ) const int labelLength, 
 							IN_BUFFER( masterSecretLen ) \
 								const BYTE *masterSecret, 
-							IN_LENGTH_SHORT const int masterSecretLen,
+							IN_LENGTH_SHORT_MIN( 16 ) \
+								const int masterSecretLen,
 							IN_BOOL const BOOLEAN fullSizeMAC )
 	{
 	MECHANISM_DERIVE_INFO mechanismInfo;
@@ -1286,8 +1303,10 @@ int completeTLS12HashedMAC( IN_HANDLE const CRYPT_CONTEXT sha2context,
 	assert( isReadPtrDynamic( masterSecret, masterSecretLen ) );
 
 	REQUIRES( isHandleRangeValid( sha2context ) );
-	REQUIRES( isShortIntegerRangeMin( hashValuesMaxLen, 32 ) );
+	REQUIRES( isShortIntegerRangeMin( hashValuesMaxLen, 
+									  CRYPT_MAX_HASHSIZE ) );
 	REQUIRES( labelLength > 0 && labelLength <= 64 );
+	REQUIRES( isShortIntegerRangeMin( masterSecretLen, 16 ) );
 	REQUIRES( isBooleanValue( fullSizeMAC ) );
 
 	/* Clear return value */

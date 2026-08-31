@@ -35,13 +35,20 @@
    as a reaction to PKIX' refusal to accommodate the real world, but that's 
    for the web PKI and goes on for 55 pages with all manner of web-mandated 
    crazyness in it like a requirement to work with and convert punycode 
-   domain names as well as allowing regex-style wildcards and other things, 
+   domain names (IDNs), a come-hither sign for attackers masquerading as a 
+   standard, as well as allowing regex-style wildcards and other things, 
    which pretty much guarantees breakage due to its enormous complexity and 
    attack surface.
    
    To follow the principle of least surprise and minimise the potential for 
    mischief we only allow a wildcard at the start of the domain, and don't 
    allow wildcards for the first- or second-level names.  
+   
+   Following the maxim that the only encoding rule is memcpy() and the only
+   comparison rule is memcmp(), we don't try and canonicalise or regularise
+   the strings that we're working with, either they compare verbatim or they 
+   don't (see the long discussion in certs/dn_*.c as well as the X.509 Style 
+   Guide for the background behind this).
    
    Since this code is going to result in server names (and therefore 
    connections) being rejected, it's unusually loquacious about the reasons 
@@ -76,9 +83,11 @@ static int matchName( IN_BUFFER( serverNameLength ) const BYTE *serverName,
 	/* Clear return value */
 	clearErrorInfo( errorInfo );
 
-	/* Extract the FQDN portion from the certificate name */
+	/* Extract the FQDN portion from the certificate name.  This may be a
+	   wildcard certificate so we specify the URL type as 
+	   URL_TYPE_TEMPLATE rather than URL_TYPE_NONE */
 	status = sNetParseURL( &urlInfo, certName, originalCertNameLength, 
-						   URL_TYPE_NONE );
+						   URL_TYPE_TEMPLATE );
 	if( cryptStatusError( status ) )
 		{
 		retExtSan( CRYPT_ERROR_INVALID,
@@ -89,7 +98,7 @@ static int matchName( IN_BUFFER( serverNameLength ) const BYTE *serverName,
 										CRYPT_MAX_TEXTSIZE ), 0,
 					 NULL, 0 ) );
 		}
-	certName = ( BYTE * ) urlInfo.host;
+	certName = urlInfo.host;
 	certNameLength = urlInfo.hostLen;
 	ENSURES( certNameLength > 0 && certNameLength <= MAX_URL_SIZE ); 
 
@@ -108,7 +117,7 @@ static int matchName( IN_BUFFER( serverNameLength ) const BYTE *serverName,
 		}
 
 	/* Make sure that, if it's a wildcarded name, it follows the pattern 
-	   "'*' ... '.' ... '.' ..." */
+	   "'*' '.' ... '.' ..." */
 	LOOP_EXT( i = 0, i < certNameLength, i++, MAX_URL_SIZE + 1 )
 		{
 		int ch;
@@ -119,10 +128,13 @@ static int matchName( IN_BUFFER( serverNameLength ) const BYTE *serverName,
 		ch = byteToInt( certName[ i ] );
 		if( ch == '*' )
 			{
-			if( i != 0 )
+			if( ( i == 0 && byteToInt( certName[ 1 ] ) != '.' ) || \
+				i != 0 )
 				{
-				/* The wildcard character isn't the first one in the name, 
-				   it's invalid */
+				/* The wildcard character isn't at the start of the name, or 
+				   followed immediately by a dot (we know that 
+				   certNameLength >= MIN_DNS_SIZE for the +1 check), it's 
+				   invalid */
 				retExtSan( CRYPT_ERROR_INVALID,
 						   ( CRYPT_ERROR_INVALID, errorInfo, 
 							 "Host name '%s' in server's certificate for "
@@ -160,7 +172,18 @@ static int matchName( IN_BUFFER( serverNameLength ) const BYTE *serverName,
 		serverName	foo.abc.com		serverName+delta = .abc.com
 					|		  |
 					+---------+ serverNameLength
-					|--| delta */
+					|--| delta 
+					
+	   Web practice also restricts the match to one level of subdomain, so
+	   for example the above *.abc.com would match foo.abc.com but not
+	   www.foo.abc.com.  However we're not a web application so it's unclear
+	   whether we should follow this (more or less) unwritten rule, 
+	   particularly since PKIX says (RFC 3280 section 4.2.1.6) "Applications 
+	   with specific requirements MAY use [wildcards], but they must define 
+	   the semantics", so we can essentially do whatever we feel like.  We 
+	   could make this "match only the suffix", and versions of cryptlib up 
+	   to 3.4.9 did, but for compatibility with web applications this was
+	   changed after 3.4.9 to only allow one subdomain before the wildcard */
 	if( hasWildcard )
 		{
 		const int delta = serverNameLength - ( certNameLength - 1 );
@@ -170,9 +193,22 @@ static int matchName( IN_BUFFER( serverNameLength ) const BYTE *serverName,
 									certNameLength - 1 ) );
 		ENSURES( delta > 0 && delta < serverNameLength );
 
-		/* Match the suffix past the wildcard */
-		if( !memcmp( certName + 1, serverName + delta, 
-					 certNameLength - 1 ) )
+		/* Walk along the prefix portion of the serverName that the wildcard 
+		   covers looking for a subdomain separator */
+		LOOP_EXT( i = 0, i < delta, i++, MAX_DNS_SIZE + 1 )
+			{
+			ENSURES( LOOP_INVARIANT_EXT( i, 0, delta - 1, 
+										 MAX_DNS_SIZE + 1 ) );
+
+			if( serverName[ i ] == '.' )
+				break;
+			}
+		ENSURES( LOOP_BOUND_OK );
+		
+		/* For the match to be valid, the separator must be at the start of
+		   the suffix portion and the suffix must match */
+		if( i >= delta && !memcmp( certName + 1, serverName + delta, 
+								   certNameLength - 1 ) )
 			return( CRYPT_OK );
 		}
 	else
@@ -206,7 +242,7 @@ static int matchName( IN_BUFFER( serverNameLength ) const BYTE *serverName,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 2, 4 ) ) \
 int checkHostNameTLS( IN_HANDLE const CRYPT_CERTIFICATE iCryptCert,
-					  INOUT_BUFFER_FIXED( serverNameLength ) void *serverName,
+					  IN_BUFFER( serverNameLength ) const void *serverName,
 					  IN_LENGTH_DNS const int serverNameLength,
 					  OUT_PTR ERROR_INFO *errorInfo )
 	{
@@ -218,10 +254,10 @@ int checkHostNameTLS( IN_HANDLE const CRYPT_CERTIFICATE iCryptCert,
 #ifdef USE_ERRMSGS
 	char serverCertName[ CRYPT_MAX_TEXTSIZE + 8 ];
 #endif /* USE_ERRMSGS */
-	BOOLEAN multipleNamesPresent = FALSE;
+	BOOLEAN additionalNamesPresent = FALSE;
 	int certNameLength = CRYPT_ERROR, status, LOOP_ITERATOR;
 
-	assert( isWritePtrDynamic( serverName, serverNameLength ) );
+	assert( isReadPtrDynamic( serverName, serverNameLength ) );
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
 
 	REQUIRES( isHandleRangeValid( iCryptCert ) );
@@ -244,7 +280,7 @@ int checkHostNameTLS( IN_HANDLE const CRYPT_CERTIFICATE iCryptCert,
 		status = krnlSendMessage( iCryptCert, IMESSAGE_GETATTRIBUTE_S, 
 								  &msgData, CRYPT_CERTINFO_DNSNAME );
 		if( cryptStatusOK( status ) )
-			multipleNamesPresent = TRUE;
+			additionalNamesPresent = TRUE;
 		}
 	krnlSendMessage( iCryptCert, IMESSAGE_SETATTRIBUTE, 
 					 ( MESSAGE_CAST ) &nameValue, CRYPT_ATTRIBUTE_CURRENT );
@@ -271,7 +307,7 @@ int checkHostNameTLS( IN_HANDLE const CRYPT_CERTIFICATE iCryptCert,
 		/* If this was the only name that's present then we can't go any 
 		   further (the extended error information will have been provided 
 		   by matchName()) */
-		if( !multipleNamesPresent )
+		if( !additionalNamesPresent )
 			return( CRYPT_ERROR_INVALID );
 		}
 
@@ -327,7 +363,13 @@ int checkHostNameTLS( IN_HANDLE const CRYPT_CERTIFICATE iCryptCert,
 			status = matchName( serverName, serverNameLength, certName,
 								msgData.length, iCryptCert, errorInfo );
 			if( cryptStatusOK( status ) )
-				return( status );
+				{
+				krnlSendMessage( iCryptCert, IMESSAGE_SETATTRIBUTE, 
+								 ( MESSAGE_CAST ) &nameValue, 
+								 CRYPT_ATTRIBUTE_CURRENT );
+								 /* Re-select subject DN */
+				return( CRYPT_OK );
+				}
 			}
 		}
 	ENSURES( LOOP_BOUND_OK );

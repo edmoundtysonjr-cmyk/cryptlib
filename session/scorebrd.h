@@ -61,9 +61,7 @@ int lookupScoreboardEntry( INOUT_PTR struct SC *scoreboardIndexInfoPtr,
 						   IN_ENUM( SCOREBOARD_KEY ) \
 								const SCOREBOARD_KEY_TYPE keyType,
 						   IN_BUFFER( keyLength ) const void *key, 
-						   IN_RANGE( 4, MAX_SESSIONID_SIZE ) \
-								const int keyLength, 
-						   /* 4 = SCOREBOARD_KEY_MIN = MIN_SESSIONID_SIZE */
+						   IN_LENGTH_SHORT_MIN( 4 ) const int keyLength, 
 						   OUT_PTR \
 								SCOREBOARD_ENTRY_INFO *scoreboardEntryInfo );
 #if defined( SCOREBOARD_KEY_MIN ) && ( SCOREBOARD_KEY_MIN != 4 )

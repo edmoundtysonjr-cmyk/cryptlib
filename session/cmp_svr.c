@@ -219,6 +219,9 @@ int initServerAuthentSign( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	protocolInfo->userIsRA = FALSE;
 
+	/* We shouldn't get here without having a certID set */
+	REQUIRES( isShortIntegerRangeNZ( protocolInfo->certIDsize ) );
+
 	/* Get the user information for the user that originally authorised the 
 	   issue of the certificate that signed the request.  This serves two 
 	   purposes, it obtains the original user ID if it wasn't supplied in 

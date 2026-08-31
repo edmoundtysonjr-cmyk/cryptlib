@@ -207,12 +207,11 @@ static int checkContextsEncodable( IN_HANDLE const CRYPT_HANDLE exportKey,
 			/* Check that the export algorithm is encodable */
 			if( exportIsPKC )
 				{
-				if( cryptStatusError( sizeofAlgoID( exportAlgo ) ) )
+				if( !checkAlgoID( exportAlgo, 0 ) )
 					return( CRYPT_ERROR_PARAM1 );
 				}
 			else
 				{
-				ALGOID_PARAMS algoIDparams;
 				int exportMode;	/* int vs.enum */
 
 				/* If it's a conventional key export, the key wrap mechanism 
@@ -221,17 +220,20 @@ static int checkContextsEncodable( IN_HANDLE const CRYPT_HANDLE exportKey,
 										  &exportMode, CRYPT_CTXINFO_MODE );
 				if( cryptStatusError( status ) || exportMode != CRYPT_MODE_CBC )
 					return( CRYPT_ERROR_PARAM1 );
-				initAlgoIDparamsCrypt( &algoIDparams, exportMode, 0 );
-				if( cryptStatusError( \
-						sizeofAlgoIDex( exportAlgo, &algoIDparams ) ) )
+				if( !checkAlgoID( exportAlgo, CRYPT_MODE_CBC ) )
 					return( CRYPT_ERROR_PARAM1 );
 				}
 
 			/* Check that the session-key algorithm is encodable */
 			if( sessionIsMAC )
 				{
-				status = sizeofAlgoID( sessionKeyAlgo );
-				if( cryptStatusError( status ) )
+				int hashParam;
+				
+				status = krnlSendMessage( sessionKeyContext, 
+										  MESSAGE_GETATTRIBUTE, &hashParam, 
+										  CRYPT_CTXINFO_BLOCKSIZE );
+				if( cryptStatusError( status ) || \
+					!checkAlgoID( sessionKeyAlgo, hashParam ) )
 					return( CRYPT_ERROR_PARAM3 );
 				}
 			else

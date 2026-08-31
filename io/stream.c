@@ -140,12 +140,11 @@ static BOOLEAN sanityCheckStream( const STREAM *stream )
 			/* Stream metadata is stored in the netStream structure, not the 
 			   main stream so there's no explicit metadata check apart from
 			   the check the the netStream pointer is valid */
-			if( !DATAPTR_ISVALID( stream->netStream ) )
+			if( netStream == NULL )
 				{
 				DEBUG_PUTS(( "sanityCheckStream: Net stream pointer" ));
 				return( FALSE );
 				}
-			ENSURES_B( netStream != NULL );
 
 			/* If it's an unbuffered network stream then all buffer values 
 			   must be zero */
@@ -198,7 +197,7 @@ static BOOLEAN sanityCheckStream( const STREAM *stream )
 			 bufPos			 bufEnd */
 	if( stream->bufPos < 0 || stream->bufPos > stream->bufEnd || \
 		stream->bufEnd < 0 || stream->bufEnd > stream->bufSize || \
-		!isBufsizeRange( stream->bufSize ) )
+		!isBufsizeRangeNZ( stream->bufSize ) )
 		{
 		DEBUG_PUTS(( "sanityCheckStream: Stream buffer info" ));
 		return( FALSE );
@@ -292,7 +291,7 @@ static int refillStream( INOUT_PTR STREAM *stream )
 	   that's where the new position would be past the EOF */
 	if( !TEST_FLAG( stream->flags, STREAM_FFLAG_POSCHANGED ) )
 		{
-		REQUIRES( !checkOverflowInc( stream->bufCount ) );
+		REQUIRES_S( !checkOverflowInc( stream->bufCount ) );
 		stream->bufCount++;
 		stream->bufPos = 0;
 		}
@@ -354,7 +353,7 @@ static int emptyStream( INOUT_PTR STREAM *stream,
 	CLEAR_FLAG( stream->flags, STREAM_FFLAG_POSCHANGED );
 	if( !forcedFlush )
 		{
-		REQUIRES( !checkOverflowInc( stream->bufCount ) );
+		REQUIRES_S( !checkOverflowInc( stream->bufCount ) );
 		stream->bufCount++;
 		stream->bufPos = 0;
 		}
@@ -392,10 +391,12 @@ static int expandVirtualFileStream( INOUT_PTR STREAM *stream,
 		newSize = STREAM_VFILE_BUFSIZE;
 	else
 		{
-		/* Increase the stream buffer size in STREAM_VFILE_BUFSIZE steps */
-		REQUIRES_S( !checkOverflowAdd( stream->bufSize, 
-									   STREAM_VFILE_BUFSIZE ) );
-		newSize = stream->bufSize + STREAM_VFILE_BUFSIZE;
+		/* Increase the stream buffer size in STREAM_VFILE_BUFSIZE steps.  
+		   This (a) should essentially never happen since we never write 
+		   quantities this large and (b) doesn't check for overflow on 
+		   roundUp() for the same reason */
+		REQUIRES_S( !checkOverflowAdd( stream->bufSize, length ) );
+		newSize = roundUp( stream->bufPos + length, STREAM_VFILE_BUFSIZE );
 		}
 
 	/* Allocate the buffer and copy the new data across using a safe realloc 
@@ -454,7 +455,7 @@ int sgetc( INOUT_PTR STREAM *stream )
 			/* Read the data from the stream buffer */
 			if( stream->bufPos >= stream->bufEnd )
 				return( sSetError( stream, CRYPT_ERROR_UNDERFLOW ) );
-			REQUIRES( !checkOverflowInc( stream->bufPos ) );
+			REQUIRES_S( !checkOverflowInc( stream->bufPos ) );
 			ch = byteToInt( stream->buffer[ stream->bufPos++ ] );
 			break;
 
@@ -474,7 +475,7 @@ int sgetc( INOUT_PTR STREAM *stream )
 							CRYPT_ERROR_UNDERFLOW : status );
 					}
 				}
-			REQUIRES( !checkOverflowInc( stream->bufPos ) );
+			REQUIRES_S( !checkOverflowInc( stream->bufPos ) );
 			ch = byteToInt( stream->buffer[ stream->bufPos++ ] );
 			break;
 #endif /* USE_FILES */
@@ -822,7 +823,7 @@ int sputc( INOUT_PTR STREAM *stream, IN_BYTE const int ch )
 		{
 		case STREAM_TYPE_NULL:
 			/* It's a null stream, just record the write and return */
-			REQUIRES( !checkOverflowInc( stream->bufPos ) );
+			REQUIRES_S( !checkOverflowInc( stream->bufPos ) );
 			stream->bufPos++;
 			if( stream->bufEnd < stream->bufPos )
 				stream->bufEnd = stream->bufPos;
@@ -845,7 +846,7 @@ int sputc( INOUT_PTR STREAM *stream, IN_BYTE const int ch )
 #endif /* VIRTUAL_FILE_STREAM */
 					return( sSetError( stream, CRYPT_ERROR_OVERFLOW ) );
 				}
-			REQUIRES( !checkOverflowInc( stream->bufPos ) );
+			REQUIRES_S( !checkOverflowInc( stream->bufPos ) );
 			stream->buffer[ stream->bufPos++ ] = intToByte( ch );
 			if( stream->bufEnd < stream->bufPos )
 				stream->bufEnd = stream->bufPos;
@@ -873,7 +874,7 @@ int sputc( INOUT_PTR STREAM *stream, IN_BYTE const int ch )
 				if( cryptStatusError( status ) )
 					return( status );
 				}
-			REQUIRES( !checkOverflowInc( stream->bufPos ) );
+			REQUIRES_S( !checkOverflowInc( stream->bufPos ) );
 			stream->buffer[ stream->bufPos++ ] = intToByte( ch );
 			SET_FLAG( stream->flags, STREAM_FLAG_DIRTY );
 			break;
@@ -1145,14 +1146,22 @@ int sflush( INOUT_PTR STREAM *stream )
 	   is committed in an atomic operation when the file is flushed), write 
 	   it to disk.  If there's an error at this point we still try and flush 
 	   whatever data we have to disk so we don't bail out immediately if 
-	   there's a problem */
+	   there's a problem.
+	   
+	   We also clear the dirty bit for the stream even if the flush that
+	   follows fails because it's unclear what other action we could take.  
+	   emptyStream() should return an error if there's a problem with the 
+	   write itself, and this function is only called from keyset shutdown 
+	   functions that aren't going to try a second flush if the first one 
+	   fails (which also makes it slightly irrelevant if the dirty bit stays 
+	   set or not)  */
 	if( stream->bufPos > 0 && !sIsVirtualFileStream( stream ) )
 		status = emptyStream( stream, TRUE );
+	if( cryptStatusOK( status ) )
+		CLEAR_FLAG( stream->flags, STREAM_FLAG_DIRTY );
 
 	/* Commit the data */
 	flushStatus = fileFlush( stream );
-	CLEAR_FLAG( stream->flags, STREAM_FLAG_DIRTY );
-
 	return( cryptStatusOK( status ) ? flushStatus : status );
 	}
 #endif /* USE_FILES */
@@ -1172,11 +1181,13 @@ int sSetError( INOUT_PTR STREAM *stream, IN_ERROR const int status )
 	{
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	
-	REQUIRES_S( cryptStatusError( status ) );
-
 	/* Check that the input parameters are in order */
 	if( !isWritePtr( stream, sizeof( STREAM ) ) )
 		retIntError();
+
+	REQUIRES_S( cryptStatusError( status ) );
+				/* Must follow the above check since the _S() part accesses
+				   the stream structure */
 
 	/* If there's already an error status set don't try and override it */
 	if( cryptStatusError( stream->status ) )
@@ -1246,7 +1257,7 @@ static int seekStream( INOUT_PTR STREAM *stream,
 			/* Move to the position in the stream buffer.  We never get 
 			   called directly with an sseek() on a memory stream, but end 
 			   up here via a translated sSkip() call */
-			REQUIRES( isIntegerRange( position ) );
+			REQUIRES_S( isIntegerRange( position ) );
 
 			/* If we're only able to seek within existing data in the buffer
 			   then any attempt to move past the end of the data is an 
@@ -1266,7 +1277,7 @@ static int seekStream( INOUT_PTR STREAM *stream,
 
 		case STREAM_TYPE_MEMORY:
 			/* Move to the position in the stream buffer */
-			REQUIRES( isIntegerRange( position ) );
+			REQUIRES_S( isIntegerRange( position ) );
 
 			/* If we're only able to seek within existing data in the buffer
 			   then any attempt to move past the end of the data is an 
@@ -1293,6 +1304,7 @@ static int seekStream( INOUT_PTR STREAM *stream,
 #ifdef USE_FILES
 		case STREAM_TYPE_FILE:
 			{
+			const int oldBufCount = stream->bufCount;
 			int blockOffset = 0;
 			int byteOffset = 0;
 
@@ -1346,7 +1358,7 @@ static int seekStream( INOUT_PTR STREAM *stream,
 			/* Now that we've got the buffer-sized block handled, set up
 			   the byte offset within the block */
 			if( TEST_FLAG( stream->flags, STREAM_FFLAG_EOF ) && \
-				byteOffset > stream->bufEnd )
+				blockOffset >= oldBufCount && byteOffset > stream->bufEnd )
 				{
 				/* We've tried to move past EOF, this is an error */
 				return( sSetError( stream, CRYPT_ERROR_UNDERFLOW ) );
@@ -1374,7 +1386,7 @@ int sseek( INOUT_PTR STREAM *stream, IN_LENGTH_Z const int position )
 
 /* Return the current position in a stream */
 
-CHECK_RETVAL_RANGE_NOERROR( 0, MAX_BUFFER_SIZE ) STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL_RANGE( 0, MAX_BUFFER_SIZE ) STDC_NONNULL_ARG( ( 1 ) ) \
 int stell( const STREAM *stream )
 	{
 	assert( isReadPtr( stream, sizeof( STREAM ) ) );
@@ -1384,20 +1396,17 @@ int stell( const STREAM *stream )
 		retIntError();
 
 	/* We can't use REQUIRE_S( sanityCheckStream() ) in this case because 
-	   the stream is a const parameter.  Since stell() is expected to return 
-	   a value in the range 0...stream->bufSize we don't use REQUIRES() 
-	   either but simply return an offset of zero */
-	REQUIRES_EXT( sanityCheckStream( stream ), 0 );
-	REQUIRES_EXT( ( stream->type == STREAM_TYPE_NULL || \
-					stream->type == STREAM_TYPE_MEMORY || \
-					stream->type == STREAM_TYPE_FILE ), 0 );
+	   the stream is a const parameter */
+	REQUIRES( sanityCheckStream( stream ) );
+	REQUIRES( stream->type == STREAM_TYPE_NULL || \
+			  stream->type == STREAM_TYPE_MEMORY || \
+			  stream->type == STREAM_TYPE_FILE );
 
 	/* If there's a problem with the stream don't try to do anything */
 	if( cryptStatusError( stream->status ) )
 		{
 		DEBUG_DIAG(( "Stream is in invalid state" ));
-		assert( DEBUG_WARN );
-		return( 0 );
+		retIntError();
 		}
 
 	switch( stream->type )
@@ -1408,17 +1417,17 @@ int stell( const STREAM *stream )
 
 #ifdef USE_FILES
 		case STREAM_TYPE_FILE:
-			REQUIRES_EXT( !checkOverflowMul( stream->bufCount, 
-											 stream->bufSize ), 0 );
-			REQUIRES_EXT( !checkOverflowAdd( stream->bufCount * \
+			REQUIRES( !checkOverflowMul( stream->bufCount, \
+										 stream->bufSize ) );
+			REQUIRES( !checkOverflowAdd( stream->bufCount * \
 												stream->bufSize,
-											 stream->bufPos ), 0 );
+										 stream->bufPos ) );
 			return( ( stream->bufCount * stream->bufSize ) + \
 					stream->bufPos );
 #endif /* USE_FILES */
 		}
 
-	retIntError_Ext( 0 );
+	retIntError();
 	}
 
 /* Skip a number of bytes in a stream, with a bounds check on the maximum 
@@ -1459,7 +1468,7 @@ static int skipStream( INOUT_PTR STREAM *stream,
 	if( offset > maxOffset || \
 		checkOverflowSub( MAX_BUFFER_SIZE, stream->bufPos ) || \
 		MAX_BUFFER_SIZE - stream->bufPos <= offset )
-		return( CRYPT_ERROR_OVERFLOW );
+		return( sSetError( stream, CRYPT_ERROR_OVERFLOW ) );
 
 	/* Unlike memory streams, file streams are quantised to the I/O buffer
 	   size so a skip is a bit more complex than just moving ahead to a 
@@ -1484,7 +1493,7 @@ static int skipStream( INOUT_PTR STREAM *stream,
 							   stream->bufPos, offset ) || \
 			( stream->bufCount * stream->bufSize ) + \
 							stream->bufPos + offset >= MAX_BUFFER_SIZE )
-			return( CRYPT_ERROR_OVERFLOW );
+			return( sSetError( stream, CRYPT_ERROR_OVERFLOW ) );
 
  		/* Move to the absolute position in the file, taking quantisation 
 		   into account, calculations overflow-checked above */
@@ -1541,7 +1550,7 @@ int sPeek( INOUT_PTR STREAM *stream )
 			/* Read the data from the stream buffer */
 			if( stream->bufPos >= stream->bufEnd )
 				return( sSetError( stream, CRYPT_ERROR_UNDERFLOW ) );
-			return( stream->buffer[ stream->bufPos ] );
+			return( byteToInt( stream->buffer[ stream->bufPos ] ) );
 
 #ifdef USE_FILES
 		case STREAM_TYPE_FILE:
@@ -1559,7 +1568,7 @@ int sPeek( INOUT_PTR STREAM *stream )
 							CRYPT_ERROR_UNDERFLOW : status );
 					}
 				}
-			return( stream->buffer[ stream->bufPos ] );
+			return( byteToInt( stream->buffer[ stream->bufPos ] ) );
 #endif /* USE_FILES */
 		}
 
@@ -1758,6 +1767,7 @@ int sioctlSet( INOUT_PTR STREAM *stream,
 							   STREAM_NHFLAG_GET | STREAM_NHFLAG_POST );
 					break;
 
+#ifdef USE_WEBSOCKETS 
 				case STREAM_HTTPREQTYPE_WS_UPGRADE:
 					/* The WebSockets upgrade request is sent as a GET with
 					   "Connection: upgrade", so we enable GET as well as 
@@ -1765,6 +1775,7 @@ int sioctlSet( INOUT_PTR STREAM *stream,
 					SET_FLAGS( netStream->nhFlags,
 							   STREAM_NHFLAG_GET | STREAM_NHFLAG_WS_UPGRADE );
 					break;
+#endif /* USE_WEBSOCKETS */
 
 				default:
 					retIntError();
@@ -1884,7 +1895,7 @@ int sioctlGet( INOUT_PTR STREAM *stream,
 			   IN_LENGTH_SHORT const int dataMaxLen )
 	{
 #ifdef USE_TCP
-	NET_STREAM_INFO *netStream = DATAPTR_GET( stream->netStream );
+	NET_STREAM_INFO *netStream DUMMY_INIT_PTR;
 	int *intDataPtr = ( int * ) data;
 #endif /* USE_TCP */
 
@@ -1905,6 +1916,15 @@ int sioctlGet( INOUT_PTR STREAM *stream,
 	REQUIRES_S( isEnumRange( type, STREAM_IOCTL ) );
 	REQUIRES_S( data != NULL );
 	REQUIRES_S( isShortIntegerRangeNZ( dataMaxLen ) );
+
+	/* Get references to internal structures if necessary */
+#ifdef USE_TCP
+	if( stream->type == STREAM_TYPE_NETWORK )
+		{
+		netStream = DATAPTR_GET( stream->netStream );
+		ENSURES_S( netStream != NULL );
+		}
+#endif /* USE_TCP */
 
 	/* If w're fuzzing via a pseudo-stream then there's no network 
 	   information present to get error information from */
@@ -1936,7 +1956,7 @@ int sioctlGet( INOUT_PTR STREAM *stream,
 
 	REQUIRES_S( stream->type == STREAM_TYPE_NETWORK );
 #ifdef USE_TCP
-	REQUIRES_S( netStream != NULL && sanityCheckNetStream( netStream ) );
+	REQUIRES_S( sanityCheckNetStream( netStream ) );
 #endif /* USE_TCP */
 
 	switch( type )
@@ -2092,7 +2112,7 @@ int sioctlGet( INOUT_PTR STREAM *stream,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int streamOffsetFromPosition( INOUT_PTR STREAM *stream,
 							  IN_DATALENGTH_Z const int startOffset,
-							  OUT_DATALENGTH_Z int *length )
+							  OUT_DATALENGTH int *length )
 	{
 	const int currentOffset = stell( stream );
 
@@ -2106,8 +2126,11 @@ int streamOffsetFromPosition( INOUT_PTR STREAM *stream,
 
 	/* Make sure that we're returning valid data */
 	if( cryptStatusError( currentOffset ) )
+		{
+		assert( DEBUG_WARN );
 		return( CRYPT_ERROR_BADDATA );
-	if( currentOffset < startOffset )
+		}
+	if( currentOffset <= startOffset )
 		return( CRYPT_ERROR_BADDATA );
 
 	REQUIRES( !checkOverflowSub( currentOffset, startOffset ) );
@@ -2117,7 +2140,7 @@ int streamOffsetFromPosition( INOUT_PTR STREAM *stream,
 	return( CRYPT_OK );
 	}
 
-#ifdef USE_FILES
+#if defined( USE_FILES ) && 0 /* Not currently used */
 
 /* Convert a file stream to a memory stream.  Usually this allocates a 
    buffer and reads the stream into it, however if it's a read-only memory-
@@ -2148,9 +2171,12 @@ int sFileToMemStream( OUT_PTR STREAM *memStream,
 		}
 
 	/* We have to use REQUIRES() here rather than REQUIRES_S() since it's 
-	   not certain which of the two streams to set the status for */
+	   not certain which of the two streams to set the status for.  The
+	   check for STREAM_FLAG_PARTIALREAD is because this type of file
+	   stream doesn't guarantee to read the full length passed to sread() */
 	REQUIRES( sanityCheckStream( fileStream ) && \
-			  TEST_FLAG( fileStream->flags, STREAM_FFLAG_BUFFERSET ) );
+			  TEST_FLAG( fileStream->flags, STREAM_FFLAG_BUFFERSET ) && \
+			  !TEST_FLAG( fileStream->flags, STREAM_FLAG_PARTIALREAD ) );
 	REQUIRES( fileStream->type == STREAM_TYPE_FILE );
 	REQUIRES( isBufsizeRangeNZ( length ) );
 
@@ -2194,6 +2220,7 @@ int sFileToMemStream( OUT_PTR STREAM *memStream,
 	status = sread( fileStream, bufPtr, length );
 	if( cryptStatusError( status ) )
 		{
+		zeroise( bufPtr, length );
 		clFree( "sFileToMemStream", bufPtr );
 		return( status );
 		}
@@ -2201,4 +2228,4 @@ int sFileToMemStream( OUT_PTR STREAM *memStream,
 	*bufPtrPtr = bufPtr;
 	return( CRYPT_OK );
 	}
-#endif /* USE_FILES */
+#endif /* USE_FILES && 0 */

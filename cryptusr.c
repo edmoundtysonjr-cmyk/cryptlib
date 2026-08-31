@@ -406,8 +406,8 @@ int createUser( INOUT_PTR MESSAGE_CREATEOBJECT_INFO *createInfo,
 	   cryptlib default user (actually we could and nothing bad would happen,
 	   but we reserve the use of this name just in case) */
 	if( createInfo->strArgLen1 == defaultUserInfo.userNameLength && \
-		!strCompare( createInfo->strArg1, defaultUserInfo.userName,
-					 defaultUserInfo.userNameLength ) )
+		strSame( createInfo->strArg1, defaultUserInfo.userName,
+				 defaultUserInfo.userNameLength ) )
 		return( CRYPT_ERROR_INITED );
 
 /*!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!*/

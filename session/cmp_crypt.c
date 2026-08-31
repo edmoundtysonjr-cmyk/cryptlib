@@ -55,8 +55,12 @@ int hashMessageContents( IN_HANDLE const CRYPT_CONTEXT iHashContext,
 	status = writeSequence( &stream, length );
 	if( cryptStatusOK( status ) )
 		{
+		const int position = stell( &stream );
+
+		REQUIRES( isIntegerRangeNZ( position ) );
+
 		status = krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH, buffer, 
-								  stell( &stream ) );
+								  position );
 		}
 	sMemClose( &stream );
 	if( cryptStatusError( status ) )
@@ -66,7 +70,10 @@ int hashMessageContents( IN_HANDLE const CRYPT_CONTEXT iHashContext,
 	status = krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH, 
 							  ( MESSAGE_CAST ) data, length );
 	if( cryptStatusOK( status ) )
-		status = krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH, buffer, 0 );
+		{
+		status = krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH, 
+								  buffer, 0 );
+		}
 	return( status );
 	}
 
@@ -129,9 +136,9 @@ int initMacInfo( IN_HANDLE const CRYPT_CONTEXT iMacContext,
 			} OPTIONAL
 		} 
 
-   The standard only specifies the use of SHA1/HMAC-SHA1 (alongside the 
+   The standard only specifies the use of SHA1/HMAC-SHA1 alongside the 
    usual confused text about what should actually be used, including 
-   mention of options like single-DES MAC), so we only allow these 
+   mention of options like single-DES MAC, so we only allow these 
    algorithms.  Since only we're using it as PRF rather than a hash 
    function, it doesn't require strong security properties */
 
@@ -214,7 +221,7 @@ int readMacInfo( INOUT_PTR STREAM *stream,
 		   algorithm is about the most appropriate error that we can return 
 		   here).  The spec never defines any appropriate limits for this 
 		   value, which leads to interesting effects when submitting a 
-		   request for bignum iterations to some implementations */
+		   request for bignum iterations to some CAs */
 		protocolInfo->pkiFailInfo = CMPFAILINFO_BADALG;
 		retExt( CRYPT_ERROR_BADDATA,
 				( CRYPT_ERROR_BADDATA, errorInfo, 
@@ -269,7 +276,11 @@ int readMacInfo( INOUT_PTR STREAM *stream,
 		return( CRYPT_OK );
 		}
 
-	/* This is a new set of parameters, recreate the MAC context with them */
+	/* This is a new set of parameters, recreate the MAC context with them.  
+	   Since this is peer-initiated in theory they can (maliciously) force 
+	   us to rekey the MAC on each message, but it's both capped at 
+	   CMP_MAX_PW_ITERATIONS and unclear why the authorised client or CA 
+	   that we're talking to would be trying to DoS us */
 	setMessageCreateObjectInfo( &createInfo, CRYPT_ALGO_HMAC_SHA1 );
 	status = krnlSendMessage( CRYPTO_OBJECT_HANDLE, 
 							  IMESSAGE_DEV_CREATEOBJECT, &createInfo, 
@@ -378,7 +389,8 @@ int checkMessageMAC( INOUT_PTR CMP_PROTOCOL_INFO *protocolInfo,
 	REQUIRES( macLength >= MIN_HASHSIZE && macLength <= CRYPT_MAX_HASHSIZE );
 
 	/* MAC the data and make sure that it matches the value attached to the 
-	   message */
+	   message.  This is a fail-closed function, any type of failure is
+	   regarded as a MAC failure */
 	status = hashMessageContents( protocolInfo->iMacContext, message,
 								  messageLength );
 	if( cryptStatusError( status ) )
@@ -499,7 +511,7 @@ int writeMacProtinfo( IN_HANDLE const CRYPT_CONTEXT iMacContext,
 	STREAM macStream;
 	MESSAGE_DATA msgData;
 	BYTE macValue[ CRYPT_MAX_HASHSIZE + 8 ];
-	int macLength, status;
+	int macLength, position DUMMY_INIT, status;
 
 	assert( isReadPtrDynamic( message, messageLength ) );
 	assert( isWritePtrDynamic( protInfo, protInfoMaxLength ) );
@@ -535,10 +547,13 @@ int writeMacProtinfo( IN_HANDLE const CRYPT_CONTEXT iMacContext,
 	writeBitStringHole( &macStream, macLength, DEFAULT_TAG );
 	status = swrite( &macStream, macValue, macLength );
 	if( cryptStatusOK( status ) )
-		*protInfoLength = stell( &macStream );
+		status = position = stell( &macStream );
 	sMemDisconnect( &macStream );
+	if( cryptStatusError( status ) )
+		return( status );
+	*protInfoLength = position;
 
-	return( status );
+	return( CRYPT_OK );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 4, 6, 8, 9 ) ) \

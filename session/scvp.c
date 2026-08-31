@@ -140,7 +140,8 @@ int initSCVPprotocolInfo( OUT_PTR SCVP_PROTOCOL_INFO *protocolInfo,
 		status = krnlSendMessage( sessionInfoPtr->ownerHandle, 
 								  IMESSAGE_GETATTRIBUTE, &value, 
 								  CRYPT_OPTION_ENCR_HASHPARAM );
-		if( cryptStatusOK( status ) )
+		if( cryptStatusOK( status ) && \
+			checkAlgoID( protocolInfo->requestHashAlgo, value ) )
 			protocolInfo->requestHashSize = value;
 		else
 			protocolInfo->requestHashSize = bitsToBytes( 256 );

@@ -515,7 +515,7 @@ static int getItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 
 	/* If we're matching on the special-case key ID "[none]", perform a 
 	   fetch of the first matching key */
-	if( keyIDlength == 6 && !strCompare( keyID, "[none]", 6 ) )
+	if( keyIDlength == 6 && strSame( keyID, "[none]", 6 ) )
 		{
 		localKeyIDtype = CRYPT_KEYID_NAME;
 		localKeyID = NULL;

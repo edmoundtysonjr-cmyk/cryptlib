@@ -84,7 +84,7 @@ static int readDummyCCS( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	sMemConnect( &stream, sessionInfoPtr->receiveBuffer, length );
 	status = value = sgetc( &stream );
 	sMemDisconnect( &stream );
-	if( cryptStatusError( status ) || value != 1 )
+	if( cryptStatusError( status ) || length != 1 || value != 1 )
 		{
 		retExt( CRYPT_ERROR_BADDATA,
 				( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
@@ -121,8 +121,8 @@ static int completeSessionHash( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo )
 		return( status );
 	handshakeInfo->sessionHashSize = msgData.length;
 	DEBUG_DUMP_DATA_LABEL( ( handshakeInfo->tls13SuiteInfoPtr != NULL ) ? \
-								"Session hash (client):" : \
-								"Session hash (server):", 
+								"Session hash (server):" : \
+								"Session hash (client):",
 						   handshakeInfo->sessionHash, 
 						   handshakeInfo->sessionHashSize );
 
@@ -223,10 +223,11 @@ static int processHelloRetry( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	CFI_CHECK_UPDATE( "hashFunction 2" );
 
 	/* Some implementations, most notably Google Chrome, send a bogus Change 
-	   Cipherspec at this point.  The RFC says (section 4.2.2) that "when a 
-	   server is operating statelessly, it may receive an unprotected record 
-	   of type change_cipher_spec between the first and second ClientHello".  
-	   It never specifies how a client is supposed to tell when a server is 
+	   Cipherspec at this point, defined as "the single byte value 0x01".  
+	   RFC 8446 says (section 4.2.2) that "when a server is operating 
+	   statelessly, it may receive an unprotected record of type 
+	   change_cipher_spec between the first and second ClientHello".  It 
+	   never specifies how a client is supposed to tell when a server is 
 	   operating statelessly but since the text is in the section that 
 	   discusses the Cookie extension it presumably means that it applies 
 	   when the server has sent this extension to the client.  We haven't 
@@ -240,8 +241,8 @@ static int processHelloRetry( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		sessionInfoPtr->receiveBuffer[ 0 ] == 0x01 )
 		{
 		/* Although this CCS is now part of the handshake message flow it 
-		   doesn't get included in the transcript hash */
-	/*	hashFunction( hashInfo, NULL, 0, "0x01", 1, HASH_STATE_CONTINUE ); */
+		   doesn't get included in the transcript hash:
+		hashFunction( hashInfo, NULL, 0, "0x01", 1, HASH_STATE_CONTINUE ); */
 
 		/* This was a bogus Change Cipherspec, let the caller know and 
 		   re-read the next message, which should be the Client Hello that 
@@ -397,7 +398,7 @@ typedef enum {
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int readEncryptedHSPacket( INOUT_PTR SESSION_INFO *sessionInfoPtr,
-								  TLS_HANDSHAKE_INFO *handshakeInfo,
+								  INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 								  OUT_LENGTH_BOUNDED_Z( MAX_PACKET_SIZE ) \
 										int *payloadLength, 
 								  IN_ENUM( READHS_ACTION ) \
@@ -453,6 +454,9 @@ static int readEncryptedHSPacket( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			( status == CRYPT_ERROR_BADDATA || \
 			  status == CRYPT_ERROR_SIGNATURE ) )
 			{
+			/* Note that we pass in SESSION_ERRINFO twice since we're taking 
+			   the existing error information and extending it with the new 
+			   text string */
 			retExtErr( CRYPT_ERROR_WRONGKEY,
 					   ( CRYPT_ERROR_WRONGKEY, SESSION_ERRINFO, 
 						 SESSION_ERRINFO, 
@@ -470,6 +474,9 @@ static int readEncryptedHSPacket( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   doesn't know that only an Alert can be this size */
 	if( actualPacketType == TLS_MSG_ALERT )
 		{
+		/* This function always returns an error code based on the alert 
+		   that was received so we don't need to explicitly return an
+		   error status ourselves */
 		return( processAlertTLS13( sessionInfoPtr, 
 								   sessionInfoPtr->receiveBuffer, 
 								   length, NULL ) );
@@ -527,9 +534,9 @@ static int startEncryptedPacketStream( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				innerOffset != NULL ) );
 
 	/* Clear return values */
-	*outerOffset = CRYPT_ERROR;
+	*outerOffset = 0;
 	if( innerOffset != NULL )
-		*innerOffset = CRYPT_ERROR;
+		*innerOffset = 0;
 
 	/* Write the outer wrapper, the camouflage application-data packet, and 
 	   the optional inner wrapper containing the handshake subtype */
@@ -608,7 +615,7 @@ static int readCertVerify( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* Make sure that the packet header is in order */
 	status = checkHSPacketHeader( sessionInfoPtr, stream, &length,
 								  TLS_HAND_CERTVERIFY, 
-								  UINT16_SIZE + MIN_PKCSIZE_ECC );
+								  UINT16_SIZE + UINT16_SIZE + MIN_PKCSIZE_ECC );
 	if( cryptStatusError( status ) )
 		return( status );
 
@@ -663,8 +670,8 @@ static int writeCertVerify( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	  [	byte		ID = TLS_HAND_SERVER_CERTREQUEST ]
 	  [	uint24		len				-- Written by caller ]
-		byte		certNonceLen = 16
-		byte[]		certNonce
+		byte		certNonceLen	-- Typically 0
+			byte[]	certNonce
 		uint16		extListLen
 			uint16	extType = TLS_EXT_SIGNATURE_ALGORITHMS
 			uint16	extLen
@@ -691,13 +698,11 @@ static int readCertRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
-	/* Make sure that the packet header is in order.  We need at least 8 
-	   bytes of certificate nonce and at least one extension, that being
-	   TLS_EXT_SIGNATURE_ALGORITHMS */
+	/* Make sure that the packet header is in order.  We need at least one 
+	   extension, that being TLS_EXT_SIGNATURE_ALGORITHMS */
 	status = checkHSPacketHeader( sessionInfoPtr, stream, &packetLength,
 								  TLS_HAND_SERVER_CERTREQUEST, 
-								  ( 1 + 8 ) + UINT16_SIZE + \
-									( UINT16_SIZE * 4 ) );
+								  1 + UINT16_SIZE + ( UINT16_SIZE * 4 ) );
 	if( cryptStatusError( status ) )
 		{
 		/* Implementations of previous TLS versions could send insanely-long
@@ -710,11 +715,11 @@ static int readCertRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	status = length = sgetc( stream );
 	if( !cryptStatusError( status ) )
 		{
-		if( length < 1 || length > CRYPT_MAX_HASHSIZE || \
+		if( length < 0 || length > CRYPT_MAX_HASHSIZE || \
 			1 + length + ( UINT16_SIZE * 5 ) > packetLength )
 			status = CRYPT_ERROR_BADDATA;
 		}
-	if( !cryptStatusError( status ) )
+	if( !cryptStatusError( status ) && length > 0 )
 		{
 		REQUIRES( rangeCheck( length, 1, CRYPT_MAX_HASHSIZE ) );
 		status = sread( stream, handshakeInfo->tls13CertContext, length );
@@ -751,7 +756,7 @@ static int readCertRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	status = length = readUint16( stream );
 	if( !cryptStatusError( status ) )
 		{
-		if( length < ( UINT16_SIZE * 3 ) || \
+		if( length < ( UINT16_SIZE * 4 ) || \
 			length > packetLength - UINT16_SIZE )
 			status = CRYPT_ERROR_BADDATA;
 		}
@@ -771,32 +776,23 @@ static int readCertRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int writeCertRequest( INOUT_PTR STREAM *stream )
 	{
-	MESSAGE_DATA msgData;
 	const BOOLEAN rsaAvailable = algoAvailable( CRYPT_ALGO_RSA ) ? \
-								 TRUE : FALSE;
-	const BOOLEAN dsaAvailable = algoAvailable( CRYPT_ALGO_DSA ) ? \
 								 TRUE : FALSE;
 	const BOOLEAN ecdsaAvailable = algoAvailable( CRYPT_ALGO_ECDSA ) ? \
 								   TRUE : FALSE;
 	const int extensionPayloadSize = \
 					( rsaAvailable ? ( UINT16_SIZE * 3 ) : 0 ) + \
-					( dsaAvailable ? UINT16_SIZE : 0 ) + \
 					( ecdsaAvailable ? UINT16_SIZE : 0 );
-	BYTE nonceBuffer[ 8 + 8 ];
 	int status;
 
-	/* Write the nonce/identifier value.  This isn't used in any 
-	   cryptographic computations but is used to identify which certificate 
-	   belongs to which request in something that presumably satisfies some 
-	   business case for someone on the standards committee */
-	setMessageData( &msgData, nonceBuffer, 8 );
-	status = krnlSendMessage( SYSTEM_OBJECT_HANDLE,
-							  IMESSAGE_GETATTRIBUTE_S, &msgData,
-							  CRYPT_IATTRIBUTE_RANDOM_NONCE );
-	if( cryptStatusError( status ) )
-		return( status );
-	sputc( stream, 8 );
-	status = swrite( stream, nonceBuffer, 8 );
+	assert( isWritePtr( stream, sizeof( STREAM ) ) );
+
+	REQUIRES( extensionPayloadSize > 0 );
+
+	/* Write the nonce/identifier value.  This is only used if the server is
+	   doing post-handshake authentication exchanges (RFC 8446 section 4.3.2)
+	   which we don't do, so we send a zero-length value */
+	status = sputc( stream, 0 );
 	if( cryptStatusError( status ) )
 		return( status );
 
@@ -826,8 +822,6 @@ static int writeCertRequest( INOUT_PTR STREAM *stream )
 		writeUint16( stream, TLS_SIGHASHALGO_RSAPSSoid1_SHA2 );
 		status = writeUint16( stream, TLS_SIGHASHALGO_RSAPSSoid2_SHA2 );
 		}
-	if( dsaAvailable )
-		status = writeUint16( stream, TLS_SIGHASHALGO_DSA_SHA2 );
 	if( ecdsaAvailable )
 		status = writeUint16( stream, TLS_SIGHASHALGO_ECDSA_SHA2 );
 	return( status );
@@ -969,7 +963,10 @@ static int createCertAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* Write the TLS certificate chain.  We write the chain with type 
 	   TLS_HAND_NONE because of the TLS 1.3 double wrapping, 
 	   writeTLSCertChain() provides the inner wrapper so there's no need for 
-	   the packet-stream routines to do it */
+	   the packet-stream routines to do it.
+	   
+	   If no private key is available this will send a zero-length chain as 
+	   required by the spec */
 	status = startEncryptedPacketStream( sessionInfoPtr, stream, 
 										 &outerOffset, NULL, TLS_HAND_NONE );
 	if( cryptStatusOK( status ) )
@@ -983,6 +980,12 @@ static int createCertAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	if( cryptStatusError( status ) )
 		return( status );
+
+	/* If we're skipping the client authentication because there's no 
+	   private key present, we're done */
+	if( TEST_FLAG( sessionInfoPtr->protocolFlags, 
+				  TLS_PFLAG_CLIAUTHSKIPPED ) )
+		return( CRYPT_OK );
 
 	/* Clone the hash context at the point where we've hashed
 	   ClientHello || ... || ServerCertificate (server auth) or 
@@ -1056,8 +1059,11 @@ static int processCertAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		/* Check the client certificate, see the comment in
 		   session/tls_svr.c:readCheckClientCerts() for details.  If we get 
 		   back an error status then there's a whitelist present but the 
-		   certificate isn't in it.  If not, it's up to the caller to check 
-		   whether they'll accept the certificate  */
+		   certificate isn't in it, otherwise either there's no whitelist 
+		   present (isInWhitelist = FALSE) or there is and the certificate 
+		   is present (isInWhitelist = TRUE).  If there's no whitelist 
+		   present it's up to the caller to check whether they'll accept the 
+		   certificate */
 		status = checkCertWhitelist( sessionInfoPtr, 
 									 sessionInfoPtr->iKeyexAuthContext, 
 									 &isInWhitelist, TRUE );
@@ -1079,7 +1085,13 @@ static int processCertAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							   &transcriptHashContext );
 	if( cryptStatusError( status ) )
 		return( status );
-	krnlSendMessage( transcriptHashContext, IMESSAGE_CTX_HASH, "", 0 );
+	status = krnlSendMessage( transcriptHashContext, IMESSAGE_CTX_HASH, 
+							  "", 0 );
+	if( cryptStatusError( status ) )
+		{
+		krnlSendNotifier( transcriptHashContext, IMESSAGE_DECREFCOUNT );
+		return( status );
+		}
 
 	/* Process the peer's Certificate Verify.  Since this is a new message
 	   we disconnect the stream from the previous one and reconnect it to 
@@ -1152,7 +1164,12 @@ static int completeHandshakeClient( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   extensions in the client hello.  In other words the server extensions 
 	   are split into two parts, ones in the server hello that affect the
 	   rest of the handshake and ones here that don't, typically just an 
-	   acknowledgement of the client's SNI */
+	   acknowledgement of the client's SNI but also a pile of other things
+	   related to ALPNs (which we don't implement because we're not a web
+	   application doing HTTP/2), 0RTT (which we don't implement because
+	   we're not crazy), and so on.  Since we don't do any of this stuff, we
+	   choose not to process the entire thing just so that we can complain 
+	   about it if necessary */
 	status = readEncryptedHSPacket( sessionInfoPtr, handshakeInfo, &length,
 									READHS_ACTION_FIRSTENCR );
 	if( cryptStatusError( status ) )
@@ -1212,7 +1229,13 @@ static int completeHandshakeClient( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							   &transcriptHashContext );
 	if( cryptStatusError( status ) )
 		return( status );
-	krnlSendMessage( transcriptHashContext, IMESSAGE_CTX_HASH, "", 0 );
+	status = krnlSendMessage( transcriptHashContext, IMESSAGE_CTX_HASH, 
+							  "", 0 );
+	if( cryptStatusError( status ) )
+		{
+		krnlSendNotifier( transcriptHashContext, IMESSAGE_DECREFCOUNT );
+		return( status );
+		}
 
 	/* Process the server Finished */
 	status = readEncryptedHSPacket( sessionInfoPtr, handshakeInfo, 
@@ -1245,6 +1268,24 @@ static int completeHandshakeClient( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   Verify */
 	if( needClientCert )
 		{
+		/* If we haven't got a certificate available, remember it for 
+		   later */
+		if( sessionInfoPtr->privateKey == CRYPT_ERROR )
+			{
+			setObjectErrorInfo( sessionInfoPtr, CRYPT_SESSINFO_PRIVATEKEY,
+								CRYPT_ERRTYPE_ATTR_ABSENT );
+
+			/* The reaction to the lack of a certificate is up to the server 
+			   (some just request one anyway even though they can't do 
+			   anything with it) so from here on we just continue as if 
+			   nothing had happened */
+			DEBUG_DIAG(( "Server requested client certificate "
+						 "authentication, continuing because there's no "
+						 "client certificate available" ));
+			SET_FLAG( sessionInfoPtr->protocolFlags, 
+					  TLS_PFLAG_CLIAUTHSKIPPED );
+			}
+
 		status = createCertAuth( sessionInfoPtr, handshakeInfo, &stream );
 		if( cryptStatusError( status ) )
 			{
@@ -1292,12 +1333,25 @@ static int completeHandshakeClient( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		return( status );
 	CFI_CHECK_UPDATE( "loadTLS13AppdataKeys" );
 
+	/* With TLS classic we would, as part of the conclusion of the 
+	   handshake, TEST_FLAG( sessionInfoPtr->protocolFlags, 
+	   TLS_PFLAG_CLIAUTHSKIPPED ) in response to an error indication from
+	   the server, but since TLS 1.3 only sends a single request in each
+	   direction there's nothing to get back from the server to indicate 
+	   that the authentication failed until we start trying to exchange data 
+	   outside of the handshake, so we can't do much in terms of error 
+	   reporting */
+
 	ENSURES( CFI_CHECK_SEQUENCE_9( "loadTLS13HSKeys", "readEncryptedHSPacket", 
 								   "readCertRequest", "processCertAuth", 
 								   "readFinished", "createCertAuth",
 								   "completeSessionHash", "writeFinished", 
 								   "loadTLS13AppdataKeys" ) );
 	handshakeInfo->completedHSstate = HANDSHAKE_STATE_COMPLETE;
+
+	/* Set the authentication-complete check value that enables data to be
+	   exchanged over the TLS link */
+	sessionInfoPtr->authComplete = TRUE;
 
 	return( CRYPT_OK );
 	}
@@ -1401,14 +1455,13 @@ static int completeHandshakeServer( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/*	...			(optional request for client certificate authentication)
 		byte		ID = TLS_HAND_SERVER_CERTREQUEST
 		uint24		len
-		byte		certNonceLen = 16
-		byte[]		certNonce
+		byte		certNonceLen = 0
+			byte[]	certNonce
 		uint16		extListLen
 			uint16	extType = TLS_EXT_SIGNATURE_ALGORITHMS
 			uint16	extLen
 				uint16	algorithmListLength
-					byte	hashAlgo
-					byte	sigAlgo
+					uint16	algorithms
 		... */
 	if( sessionInfoPtr->cryptKeyset != CRYPT_ERROR )
 		{
@@ -1459,7 +1512,14 @@ static int completeHandshakeServer( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		sMemDisconnect( &stream );
 		return( status );
 		}
-	krnlSendMessage( transcriptHashContext, IMESSAGE_CTX_HASH, "", 0 );
+	status = krnlSendMessage( transcriptHashContext, IMESSAGE_CTX_HASH, 
+							  "", 0 );
+	if( cryptStatusError( status ) )
+		{
+		sMemDisconnect( &stream );
+		krnlSendNotifier( transcriptHashContext, IMESSAGE_DECREFCOUNT );
+		return( status );
+		}
 
 	/*	...
 		Finished */
@@ -1549,6 +1609,10 @@ static int completeHandshakeServer( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									"processCertAuth", "completeSessionHash", 
 									"readFinished", "loadTLS13AppdataKeys" ) );
 	handshakeInfo->completedHSstate = HANDSHAKE_STATE_COMPLETE;
+
+	/* Set the authentication-complete check value that enables data to be
+	   exchanged over the TLS link */
+	sessionInfoPtr->authComplete = TRUE;
 
 	return( CRYPT_OK );
 	}

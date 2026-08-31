@@ -330,7 +330,6 @@ extern int nonNullAddress;
 #define BN_is_odd( bignum )		BN_is_bit_set( bignum, 0 )
 #define BN_zero( bignum )		BN_set_word( bignum, 0 )
 #define BN_one( bignum )		BN_set_word( bignum, 1 )
-#define BN_num_bytes( bignum )	( ( BN_num_bits( bignum ) + 7 ) / 8 )
 #define BN_lshift1( result, a )	BN_lshift( result, a, 1 )
 #define BN_rshift1( result, a )	BN_rshift( result, a, 1 )
 #define BN_mod( remainder, modulus, divisor, ctx ) \
@@ -483,14 +482,16 @@ CHECK_RETVAL_LENGTH_SHORT \
 int BN_num_bits_word( const BN_ULONG word );
 CHECK_RETVAL_LENGTH_SHORT STDC_NONNULL_ARG( ( 1 ) ) \
 int BN_num_bits( const BIGNUM *bignum );
+CHECK_RETVAL_LENGTH_SHORT STDC_NONNULL_ARG( ( 1 ) ) \
+int BN_num_bytes( const BIGNUM *bignum );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN BN_set_bit( INOUT_PTR BIGNUM *bignum, 
 					IN_RANGE( 0, bytesToBits( CRYPT_MAX_PKCSIZE * 2 ) ) \
 						int bitNo );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN BN_is_bit_set( const BIGNUM *bignum, /* See comment */ int bitNo );
-CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN BN_high_bit( const BIGNUM *bignum );
+CHECK_RETVAL_RANGE( 0, 1 ) STDC_NONNULL_ARG( ( 1 ) ) \
+int BN_high_bit( const BIGNUM *bignum );
 STDC_NONNULL_ARG( ( 1 ) ) \
 void BN_set_negative( INOUT_PTR BIGNUM *bignum, const int isNegative );
 RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \

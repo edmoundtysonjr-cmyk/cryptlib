@@ -1336,7 +1336,9 @@
 	/* As of VS 2019 some conflicting define in the Windows headers, turned up 
 	   with our use of warning level 4, doesn't allow this to be built any 
 	   more */
-	#define USE_CRYPTOAPI
+/////////////////////////////////////
+//	#define USE_CRYPTOAPI
+/////////////////////////////////////
   #endif /* VS 2019 and newer */
   #define USE_CFB
 /////////////////////////////////////
@@ -1390,7 +1392,9 @@
 	#define USE_SSH_CTR
 	#define USE_SSH_OPENSSH	/* SSH EtM, unsafe */
 	#define USE_TLS13
-	#define USE_WEBSOCKETS
+/////////////////////////////////////
+//	#define USE_WEBSOCKETS
+/////////////////////////////////////
   #endif /* USE_TCP */
   #define USE_PGP2
   #if defined( _MSC_VER ) || defined( HAS_TPM )

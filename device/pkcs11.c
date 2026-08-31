@@ -159,7 +159,7 @@ time_t getTokenTime( const CK_TOKEN_INFO *tokenInfo )
 	sMemOpen( &stream, buffer, 32 );
 	status = writeGeneralizedTime( &stream, theTime, DEFAULT_TAG );
 	if( cryptStatusOK( status ) )
-		length = stell( &stream );
+		status = length = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( 0 );

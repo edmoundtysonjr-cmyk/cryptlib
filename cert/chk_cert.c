@@ -358,7 +358,12 @@ static int checkExtKeyUsageNesting( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
    to the string (with the usual pile of special-case exceptions that apply 
    to any certificate-related rules) so that e.g. www.foo.com would be 
    constrained using foo.com (or more usually .foo.com to avoid erroneous 
-   matches for strings like www.barfoo.com) */
+   matches for strings like www.barfoo.com).
+   
+   We choose to fail closed for permittedSubtrees (couldn't-resolve becomes
+   FALSE, so not permitted) rather than excludedSubtrees, which are almost 
+   trivially evaded through various name-form and encoding tricks and so 
+   have next to no security relevance anyway */
 
 typedef enum {
 	MATCH_NONE,		/* No special-case matching rules */
@@ -407,15 +412,31 @@ static BOOLEAN wildcardMatch( IN_DATAPTR const DATAPTR constrainedAttribute,
 	   
 	   If the constraining string is longer than the constrained string 
 	   (making startPos negative), it can never match */
-	REQUIRES_B( !checkOverflowSub( constrainedStringLength, 
-								   constrainingStringLength ) );
-	startPos = constrainedStringLength - constrainingStringLength;
+	if( constrainingStringLength > constrainedStringLength )
+		startPos = UNDERFLOW_MARKER;
+	else
+		{
+		REQUIRES_B( !checkOverflowSub( constrainedStringLength, 
+									   constrainingStringLength ) );
+		startPos = constrainedStringLength - constrainingStringLength;
+		}
 	if( !isShortIntegerRange( startPos ) )
 		return( FALSE );
 
 	/* Handle special-case match requirements (PKIX section 4.2.1.11) */
 	switch( matchType )
 		{
+		case MATCH_NONE:
+			/* A DNS name constraint without a leading wildcard-match 
+			   indicator has to match the entire subdomain, to avoid having 
+			   "site.com" allow "badsite.com".  We check for this by 
+			   verifying that there's a '.' at the start of the match 
+			   substring portion of the constrained string */
+			if( !isWildcardMatch && startPos > 0 && \
+				constrainedString[ startPos - 1 ] != '.' )
+				return( FALSE );
+			break;
+			
 		case MATCH_EMAIL:
 			/* Email addresses have a special-case requirement where the 
 			   absence of a wildcard-match indicator (the leading dot)
@@ -470,9 +491,14 @@ static BOOLEAN wildcardMatch( IN_DATAPTR const DATAPTR constrainedAttribute,
 			/* Adjust the constrained string information to contain only the 
  			   DNS name portion of the URI */
 			constrainedString = urlInfo.host;
-			REQUIRES_B( !checkOverflowSub( urlInfo.hostLen, 
-										   constrainingStringLength ) );
-  			startPos = urlInfo.hostLen - constrainingStringLength;
+			if( constrainingStringLength > urlInfo.hostLen )
+				startPos = UNDERFLOW_MARKER;
+			else
+				{
+				REQUIRES_B( !checkOverflowSub( urlInfo.hostLen, 
+											   constrainingStringLength ) );
+	  			startPos = urlInfo.hostLen - constrainingStringLength;
+	  			}
 			if( !isShortIntegerRange( startPos ) )
 				return( FALSE );
 			ENSURES_B( boundsCheckZ( startPos, constrainingStringLength, \
@@ -486,7 +512,12 @@ static BOOLEAN wildcardMatch( IN_DATAPTR const DATAPTR constrainedAttribute,
 			   for the constraining string */
 			if( !isWildcardMatch && startPos != 0 )
 				return( FALSE );
+			
+			break;
 			}
+		
+		default:
+			retIntError_Boolean();
 		}
 	ENSURES_B( boundsCheckZ( startPos, constrainingStringLength, \
 							 constrainedStringLength ) );
@@ -500,8 +531,8 @@ static BOOLEAN wildcardMatch( IN_DATAPTR const DATAPTR constrainedAttribute,
 	   "adding to the LHS" as for other constraints, in RFC 2459 it was
 	   another special case where it had to be a subdomain as if an 
 	   implicit "." was present */
-	return( !strCompare( constrainedString + startPos, constrainingString, 
-						 constrainingStringLength ) ? TRUE : FALSE );
+	return( strSame( constrainedString + startPos, constrainingString, 
+					 constrainingStringLength ) );
 	}
 
 CHECK_RETVAL_BOOL \
@@ -615,7 +646,45 @@ static BOOLEAN checkAltnameConstraints( IN_DATAPTR \
 	}
 
 /* Check name constraints placed by an issuer, checked if complianceLevel >=
-   CRYPT_COMPLIANCELEVEL_PKIX_FULL */
+   CRYPT_COMPLIANCELEVEL_PKIX_FULL.  Note that this only checks for 
+   actually-used name forms that we have at least an attempt at rules for, 
+   but not the kitchen-sink otherName, registeredID, or ediPartyName, which
+   in any case the spec (RFC 5280 section 4.2.1.10) disallows, [CA's] "SHOULD 
+   NOT impose name constraints on the x400Address, ediPartyName, or 
+   registeredID name forms" (excluding the kitchen-sink otherName, which 
+   LAMPS is working on fuxing) while RFC 3280 (section 4.2.1.11) just 
+   applied the standard someone-else's-problem, "the syntax and semantics 
+   for name constraints for otherName, ediPartyName, and registeredID are 
+   not defined by this specification".  RFC 3280 also made X.400 enforcement
+   a MUST while RFC 5280 did the exact opposite and made it a SHOULD NOT.
+   
+   It also, as a design decision, doesn't check for name constraints on IP 
+   addresses, which we've never seen used since support for name constraints 
+   was first added in cryptlib 3.1.0 in 2003 and which would therefore leave 
+   the checks as yet another set of never-exercised code paths alongside most 
+   of the other CRYPT_COMPLIANCELEVEL_PKIX_PARTIAL/
+   CRYPT_COMPLIANCELEVEL_PKIX_FULL code.
+   
+   The (non-)handling of IP addresses is compliant with RFC 3280 section 
+   4.2.1.11 which never set any requirements for enforcement, but not the 
+   changed RFC 5280 section 4.2.1.10 which requires that "if a name 
+   constraints extension that is marked as critical imposes constraints on 
+   a particular name form, and an instance of that name form appears in the 
+   subject field or subjectAltName extension of a subsequent certificate, 
+   then the application MUST either process the constraint or reject the 
+   certificate"
+   
+   This means that when the code was originally written based on RFC 2459 
+   and RFC 3280, not enforcing the IP address constraints was compliant. 
+   After RFC 5280 changed the requirements it was no longer compliant, but
+   by that time long real-world experience had led to most of the PKIX 
+   folderol being relegated to CRYPT_COMPLIANCELEVEL_PKIX_PARTIAL / 
+   CRYPT_COMPLIANCELEVEL_PKIX_FULL for purposes of attack surface reduction
+   which means that had it been present it wouldn't have been enabled.  So
+   it fell into a crack between "religiously implement (almost) everything 
+   no matter how crazy" when it wasn't required, and the current "implement
+   only what actually gets used and makes sense in order to keep the attack 
+   surface down" when it is */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int checkNameConstraints( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
@@ -634,6 +703,10 @@ int checkNameConstraints( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 
 	REQUIRES( sanityCheckCert( subjectCertInfoPtr ) );
 	REQUIRES( DATAPTR_ISVALID( issuerAttributes ) );
+			  /* This isn't actually the full attribute list but the first 
+			     permitted/excluded subtrees attribute in the list, which
+			     has been located by the caller when checking whether we
+			     need to be called */
 	REQUIRES( isBooleanValue( isExcluded ) );
 
 	/* Get references to the certificate's error information */
@@ -641,7 +714,7 @@ int checkNameConstraints( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 	errorType = &subjectCertInfoPtr->errorType;
 
 	/* If this is a PKIX path-kludge CA certificate then the name 
-	   constraints don't apply to it (PKIX section 4.2.1.11).  This is 
+	   constraints don't apply to it (RFC 3280 section 4.2.1.11).  This is 
 	   required in order to allow extra certificates to be kludged into the 
 	   path without violating the constraint.  For example with the chain:
 
@@ -749,15 +822,42 @@ int checkNameConstraints( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 
 typedef struct {
 	const char *constrainedString;
-	const int constrainedstringLength;
+	const int constrainedStringLength;
 	const char *constrainingString;
-	const int constraingStringLength;
+	const int constrainingStringLength;
 	const MATCH_TYPE matchType;
 	const int matchResult;
 	} MATCH_TEST_INFO;
 
 static const MATCH_TEST_INFO matchTestInfo[] = {
-	{ "a@b.com", 7, "*@b.com", 7, MATCH_EMAIL },
+	/* RFC 5280 worked examples (section 4.2.1.10) */
+	{ "www.foo.bar.com", 15, "foo.bar.com", 11, MATCH_NONE, TRUE },
+	{ "foo1.bar.com", 12, "foo.bar.com", 11, MATCH_NONE, FALSE },
+
+	/* Case-insensitive matching */
+	{ "WWW.FOO.COM", 11, ".foo.com", 8, MATCH_NONE, TRUE },
+
+	/* Identity-transformation match */
+	{ "foo.com", 7, "foo.com", 7, MATCH_NONE, TRUE },
+
+	/* Leading-dot constraints which match subdomains at any depth but not 
+	   the domain itself, e.g. ".xyz.com" allows abc.xyz.com and 
+	   abc.def.xyz.com but not xyz.com */
+	{ "www.foo.com", 11, ".foo.com", 8, MATCH_NONE, TRUE },
+	{ "a.b.foo.com", 11, ".foo.com", 8, MATCH_NONE, TRUE },
+	{ "foo.com", 7, ".foo.com", 8, MATCH_NONE, FALSE },
+
+	/* Leading dots prevent a substring false match */
+	{ "barfoo.com", 10, ".foo.com", 8, MATCH_NONE, FALSE },
+	{ "barfoo.com", 10, "foo.com", 7, MATCH_NONE, FALSE },
+
+	/* URI constraints apply to the host portion of the name */
+	{ "http://barfoo.com", 17, "foo.com", 7, MATCH_URI, FALSE },
+	{ "http://foo.com/path", 19, "foo.com", 7, MATCH_URI, TRUE },
+	{ "http://www.foo.com/xyz", 22, ".foo.com", 8, MATCH_URI, TRUE },	
+
+	/* More tests TBD */
+	{ "a@b.com", 7, "*@b.com", 7, MATCH_EMAIL, FALSE },
 		{ NULL, 0 }, { NULL, 0 }
 	};
 
@@ -770,38 +870,50 @@ BOOLEAN checkNameMatch( void )
 	LOOP_INDEX i;
 	int status;
 	
+	/* This code is still under development pending the LAMPS WG's attempt 
+	   to resolve the PKIX name-matching mess.  At the moment it doesn't 
+	   test anything much beyond basic DNS name handling, which is what
+	   approximately 100% of cases will be, because it's unclear what 
+	   correct behaviour for the rest actually is */
 	clearErrorInfo( &errorInfo );
-	LOOP_SMALL( i = 0, i < FAILSAFE_ARRAYSIZE( matchTestInfo, \
-											   MATCH_TEST_INFO ) && \
-					   matchTestInfo[ i ].constrainedString != NULL, i++ )
+	LOOP_MED( i = 0, i < FAILSAFE_ARRAYSIZE( matchTestInfo, \
+											 MATCH_TEST_INFO ) && \
+					 matchTestInfo[ i ].constrainedString != NULL, i++ )
 		{
 		DATAPTR constrainedName, constrainingName;
-		BOOLEAN matchStatus;
+		BOOLEAN matchResult;
 		
-		ENSURES( LOOP_INVARIANT_SMALL( i, 0, 
-									   FAILSAFE_ARRAYSIZE( matchTestInfo, \
-														   MATCH_TEST_INFO ) ) );
+		ENSURES( LOOP_INVARIANT_MED( i, 0, 
+									 FAILSAFE_ARRAYSIZE( matchTestInfo, \
+														 MATCH_TEST_INFO ) ) );
 
 		DATAPTR_SET( constrainedName, NULL );
 		status = addAttributeFieldString( &constrainedName, 
 					CRYPT_CERTINFO_SUBJECTKEYIDENTIFIER, CRYPT_ATTRIBUTE_NONE,
-					"a@b.com", 7, ATTR_FLAG_NONE, FALSE, &errorInfo,
-					&errorLocus, &errorType  );
+					matchTestInfo[ i ].constrainedString, 
+					matchTestInfo[ i ].constrainedStringLength, ATTR_FLAG_NONE, 
+					FALSE, &errorInfo, &errorLocus, &errorType  );
 		ENSURES( cryptStatusOK( status ) );
 		DATAPTR_SET( constrainingName, NULL );
 		status = addAttributeFieldString( &constrainingName, 
 					CRYPT_CERTINFO_SUBJECTKEYIDENTIFIER, CRYPT_ATTRIBUTE_NONE,
-					"*@b.com", 7, ATTR_FLAG_NONE, FALSE, &errorInfo,
-					&errorLocus, &errorType  );
+					matchTestInfo[ i ].constrainingString, 
+					matchTestInfo[ i ].constrainingStringLength, ATTR_FLAG_NONE, 
+					FALSE, &errorInfo, &errorLocus, &errorType  );
 		ENSURES( cryptStatusOK( status ) );
-		matchStatus = wildcardMatch( constrainedName, constrainingName, 
-									 MATCH_EMAIL );
+		matchResult = wildcardMatch( constrainedName, constrainingName, 
+									 matchTestInfo[ i ].matchType );
 		status = deleteAttributeField( &constrainedName, NULL, 
 									   constrainedName, NULL );
 		ENSURES( cryptStatusOK( status ) );
 		status = deleteAttributeField( &constrainingName, NULL, 
 									   constrainingName, NULL );
 		ENSURES( cryptStatusOK( status ) );
+		if( matchResult != matchTestInfo[ i ].matchResult )
+			{
+			DEBUG_DIAG(( "wildcardMatch() test %d failed", i ));
+			return( FALSE );
+			}
 		}
 	ENSURES( LOOP_BOUND_OK );
 
@@ -930,6 +1042,9 @@ BOOLEAN isPolicyPresent( const DATAPTR_ATTRIBUTE subjectAttributes,
 	assert( isReadPtrDynamic( issuerPolicyValue, issuerPolicyValueLength ) );
 
 	REQUIRES_B( DATAPTR_ISVALID( subjectAttributes ) );
+			  /* This isn't actually the full attribute list but the first 
+			     policy attribute in the list, which has been located by the 
+			     caller when checking whether we need to be called */
 	REQUIRES_B( issuerPolicyValueLength > 0 && \
 				issuerPolicyValueLength < MAX_POLICY_SIZE );
 
@@ -1858,6 +1973,24 @@ int checkCert( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 		}
 	CFI_CHECK_UPDATE( "CRYPT_COMPLIANCELEVEL_REDUCED" );
 
+	/* If the certificate isn't self-signed, check name chaining.  This 
+	   check is placed here because the cached-check-result early-exit below
+	   is associated with the certificate being checked, not the combination 
+	   of certificate and issuer, so in theory if a certificate is checked 
+	   against issuer1, the check result recorded, and it's then checked 
+	   against issuer2 identifying as issuer1, the result would be the 
+	   cached result from the issuer1 check rather than a new issuer2 check.
+	   It's not clear how such a situation could ever arise apart from as a 
+	   programming error, but the check is cheap so we place it here rather
+	   than after the already-checked early exit */
+	if( !subjectSelfSigned )
+		{
+		status = checkNameChaining( subjectCertInfoPtr, issuerCertInfoPtr );
+		if( cryptStatusError( status ) )
+			return( status );
+		}
+	CFI_CHECK_UPDATE( "checkNameChaining" );
+
 	/* If it's a self-signed certificate or if we're doing a short-circuit 
 	   check of a certificate in a chain that's already been checked and 
 	   we've already checked it at the appropriate level then there's no 
@@ -1865,9 +1998,10 @@ int checkCert( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 	if( ( subjectSelfSigned || shortCircuitCheck ) && \
 		( subjectCertInfoPtr->cCertCert->maxCheckLevel >= complianceLevel ) )
 		{
-		ENSURES( CFI_CHECK_SEQUENCE_4( "IMESSAGE_GETATTRIBUTE", 
+		ENSURES( CFI_CHECK_SEQUENCE_5( "IMESSAGE_GETATTRIBUTE", 
 									   "checkCertBasic", "checkKeyUsage",
-									   "CRYPT_COMPLIANCELEVEL_REDUCED" ) );
+									   "CRYPT_COMPLIANCELEVEL_REDUCED",
+									   "checkNameChaining" ) );
 		return( CRYPT_OK );
 		}
 
@@ -1877,15 +2011,6 @@ int checkCert( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 		return( status );
 	CFI_CHECK_UPDATE( "checkVersion" );
 
-	/* If the certificate isn't self-signed, check name chaining */
-	if( !subjectSelfSigned )
-		{
-		status = checkNameChaining( subjectCertInfoPtr, issuerCertInfoPtr );
-		if( cryptStatusError( status ) )
-			return( status );
-		}
-	CFI_CHECK_UPDATE( "checkNameChaining" );
-
 	/* If we're doing a reduced level of checking, we're done */
 	if( complianceLevel < CRYPT_COMPLIANCELEVEL_STANDARD )
 		{
@@ -1894,7 +2019,7 @@ int checkCert( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 		ENSURES( CFI_CHECK_SEQUENCE_6( "IMESSAGE_GETATTRIBUTE", 
 									   "checkCertBasic", "checkKeyUsage", 
 									   "CRYPT_COMPLIANCELEVEL_REDUCED", 
-									   "checkVersion", "checkNameChaining" ) );
+									   "checkNameChaining", "checkVersion" ) );
 		return( CRYPT_OK );
 		}
 	CFI_CHECK_UPDATE( "CRYPT_COMPLIANCELEVEL_STANDARD" );
@@ -1956,7 +2081,7 @@ int checkCert( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 		ENSURES( CFI_CHECK_SEQUENCE_10( "IMESSAGE_GETATTRIBUTE", 
 										"checkCertBasic", "checkKeyUsage", 
 										"CRYPT_COMPLIANCELEVEL_REDUCED", 
-										"checkVersion", "checkNameChaining", 
+										"checkNameChaining", "checkVersion",  
 										"CRYPT_COMPLIANCELEVEL_STANDARD", 
 										"checkKeyUsage", "checkKeyUsageIssuer",
 										"checkAttributeProperty" ) );
@@ -2092,7 +2217,7 @@ int checkCert( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 		ENSURES( CFI_CHECK_SEQUENCE_15( "IMESSAGE_GETATTRIBUTE", 
 										"checkCertBasic", "checkKeyUsage", 
 										"CRYPT_COMPLIANCELEVEL_REDUCED", 
-										"checkVersion", "checkNameChaining", 
+										"checkNameChaining", "checkVersion", 
 										"CRYPT_COMPLIANCELEVEL_STANDARD", 
 										"checkKeyUsage", "checkKeyUsageIssuer",
 										"checkAttributeProperty", 
@@ -2196,7 +2321,7 @@ int checkCert( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 	ENSURES( CFI_CHECK_SEQUENCE_20( "IMESSAGE_GETATTRIBUTE", 
 									"checkCertBasic", "checkKeyUsage", 
 									"CRYPT_COMPLIANCELEVEL_REDUCED", 
-									"checkVersion", "checkNameChaining", 
+									"checkNameChaining", "checkVersion", 
 									"CRYPT_COMPLIANCELEVEL_STANDARD", 
 									"checkKeyUsage", "checkKeyUsageIssuer",
 									"checkAttributeProperty", 
@@ -2213,7 +2338,7 @@ int checkCert( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 	ENSURES( CFI_CHECK_SEQUENCE_15( "IMESSAGE_GETATTRIBUTE", 
 									"checkCertBasic", "checkKeyUsage", 
 									"CRYPT_COMPLIANCELEVEL_REDUCED", 
-									"checkVersion", "checkNameChaining", 
+									"checkNameChaining", "checkVersion", 
 									"CRYPT_COMPLIANCELEVEL_STANDARD", 
 									"checkKeyUsage", "checkKeyUsageIssuer",
 									"checkAttributeProperty", 
@@ -2225,7 +2350,7 @@ int checkCert( INOUT_PTR CERT_INFO *subjectCertInfoPtr,
 	ENSURES( CFI_CHECK_SEQUENCE_10( "IMESSAGE_GETATTRIBUTE", 
 									"checkCertBasic", "checkKeyUsage", 
 									"CRYPT_COMPLIANCELEVEL_REDUCED", 
-									"checkVersion", "checkNameChaining", 
+									"checkNameChaining", "checkVersion", 
 									"CRYPT_COMPLIANCELEVEL_STANDARD", 
 									"checkKeyUsage", "checkKeyUsageIssuer",
 									"checkAttributeProperty" ) );

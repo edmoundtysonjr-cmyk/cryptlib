@@ -451,14 +451,11 @@ static int deenvelopePush( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		if( envelopeInfoPtr->buffer == NULL )
 			{
 			/* The first push has to have at least some data associated with
-			   it so that we can detect the type.  In theory we could 
-			   require some minimum data size before we accept it based on
-			   a pathologically minimal envelope, e.g. a data-only envelope
-			   of a 1-byte message, but the code is written to handle 
-			   arbitrarily tiny initial data amounts and the self-test code 
-			   exercises the ability to do this even if, most likely, no-one 
-			   else ever will */
-			if( length < 1 )
+			   it so that we can detect the type.  The code will actually run 
+			   down to a one-byte initial data push but no legitimate 
+			   enveloped data will ever have this size so we require at 
+			   least 8 bytes of data */
+			if( length < 8 )
 				return( CRYPT_ERROR_UNDERFLOW );
 			
 			/* Allocate the envelope buffer */
@@ -1058,7 +1055,8 @@ static int envelopeMessageFunction( INOUT_PTR TYPECAST( ENVELOPE_INFO * ) \
 			{
 			REQUIRES( isIntegerRangeNZ( envelopeInfoPtr->bufSize ) ); 
 			zeroise( envelopeInfoPtr->buffer, envelopeInfoPtr->bufSize );
-			safeBufferFree( envelopeInfoPtr->buffer );
+			safeBufferFree( envelopeInfoPtr->buffer, 
+							envelopeInfoPtr->bufSize );
 			envelopeInfoPtr->buffer = NULL;
 			}
 		if( envelopeInfoPtr->auxBuffer != NULL )

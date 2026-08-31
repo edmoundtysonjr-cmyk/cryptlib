@@ -84,12 +84,14 @@ static int exitErrorNotFound( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 STDC_NONNULL_ARG( ( 1 ) ) \
 static void resetVirtualCursor( INOUT_PTR CONTENT_LIST *contentListPtr )
 	{
+	CONTENT_SIG_INFO *sigInfo;
+	
 	assert( isWritePtr( contentListPtr, sizeof( CONTENT_LIST ) ) );
 
 	if( contentListPtr->type != CONTENT_SIGNATURE )
 		return;
-	contentListPtr->clSigInfo.attributeCursorEntry = \
-									CRYPT_ENVINFO_SIGNATURE_RESULT;
+	sigInfo = &contentListPtr->clSigInfo;
+	sigInfo->attributeCursorEntry = CRYPT_ENVINFO_SIGNATURE_RESULT;
 	}
 
 /* Move the internal virtual cursor within a content-list item */
@@ -555,6 +557,12 @@ static int getCurrentAttributeInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		*valuePtr = contentListCurrent->envInfo;
 		}
 
+	/* We can return here with the return value still set to 
+	   CRYPT_ATTRIBUTE_NONE if we fetched the private key and added it.
+	   We can't point the return value to the attribute needed to
+	   continue because we've deleted the corresponding content-list
+	   item in the process of adding the private key and so there's no
+	   attribute actually needed to continue */
 	return( CRYPT_OK );
 	}
 
@@ -615,16 +623,17 @@ static int getSignatureResult( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	REQUIRES( contentListItem != NULL );
 
 	/* Make sure that the content list item is of the appropriate type, and 
-	   if we've already done this one don't process it a second time.  This 
-	   check is also performed by the addInfo() code but we duplicate it 
-	   here (just for the signature-result attribute) to avoid having to do 
-	   an unnecessary key fetch for non-CMS signatures */
-	sigInfo = &contentListItem->clSigInfo;
-	if( contentListItem->envInfo != CRYPT_ENVINFO_SIGNATURE )
+	   if we've already done this one don't process it a second time.  An
+	   equivalent check is also performed by the addInfo() code (it just 
+	   tests envInfo, not type) but we duplicate it here (just for the 
+	   signature-result attribute) to avoid having to do an unnecessary key 
+	   fetch for non-CMS signatures */
+	if( contentListItem->type != CONTENT_SIGNATURE )
 		{
 		return( exitErrorNotFound( envelopeInfoPtr, 
 								   CRYPT_ENVINFO_SIGNATURE_RESULT ) );
 		}
+	sigInfo = &contentListItem->clSigInfo;
 	if( TEST_FLAG( contentListItem->flags, CONTENT_FLAG_PROCESSED ) )
 		{
 		*valuePtr = sigInfo->processingResult;
@@ -737,6 +746,13 @@ static int getSignatureKey( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	/* Clear return value */
 	*valuePtr = CRYPT_ERROR;
 
+	/* Make sure that we're working with the correct envelope type */
+	if( contentListItem->type != CONTENT_SIGNATURE )
+		{
+		return( exitErrorNotFound( envelopeInfoPtr,
+								   CRYPT_ENVINFO_SIGNATURE ) );
+		}
+    
 	/* If there's no signing key present try and instantiate it from an 
 	   attached certificate chain */
 	sigInfo = &contentListItem->clSigInfo;
@@ -897,12 +913,15 @@ static int checkOtherAttribute( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 		case CRYPT_ENVINFO_INTEGRITY:
 			/* The integrity-protection flag can't be reset to a value of 
-			   CRYPT_INTEGRITY_NONE once it's been set to a higher level.  
-			   If it could be reset then the caller could set non-MAC-
-			   compatible options by clearing the flag and then setting it 
-			   again afterwards */
+			   CRYPT_INTEGRITY_NONE once it's been set to a higher level
+			   (implied by the envelope usage being set).  If it could be 
+			   reset then the caller could set non-MAC-compatible options 
+			   by clearing the flag and then setting it again afterwards */
 			if( envelopeInfoPtr->usage != ACTION_NONE )
-				return( CRYPT_ERROR_INITED );
+				{
+				return( exitErrorInited( envelopeInfoPtr, 
+										 CRYPT_ENVINFO_INTEGRITY ) );
+				}
 			return( CRYPT_OK );
 
 		case CRYPT_ENVINFO_SIGNATURE:
@@ -1272,6 +1291,12 @@ int getEnvelopeAttribute( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 			REQUIRES( contentListItem != NULL );
 			REQUIRES( sanityCheckContentList( contentListItem ) );
 
+			/* Make sure that we're working with the correct envelope type */
+			if( contentListItem->type != CONTENT_SIGNATURE )
+				{
+				return( exitErrorNotFound( envelopeInfoPtr, attribute ) );
+				}
+
 			/* Make sure that there's extra data present */
 			iCryptHandle = \
 				( attribute == CRYPT_ENVINFO_SIGNATURE_EXTRADATA ) ? \
@@ -1466,6 +1491,7 @@ int getEnvelopeAttributeS( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 typedef struct {
 	const CRYPT_ATTRIBUTE_TYPE type;	/* Attribute type */
 	const CRYPT_FORMAT_TYPE *formatType;/* Permitted envelope types */
+	const int formatTypeInfoSize;		/* No.of entries in formatType */
 	const ACTION_TYPE usage;			/* Corresponding usage type, */
 	const MESSAGE_CHECK_TYPE checkType;	/*  check type, and */
 	const int requiredFlag;				/*  required enveloping flag */
@@ -1491,28 +1517,38 @@ static const CRYPT_FORMAT_TYPE formatAllEnvSMIME[] = {
 	CRYPT_FORMAT_CMS, CRYPT_FORMAT_SMIME, CRYPT_FORMAT_NONE, 
 	CRYPT_FORMAT_NONE };
 
+#define FA_SIZE		FAILSAFE_ARRAYSIZE( formatAll, CRYPT_FORMAT_TYPE )
+#define FAC_SIZE	FAILSAFE_ARRAYSIZE( formatAllCMS, CRYPT_FORMAT_TYPE )
+#define FAD_SIZE	FAILSAFE_ARRAYSIZE( formatAllDeenv, CRYPT_FORMAT_TYPE )
+#define FAE_SIZE	FAILSAFE_ARRAYSIZE( formatAllEnv, CRYPT_FORMAT_TYPE )
+#define FAES_SIZE	FAILSAFE_ARRAYSIZE( formatAllEnvSMIME, CRYPT_FORMAT_TYPE )
+#define FAS_SIZE	FAILSAFE_ARRAYSIZE( formatAllSMIME, CRYPT_FORMAT_TYPE )
+
 /* The following lookup table defines the checks that are applied to each 
    attribute as it's added.
 
-	  Attribute						Format			Env.usage		Action to chk.			Env.flags */
+	  Attribute						Format						Env.usage		Action to chk.			Env.flags */
 static const CHECK_INFO checkTable[] = {
 #ifdef USE_COMPRESSION
-	{ CRYPT_ENVINFO_COMPRESSION,	formatAllEnv,	ACTION_COMPRESS, MESSAGE_CHECK_NONE,	0 },
+	{ CRYPT_ENVINFO_COMPRESSION,	formatAllEnv, FAE_SIZE,		ACTION_COMPRESS, MESSAGE_CHECK_NONE,	0 },
 #endif /* USE_COMPRESSION */
-	{ CRYPT_ENVINFO_DETACHEDSIGNATURE, formatAll,	ACTION_SIGN,	MESSAGE_CHECK_NONE,		0 },
-	{ CRYPT_ENVINFO_INTEGRITY,		formatAllEnv,	ACTION_NONE,	MESSAGE_CHECK_NONE,		0 },
-	{ CRYPT_ENVINFO_KEY,			formatAllCMS,	ACTION_CRYPT,	MESSAGE_CHECK_CRYPT,	0 },
-	{ CRYPT_ENVINFO_SIGNATURE,		formatAll,		ACTION_NONE,	MESSAGE_CHECK_NONE,		0 },
-	{ CRYPT_ENVINFO_SIGNATURE_EXTRADATA, formatAllEnvSMIME, ACTION_NONE, MESSAGE_CHECK_NONE, 0 },
-	{ CRYPT_ENVINFO_PUBLICKEY,		formatAllEnv,	ACTION_CRYPT,	MESSAGE_CHECK_PKC_ENCRYPT, 0 },
-	{ CRYPT_ENVINFO_PRIVATEKEY,		formatAllDeenv,	ACTION_CRYPT,	MESSAGE_CHECK_PKC_DECRYPT, ENVELOPE_FLAG_ISDEENVELOPE },
-	{ CRYPT_ENVINFO_SESSIONKEY,		formatAllCMS,	ACTION_CRYPT,	MESSAGE_CHECK_CRYPT,	0 },
-	{ CRYPT_ENVINFO_HASH,			formatAll,		ACTION_NONE,	MESSAGE_CHECK_HASH,		ENVELOPE_FLAG_DETACHED_SIG },
-	{ CRYPT_ENVINFO_TIMESTAMP,		formatAllEnvSMIME, ACTION_SIGN,	MESSAGE_CHECK_NONE,		0 },
-	{ CRYPT_OPTION_ENCR_MAC,		formatAllCMS,	ACTION_NONE,	MESSAGE_CHECK_NONE,		0 },
-	{ CRYPT_IATTRIBUTE_INCLUDESIGCERT, formatAllEnvSMIME, ACTION_SIGN, MESSAGE_CHECK_NONE,	0 },
-	{ CRYPT_IATTRIBUTE_ATTRONLY,	formatAllSMIME,	ACTION_SIGN,	MESSAGE_CHECK_NONE,		0 },
-	{ CRYPT_ATTRIBUTE_NONE, NULL, ACTION_NONE, 0 }, { CRYPT_ATTRIBUTE_NONE, NULL, ACTION_NONE, 0 }
+	{ CRYPT_ENVINFO_DETACHEDSIGNATURE, formatAll, FA_SIZE,		ACTION_SIGN,	MESSAGE_CHECK_NONE,		0 },
+	{ CRYPT_ENVINFO_INTEGRITY,		formatAllEnv, FAE_SIZE,		ACTION_NONE,	MESSAGE_CHECK_NONE,		0 },
+	{ CRYPT_ENVINFO_KEY,			formatAllCMS, FAC_SIZE,		ACTION_CRYPT,	MESSAGE_CHECK_CRYPT,	0 },
+	{ CRYPT_ENVINFO_SIGNATURE,		formatAll, FA_SIZE,			ACTION_NONE,	MESSAGE_CHECK_NONE,		0 },
+	{ CRYPT_ENVINFO_SIGNATURE_EXTRADATA, 
+									formatAllEnvSMIME, FAES_SIZE, ACTION_NONE,	MESSAGE_CHECK_NONE,		0 },
+	{ CRYPT_ENVINFO_PUBLICKEY,		formatAllEnv, FAE_SIZE,		ACTION_CRYPT,	MESSAGE_CHECK_PKC_ENCRYPT, 0 },
+	{ CRYPT_ENVINFO_PRIVATEKEY,		formatAllDeenv,	FAD_SIZE,	ACTION_CRYPT,	MESSAGE_CHECK_PKC_DECRYPT, ENVELOPE_FLAG_ISDEENVELOPE },
+	{ CRYPT_ENVINFO_SESSIONKEY,		formatAllCMS, FAC_SIZE,		ACTION_CRYPT,	MESSAGE_CHECK_CRYPT,	0 },
+	{ CRYPT_ENVINFO_HASH,			formatAll, FA_SIZE,			ACTION_NONE,	MESSAGE_CHECK_HASH,		ENVELOPE_FLAG_DETACHED_SIG },
+	{ CRYPT_ENVINFO_TIMESTAMP,		formatAllEnvSMIME, FAES_SIZE, ACTION_SIGN,	MESSAGE_CHECK_NONE,		0 },
+	{ CRYPT_OPTION_ENCR_MAC,		formatAllCMS, FAC_SIZE,		ACTION_NONE,	MESSAGE_CHECK_NONE,		0 },
+	{ CRYPT_IATTRIBUTE_INCLUDESIGCERT, 
+									formatAllEnvSMIME, FAES_SIZE, ACTION_SIGN,	MESSAGE_CHECK_NONE,		0 },
+	{ CRYPT_IATTRIBUTE_ATTRONLY,	formatAllSMIME,	 FAS_SIZE,	ACTION_SIGN,	MESSAGE_CHECK_NONE,		0 },
+		{ CRYPT_ATTRIBUTE_NONE, NULL, 0, ACTION_NONE, 0 }, 
+		{ CRYPT_ATTRIBUTE_NONE, NULL, 0, ACTION_NONE, 0 }
 	};
 
 /* Set a numeric/boolean attribute */
@@ -1529,7 +1565,7 @@ int setEnvelopeAttribute( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	ACTION_TYPE usage = ACTION_NONE;
 	const CRYPT_FORMAT_TYPE *formatTypeInfo = NULL;
 	LOOP_INDEX i;
-	int requiredFlag = 0, status;
+	int requiredFlag = 0, formatTypeInfoSize = 0, status;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 
@@ -1544,19 +1580,30 @@ int setEnvelopeAttribute( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 			  isInternalAttribute( attribute ) );
 	REQUIRES( addInfoFunction != NULL );
 
-	/* Generic attributes are valid for all envelope types */
-	if( attribute == CRYPT_ATTRIBUTE_BUFFERSIZE )
-		{
-		envelopeInfoPtr->bufSize = value;
-		return( CRYPT_OK );
-		}
-
 	/* If it's meta-information, process it now */
 	if( attribute == CRYPT_ATTRIBUTE_CURRENT_GROUP || \
 		attribute == CRYPT_ATTRIBUTE_CURRENT )
 		{
 		return( setCursorSelection( envelopeInfoPtr, attribute, 
 									value ) );
+		}
+
+	/* Generic attributes are valid for all envelope types */
+	if( attribute == CRYPT_ATTRIBUTE_BUFFERSIZE )
+		{
+		/* We can't change the buffer size once it's been allocated.  This
+		   check is independent of the envelope state, for example the
+		   ENVELOPE_STATE_PREDATA check below can still have the buffer 
+		   already initialised if we exit halfway through with a 
+		   CRYPT_ENVELOPE_RESOURCE */
+		if( envelopeInfoPtr->buffer != NULL )
+			{
+			return( exitErrorInited( envelopeInfoPtr, 
+									 CRYPT_ATTRIBUTE_BUFFERSIZE ) );
+			}
+		
+		envelopeInfoPtr->bufSize = value;
+		return( CRYPT_OK );
 		}
 
 	/* In general we can't add new enveloping information once we've started
@@ -1592,6 +1639,7 @@ int setEnvelopeAttribute( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		if( checkTable[ i ].type == attribute )
 			{
 			formatTypeInfo = checkTable[ i ].formatType;
+			formatTypeInfoSize = checkTable[ i ].formatTypeInfoSize;
 			usage = checkTable[ i ].usage;
 			checkType = checkTable[ i ].checkType;
 			requiredFlag = checkTable[ i ].requiredFlag;
@@ -1607,14 +1655,11 @@ int setEnvelopeAttribute( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		BOOLEAN formatOK = FALSE;
 
 		LOOP_SMALL( i = 0,
-					i < FAILSAFE_ARRAYSIZE( formatAll, \
-											CRYPT_FORMAT_TYPE ) && \
+					i < formatTypeInfoSize && \
 						formatTypeInfo[ i ] != CRYPT_FORMAT_NONE,
 					i++ )
 			{
-			ENSURES( LOOP_INVARIANT_SMALL( i, 0, 
-										   FAILSAFE_ARRAYSIZE( formatAll, \
-															   CRYPT_FORMAT_TYPE ) - 1 ) );
+			ENSURES( LOOP_INVARIANT_SMALL( i, 0, formatTypeInfoSize - 1 ) );
 
 			if( envelopeInfoPtr->type == formatTypeInfo[ i ] )
 				{
@@ -1623,7 +1668,7 @@ int setEnvelopeAttribute( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 				}
 			}
 		ENSURES( LOOP_BOUND_OK );
-		ENSURES( i < FAILSAFE_ARRAYSIZE( formatAll, CRYPT_FORMAT_TYPE ) );
+		ENSURES( i < formatTypeInfoSize );
 		if( !formatOK )
 			return( CRYPT_ARGERROR_VALUE );
 		}
@@ -1771,10 +1816,17 @@ int setEnvelopeAttribute( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		   using raw session-key based encryption, which precludes using
 		   authenticated encryption.  Unfortunately we can't do this for 
 		   CMS / S/MIME because of backwards-compatibility considerations 
-		   with other implementations */
+		   with other implementations.
+		   
+		   The check for the action list being set is to check for a session
+		   key already being present, in which case there'll be an action 
+		   list present to hold it.  Alternatively it could be a hash 
+		   action, but that's for signature envelopes with ACTION_SIGN, not
+		   ACTION_CRYPT */
 		if( usage == ACTION_CRYPT && \
 			envelopeInfoPtr->type == CRYPT_FORMAT_CRYPTLIB && \
-			attribute != CRYPT_ENVINFO_SESSIONKEY )
+			attribute != CRYPT_ENVINFO_SESSIONKEY && \
+			DATAPTR_ISNULL( envelopeInfoPtr->actionList ) )
 			{
 			SET_FLAG( envelopeInfoPtr->flags, ENVELOPE_FLAG_AUTHENC );
 			}
@@ -1842,6 +1894,27 @@ int setEnvelopeAttributeS( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 			/* Add it to the envelope */
 			status = addInfoStringFunction( envelopeInfoPtr, 
 								CRYPT_ENVINFO_PASSWORD, data, dataLength );
+			if( cryptStatusOK( status ) )
+				{
+				/* If we're encrypting the content and using the cryptlib 
+				   native format, enable authenticated encryption.  
+				   Unfortunately we can't do this for CMS / S/MIME because 
+				   of backwards-compatibility considerations with other 
+				   implementations.
+
+				   The check for the action list being set is to check for a 
+				   session key already being present, in which case there'll 
+				   be an action list present to hold it.  Alternatively it 
+				   could be a hash action, but that's for signature 
+				   envelopes with ACTION_SIGN, not ACTION_CRYPT */
+				if( ( usage == ACTION_CRYPT || \
+					  envelopeInfoPtr->usage == ACTION_CRYPT ) && \
+					envelopeInfoPtr->type == CRYPT_FORMAT_CRYPTLIB && \
+					DATAPTR_ISNULL( envelopeInfoPtr->actionList ) )
+					{
+					SET_FLAG( envelopeInfoPtr->flags, ENVELOPE_FLAG_AUTHENC );
+					}
+				}
 			break;
 
 		case CRYPT_ENVINFO_RECIPIENT:

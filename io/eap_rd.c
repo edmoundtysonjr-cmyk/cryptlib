@@ -609,7 +609,7 @@ int processRADIUSTLVs( INOUT_PTR STREAM *stream,
 	BYTE *bufPtr = data;
 	BOOLEAN partialRead = FALSE;
 	LOOP_INDEX noPackets;
-	int bytesRead = 0, status;
+	int bytesRead = 0, position, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( eapInfo, sizeof( EAP_INFO ) ) );
@@ -811,8 +811,10 @@ int processRADIUSTLVs( INOUT_PTR STREAM *stream,
 			}
 		}
 	ENSURES( LOOP_BOUND_OK );
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
 	if( noPackets >= MAX_RADIUS_TLV_FRAGMENTS && \
-		stell( stream ) < eapInfo->radiusLength && !partialRead )
+		position < eapInfo->radiusLength && !partialRead )
 		{
 		/* We exited the read loop due to an exceeded packet count, this is
 		   an error */
@@ -1246,8 +1248,11 @@ static int readFunction( INOUT_PTR STREAM *stream,
 				}
 			if( cryptStatusOK( status ) )
 				{
-				status = updateEapState( stream, eapInfo, 
-										 stell( &radiusStream ), 
+				const int position = stell( &radiusStream );
+
+				REQUIRES( isIntegerRangeNZ( position ) );
+
+				status = updateEapState( stream, eapInfo, position, 
 										 isPartialRead );
 				}
 			sMemDisconnect( &radiusStream );

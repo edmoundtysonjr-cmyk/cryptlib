@@ -103,6 +103,7 @@ typedef enum {
 	TLS_TEST_NORMAL,			/* Standard TLS test */
 	TLS_TEST_BULKTRANSER,		/* Bulk data transfer */
 	TLS_TEST_CLIENTCERT,		/* User auth.with client certificate */
+	TLS_TEST_NOCLIENTCERT,		/* User auth.with absent client certificate */
 	TLS_TEST_CLIENTCERT_MANUAL,	/* User auth.client certificate manual verif.*/
 	TLS_TEST_SNI,				/* Server certificate switching via SNI */
 	TLS_TEST_FORCEVER_CLI,		/* Force use of given TLS version on client */
@@ -1209,7 +1210,8 @@ static int connectTLS( const CRYPT_SESSION_TYPE sessionType,
 	fprintf( outputStream, 
 			 "%sTesting %s%s session%s...\n", isServer ? "SVR: " : "",
 			 localSession ? "local " : "", versionStr[ version ],
-			 ( testType == TLS_TEST_CLIENTCERT ) ? " with client certs" : \
+			 ( testType == TLS_TEST_CLIENTCERT ) ? " with client cert" : \
+			 ( testType == TLS_TEST_NOCLIENTCERT ) ? " with absent client cert" : \
 			 ( testType == TLS_TEST_CLIENTCERT_MANUAL ) ? " with manual verification of client cert" : \
 			 ( testType == TLS_TEST_SNI ) ? " with SNI-based server key selection" : \
 			 ( testType == TLS_TEST_FORCEVER_CLI || \
@@ -1419,7 +1421,9 @@ static int connectTLS( const CRYPT_SESSION_TYPE sessionType,
 				cryptDestroyContext( privateKey );
 				}
 			}
-		if( cryptStatusOK( status ) && testType == TLS_TEST_CLIENTCERT )
+		if( cryptStatusOK( status ) && \
+			( testType == TLS_TEST_CLIENTCERT || \
+			  testType == TLS_TEST_NOCLIENTCERT ) )
 			{
 			CRYPT_KEYSET cryptKeyset;
 
@@ -2085,7 +2089,8 @@ dualThreadContinue:
 #endif /* CONFIG_FAULTS */
 		if( isErrorTest || testType == TLS_TEST_PSK_CLIONLY || \
 			testType == TLS_TEST_PSK_SVRONLY || \
-			testType == TLS_TEST_ALLOWLIST_FAIL )
+			testType == TLS_TEST_ALLOWLIST_FAIL || \
+			testType == TLS_TEST_NOCLIENTCERT )
 			{
 			/* These tests are supposed to fail, so if this happens then the 
 			   overall test has succeeded */
@@ -2115,16 +2120,18 @@ dualThreadContinue:
 		}
 #endif /* CONFIG_FAULTS */
 
-	/* The CLIONLY/SVRONLY test is supposed to fail, if this doesn't happen 
-	   then there's a problem */
+	/* Various tests are supposed to fail, if this doesn't happen then 
+	   there's a problem */
 #ifdef NO_SESSION_CACHE
 	if( testType == TLS_TEST_PSK_CLIONLY || \
-		testType == TLS_TEST_PSK_SVRONLY )
+		testType == TLS_TEST_PSK_SVRONLY || \
+		testType == TLS_TEST_ALLOWLIST_FAIL || \
+		testType == TLS_TEST_NOCLIENTCERT )
 		{
 		cryptDestroySession( cryptSession );
-		fprintf( outputStream, "%sTLS-PSK handshake without password should "
-				 "have failed but succeeded,\nline %d.\n",
-				 isServer ? "SVR: " : "", __LINE__  );
+		fprintf( outputStream, "%sTest type %d should have failed but "
+				 "succeeded,\nline %d.\n", isServer ? "SVR: " : "", 
+				 testType, __LINE__  );
 		return( FALSE );
 		}
 #endif /* NO_SESSION_CACHE */
@@ -2163,6 +2170,7 @@ dualThreadContinue:
 				( !isServer && testType != TLS_TEST_PSK && \
 							   testType != TLS_TEST_RESUME ),
 				( isServer && ( testType == TLS_TEST_CLIENTCERT || \
+								testType == TLS_TEST_NOCLIENTCERT || \
 								testType == TLS_TEST_CLIENTCERT_MANUAL ) ) ) )
 			{
 			cryptDestroySession( cryptSession );
@@ -2776,60 +2784,6 @@ dualThreadContinue:
 	return( TRUE );
 	}
 
-/* SSLv3 tests */
-
-int testSessionSSL( void )
-	{
-	return( connectTLS( CRYPT_SESSION_TLS, TLS_TEST_NORMAL, 0, CRYPT_UNUSED, FALSE ) );
-	}
-int testSessionSSLLocalSocket( void )
-	{
-	return( connectTLS( CRYPT_SESSION_TLS, TLS_TEST_STARTTLS, 0, CRYPT_UNUSED, FALSE ) );
-	}
-int testSessionSSLClientCert( void )
-	{
-	return( connectTLS( CRYPT_SESSION_TLS, TLS_TEST_CLIENTCERT, 0, CRYPT_UNUSED, FALSE ) );
-	}
-
-int testSessionSSLServer( void )
-	{
-	int status;
-
-	createMutex();
-	status = connectTLS( CRYPT_SESSION_TLS_SERVER, TLS_TEST_NORMAL, 0, CRYPT_UNUSED, FALSE );
-	destroyMutex();
-
-	return( status );
-	}
-int testSessionSSLServerCached( void )
-	{
-	int status;
-
-	/* Run the server twice to check session caching.  Testing this requires 
-	   manual reconnection with a browser to localhost since it's too 
-	   complex to handle easily via a loopback test.  Note that with MSIE 
-	   this will require three lots of connects rather than two, because it 
-	   handles an unknown certificate by doing a resume, which consumes two 
-	   lots of sessions, and then the third one is the actual session resume */
-	createMutex();
-	status = connectTLS( CRYPT_SESSION_TLS_SERVER, TLS_TEST_NORMAL, 0, CRYPT_UNUSED, FALSE );
-	if( status > 0 )
-		status = connectTLS( CRYPT_SESSION_TLS_SERVER, TLS_TEST_NORMAL, 0, CRYPT_UNUSED, FALSE );
-	destroyMutex();
-
-	return( status );
-	}
-int testSessionSSLServerClientCert( void )
-	{
-	int status;
-
-	createMutex();
-	status = connectTLS( CRYPT_SESSION_TLS_SERVER, TLS_TEST_CLIENTCERT, 0, CRYPT_UNUSED, FALSE );
-	destroyMutex();
-
-	return( status );
-	}
-
 /* TLS 1.0 tests */
 
 int testSessionTLS( void )
@@ -3170,7 +3124,8 @@ static int tlsClientServer( const TLS_TEST_TYPE testType )
 
 	/* If this is a test that requires a database keyset, make sure that one 
 	   is available */
-	if( testType == TLS_TEST_CLIENTCERT && \
+	if( ( testType == TLS_TEST_CLIENTCERT || \
+		  testType == TLS_TEST_NOCLIENTCERT ) && \
 		!checkDatabaseKeysetAvailable() )
 		{
 		fputs( "Skipping test due to unavailability of database "
@@ -3261,7 +3216,8 @@ static int tls11ClientServer( const TLS_TEST_TYPE testType )
 
 	/* If this is a test that requires a database keyset, make sure that one 
 	   is available */
-	if( testType == TLS_TEST_CLIENTCERT && \
+	if( ( testType == TLS_TEST_CLIENTCERT || \
+		  testType == TLS_TEST_NOCLIENTCERT ) && \
 		!checkDatabaseKeysetAvailable() )
 		{
 		fputs( "Skipping test due to unavailability of database "
@@ -3326,6 +3282,7 @@ static int tls12ClientServer( const TLS_TEST_TYPE testType )
 	/* If this is a test that requires a database keyset, make sure that one 
 	   is available */
 	if( ( testType == TLS_TEST_CLIENTCERT || \
+		  testType == TLS_TEST_NOCLIENTCERT || \
 		  testType == TLS_TEST_ALLOWLIST || \
 		  testType == TLS_TEST_ALLOWLIST_FAIL ) && \
 		!checkDatabaseKeysetAvailable() )
@@ -3399,6 +3356,10 @@ int testSessionTLS12ClientServerEcc384Key( void )
 int testSessionTLS12ClientCertClientServer( void )
 	{
 	return( tls12ClientServer( TLS_TEST_CLIENTCERT ) );
+	}
+int testSessionTLS12NoClientCertClientServer( void )
+	{
+	return( tls12ClientServer( TLS_TEST_NOCLIENTCERT ) );
 	}
 int testSessionTLS12ClientCertManualClientServer( void )
 	{

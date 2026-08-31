@@ -214,7 +214,7 @@ int createX509signature( OUT_BUFFER( signedObjectMaxLength, \
 	/* Finally, append the signature */
 	status = swrite( &stream, dataSignature, signatureLength );
 	if( cryptStatusOK( status ) )
-		*signedObjectLength = stell( &stream );
+		status = *signedObjectLength = stell( &stream );
 	sMemDisconnect( &stream );
 	zeroise( dataSignature, CRYPT_MAX_PKCSIZE + 128 );
 	if( cryptStatusError( status ) )

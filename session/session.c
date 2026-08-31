@@ -160,12 +160,17 @@ int initSessionNetConnectInfo( IN_PTR const SESSION_INFO *sessionInfoPtr,
 	CRYPT_SESSINFO_PRIVATEKEY	-> !CRYPT_SESSINFO_PRIVATEKEY,
 								   !CRYPT_SESSINFO_CMP_PRIVKEYSET
 
-	CRYPT_SESSINFO_CACERTIFICATE-> !CRYPT_SESSINFO_CACERTIFICATE,
-								   !CRYPT_SESSINFO_SERVER_FINGERPRINT
+	CRYPT_SESSINFO_CACERTIFICATE-> !CRYPT_SESSINFO_CACERTIFICATE
 
 	CRYPT_SESSINFO_SERVER_FINGERPRINT
-								-> !CRYPT_SESSINFO_SERVER_FINGERPRINT,
-								   !CRYPT_SESSINFO_CACERTIFICATE */
+								-> !CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2,
+								   !CRYPT_SESSINFO_CACERTIFICATE 
+
+   We don't disallow CRYPT_SESSINFO_CACERTIFICATE if 
+   CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2 is set because a caller could set
+   the fingerprint first and then the certificate.  CA certificates are only
+   used in SCEP and CMP, which check that the fingerprint (if set) and the
+   certificate match */
 
 #define CHECK_ATTR_NONE			0x00
 #define CHECK_ATTR_REQUEST		0x01
@@ -184,7 +189,7 @@ BOOLEAN checkAttributesConsistent( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{ CRYPT_SESSINFO_PRIVATEKEY,
 			CHECK_ATTR_PRIVKEY | CHECK_ATTR_PRIVKEYSET },
 		{ CRYPT_SESSINFO_CACERTIFICATE, 
-			CHECK_ATTR_CACERT | CHECK_ATTR_FINGERPRINT },
+			CHECK_ATTR_CACERT },
 		{ CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2, 
 			CHECK_ATTR_FINGERPRINT | CHECK_ATTR_CACERT },
 		{ CRYPT_ERROR, 0 }, { CRYPT_ERROR, 0 } 
@@ -248,11 +253,52 @@ BOOLEAN checkAttributesConsistent( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	return( TRUE );
 	}
 
+/* Check a server/CA certificate against an server certificate fingerprint
+   if present.  Either a match or no fingerprint present returns CRYPT_OK,
+   with the no-fingerprint meaning the caller isn't trying to allowlist
+   just one certificate */
+
+CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1 ) ) \
+int checkCertFingerprint( INOUT_PTR SESSION_INFO *sessionInfoPtr,
+						  IN_HANDLE const CRYPT_CERTIFICATE iCryptCert )
+	{
+	const SESSION_ATTRIBUTE_LIST *fingerprintPtr;
+	MESSAGE_DATA msgData;
+	int status;
+
+	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
+
+	REQUIRES( sanityCheckSession( sessionInfoPtr ) );
+	REQUIRES( isHandleRangeValid( iCryptCert ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	fingerprintPtr = findSessionInfo( sessionInfoPtr,
+							CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2 );
+	if( fingerprintPtr == NULL )
+		{
+		/* No fingerprint present, let the caller know */
+		return( OK_SPECIAL );
+		}
+
+	/* We've got a fingerprint, check it.  Note that this is a fail-closed
+	   function, if we've got a certificate and a fingerprint then any 
+	   error, for example object-signalled, is a comparison failure */
+	setMessageData( &msgData, fingerprintPtr->value, 
+					fingerprintPtr->valueLength );
+	status = krnlSendMessage( iCryptCert, IMESSAGE_COMPARE, &msgData, 
+							  MESSAGE_COMPARE_FINGERPRINT_SHA2 );
+	if( cryptStatusError( status ) )
+		return( CRYPT_ERROR_WRONGKEY );
+
+	return( CRYPT_OK );
+	}
+
 /* Copy session-level error information to an external ERROR_INFO structure.
    This is used to return error information to higher-level streams layered
    over a transport session */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int getSessionErrorInfo( IN_PTR const SESSION_INFO *sessionInfoPtr,
 						 INOUT_PTR ERROR_INFO *errorInfo )
 	{
@@ -270,8 +316,8 @@ int getSessionErrorInfo( IN_PTR const SESSION_INFO *sessionInfoPtr,
    the server side but the client gets invalid data back */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-int checkServerCertValid( const CRYPT_CERTIFICATE iServerKey,
-						  const CRYPT_USER iCryptUser,
+int checkServerCertValid( IN_HANDLE const CRYPT_CERTIFICATE iServerKey,
+						  IN_HANDLE const CRYPT_USER iCryptUser,
 						  INOUT_PTR ERROR_INFO *errorInfo )
 	{
 	CRYPT_CERTIFICATE iServerCert;
@@ -282,6 +328,8 @@ int checkServerCertValid( const CRYPT_CERTIFICATE iServerKey,
 
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
 
+	REQUIRES( ( iCryptUser == DEFAULTUSER_OBJECT_HANDLE ) || \
+			  isHandleRangeValid( iCryptUser ) )
 	REQUIRES( isHandleRangeValid( iServerKey ) );
 
 	status = krnlSendMessage( iCryptUser, IMESSAGE_GETATTRIBUTE, 
@@ -522,7 +570,7 @@ static CRYPT_ATTRIBUTE_TYPE checkClientParameters( IN_PTR const SESSION_INFO *se
 	}
 
 CHECK_RETVAL_ENUM( CRYPT_ATTRIBUTE ) STDC_NONNULL_ARG( ( 1 ) ) \
-static CRYPT_ATTRIBUTE_TYPE checkServerParameters( const SESSION_INFO *sessionInfoPtr )
+static CRYPT_ATTRIBUTE_TYPE checkServerParameters( IN_PTR const SESSION_INFO *sessionInfoPtr )
 	{
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
@@ -583,7 +631,7 @@ static int activateConnection( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	   isn't used for request-response session types that use the receive
 	   buffer for both outgoing and incoming data so we only allocate it if
 	   it's actually required */
-	if( sessionInfoPtr->sendBuffer == NULL )
+	if( sessionInfoPtr->receiveBuffer == NULL )
 		{
 		REQUIRES( isBufsizeRangeMin( sessionInfoPtr->receiveBufSize, \
 									 MIN_BUFFER_SIZE ) );
@@ -604,7 +652,8 @@ static int activateConnection( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 							safeBufferAlloc( sessionInfoPtr->receiveBufSize );
 			if( sessionInfoPtr->sendBuffer == NULL )
 				{
-				safeBufferFree( sessionInfoPtr->receiveBuffer );
+				safeBufferFree( sessionInfoPtr->receiveBuffer,
+								sessionInfoPtr->receiveBufSize );
 				sessionInfoPtr->receiveBuffer = NULL;
 				return( CRYPT_ERROR_MEMORY );
 				}
@@ -716,10 +765,11 @@ static int activateConnection( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 #endif /* USE_WEBSOCKETS || USE_EAP */
 
 	/* If it's a secure data transport session, complete the session state
-	   setup.  Note that some sessions dynamically change the protocol 
-	   information during the handshake to accommodate parameters negotiated 
-	   during the handshake so we can only access the protocol information 
-	   after the handshake has completed */
+	   setup.  Note that some sessions dynamically update parts of the 
+	   protocol information during the handshake to accommodate parameters 
+	   negotiated during the handshake so we can only access the non-fixed
+	   portions of the protocol information after the handshake has 
+	   completed */
 	if( !protocolInfo->isReqResp )
 		{
 		const SES_TRANSACT_FUNCTION transactFunction = \
@@ -1033,6 +1083,9 @@ int closeSession( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 					FNPTR_GET( sessionInfoPtr->shutdownFunction );
 	BOOLEAN shutdownSession = TRUE;
 
+	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
+
+	REQUIRES( sanityCheckSession( sessionInfoPtr ) );
 	REQUIRES( shutdownFunction != NULL );
 
 	/* If the session hasn't been opened yet, there's nothing to do */

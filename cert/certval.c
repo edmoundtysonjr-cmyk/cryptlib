@@ -447,16 +447,22 @@ static int readRtcsRequestEntry( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeNZ( endPos ) );
 
 	/* Read the certificate ID */
 	status = readOctetString( stream, idBuffer, &length,
 							  KEYID_SIZE, KEYID_SIZE );
 	if( cryptStatusOK( status ) && \
-		stell( stream ) <= endPos - MIN_ATTRIBUTE_SIZE )
+		( status = stell( stream ) ) <= endPos - MIN_ATTRIBUTE_SIZE )
 		{
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
+
 		/* Skip the legacy ID */
 		status = readUniversal( stream );
 		}
@@ -659,8 +665,10 @@ static int readRtcsResponseEntry( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeNZ( endPos ) );
 
 	/* Read the ID information */
@@ -765,7 +773,7 @@ int readRTCSResponseEntries( INOUT_PTR STREAM *stream,
 #if 0	/* 11/9/17 See below */
 	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
 	endPos = stell( stream ) + length;
-	ENSURES( isIntegerRangeNZ( endPos ) );
+	ENSURES( isIntegerRangeMin( endPos, length ) );
 #endif /* 0 */
 	LOOP_LARGE( noResponseEntries = 0,
 				length > 0 && noResponseEntries < 100,

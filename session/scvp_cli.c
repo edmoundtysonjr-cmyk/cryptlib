@@ -296,7 +296,7 @@ static int sendScvpRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			  sessionInfoPtr->receiveBufSize );
 	status = writeScvpRequest( &stream, sessionInfoPtr, protocolInfo );
 	if( cryptStatusOK( status ) )
-		dataLength = stell( &stream );
+		status = dataLength = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		{

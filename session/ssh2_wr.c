@@ -40,7 +40,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int streamBookmarkSet( IN_PTR const STREAM *stream, 
 					   OUT_DATALENGTH_Z int *offset ) 
 	{
-	const int startOffset = stell( stream );
+	int startOffset, status;
 	
 	assert( isReadPtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( offset, sizeof( int ) ) );
@@ -48,8 +48,9 @@ int streamBookmarkSet( IN_PTR const STREAM *stream,
 	/* Clear return value */
 	*offset = 0;
 	
-	if( cryptStatusError( startOffset ) )
-		return( startOffset );
+	status = startOffset = stell( stream );
+	if( cryptStatusError( status ) )
+		return( status );
 	*offset = startOffset;
 
 	return( CRYPT_OK );	
@@ -59,7 +60,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int streamBookmarkSetFullPacket( IN_PTR const STREAM *stream, 
 								 OUT_DATALENGTH_Z int *offset ) 
 	{
-	const int startOffset = stell( stream );
+	int status, startOffset;
 	
 	assert( isReadPtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( offset, sizeof( int ) ) );
@@ -67,8 +68,9 @@ int streamBookmarkSetFullPacket( IN_PTR const STREAM *stream,
 	/* Clear return value */
 	*offset = 0;
 	
-	if( cryptStatusError( startOffset ) )
-		return( startOffset );
+	status = startOffset = stell( stream );
+	if( cryptStatusError( status ) )
+		return( status );
 	if( startOffset < ID_SIZE )
 		return( CRYPT_ERROR_UNDERFLOW );
 	*offset = startOffset - ID_SIZE;
@@ -139,19 +141,19 @@ int openPacketStreamSSHEx( OUT_PTR STREAM *stream,
 									 SSH_MSG_CHANNEL_FAILURE ) 
 							const int packetType )
 	{
-	const int streamSize = bufferSize + SSH2_HEADER_SIZE;
+	int streamSize;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
-	assert( isWritePtrDynamic( sessionInfoPtr->sendBuffer, streamSize ) );
 	
 	REQUIRES( isBufsizeRangeNZ( bufferSize ) );
 	REQUIRES( packetType >= SSH_MSG_DISCONNECT && \
 			  packetType <= SSH_MSG_CHANNEL_FAILURE );
-	REQUIRES( !checkOverflowAdd( bufferSize, SSH2_HEADER_SIZE ) && \
-			  streamSize > SSH2_HEADER_SIZE && \
-			  streamSize <= sessionInfoPtr->sendBufSize - EXTRA_PACKET_SIZE );
 
+	REQUIRES( !checkOverflowAdd( bufferSize, SSH2_HEADER_SIZE ) );
+	streamSize = bufferSize + SSH2_HEADER_SIZE;
+	REQUIRES( streamSize > SSH2_HEADER_SIZE && \
+			  streamSize <= sessionInfoPtr->sendBufSize - EXTRA_PACKET_SIZE );
 	sMemOpen( stream, sessionInfoPtr->sendBuffer, streamSize );
 	swrite( stream, "\x00\x00\x00\x00\x00", SSH2_HEADER_SIZE );
 	return( sputc( stream, packetType ) );
@@ -164,20 +166,22 @@ int continuePacketStreamSSH( INOUT_PTR STREAM *stream,
 								const int packetType,
 							 OUT_DATALENGTH_Z int *packetOffset )
 	{
-	const int offset = stell( stream );
-	int status;
+	int offset, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( packetOffset, sizeof( int ) ) );
 
 	REQUIRES( packetType >= SSH_MSG_DISCONNECT && \
 			  packetType <= SSH_MSG_CHANNEL_FAILURE );
-	REQUIRES( offset == 0 || \
-			  isBufsizeRangeMin( offset, SSH2_HEADER_SIZE + 2 ) );
 
 	/* Clear return value */
 	*packetOffset = 0;
 
+	status = offset = stell( stream );
+	if( cryptStatusError( status ) )
+		return( status );
+	REQUIRES( offset == 0 || \
+			  isBufsizeRangeMin( offset, SSH2_HEADER_SIZE + 2 ) );
 	swrite( stream, "\x00\x00\x00\x00\x00", SSH2_HEADER_SIZE );
 	status = sputc( stream, packetType );
 	if( cryptStatusError( status ) )
@@ -253,7 +257,9 @@ int wrapPlaintextPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
 	REQUIRES( isBufsizeRange( offset ) );
-
+	REQUIRES( !TEST_FLAG( sessionInfoPtr->flags,
+						  SESSION_FLAG_ISSECURE_WRITE ) );
+						 
 	/* Calculate the payload length and padding requirements */
 	status = streamOffsetFromPosition( stream, offset, &length );
 	if( cryptStatusError( status ) )
@@ -345,7 +351,8 @@ int wrapPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 #endif /* USE_SSH_OPENSSH */
 	void *bufStartPtr;
 	const int extraLength = sessionInfoPtr->authBlocksize;
-	int length, payloadLength, padLength, paddedPayloadLength, status;
+	int length, payloadLength, padLength, paddedPayloadLength;
+	int packetType, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -354,6 +361,8 @@ int wrapPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
 	REQUIRES( isBufsizeRange( offset ) );
 	REQUIRES( isBooleanValue( useQuantisedPadding ) );
+	REQUIRES( TEST_FLAG( sessionInfoPtr->flags,
+						 SESSION_FLAG_ISSECURE_WRITE ) );
 
 	/* Calculate the payload length and padding requirements */
 	status = streamOffsetFromPosition( stream, offset, &length );
@@ -380,31 +389,24 @@ int wrapPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 #endif /* USE_SSH_OPENSSH */
 	if( useQuantisedPadding )
 		{
-		int LOOP_ITERATOR;
-
 		/* It's something like a user-authentication packet that (probably) 
 		   contains a password, adjust the padding to make the overall 
 		   packet fixed-length to hide the password length information.
 		   Note that we can't pad more than 255 bytes because the padding 
 		   scheme has a single-byte pad length value, so we use 128 */
-		LOOP_MED( padLength = 128,
-				  padLength < length + SSH2_MIN_PADLENGTH_SIZE,
-				  padLength += 128 )
-			{
-			ENSURES( LOOP_INVARIANT_MED_XXX( padLength, 128, 
-											 length + SSH2_MIN_PADLENGTH_SIZE ) );
-			}
-		ENSURES( LOOP_BOUND_OK );
+		REQUIRES( !checkOverflowAdd( length, \
+									 SSH2_MIN_PADLENGTH_SIZE + 128 ) );
+		padLength = roundUp( length + SSH2_MIN_PADLENGTH_SIZE, 128 );
 		REQUIRES( !checkOverflowSub( padLength, length ) );
 		padLength -= length;
 		}
 	else
 		{
-		const int paddedLength = \
-						getPaddedSize( length + SSH2_MIN_PADLENGTH_SIZE );
+		int paddedLength;
 		
-		ENSURES( !cryptStatusError( paddedLength ) );
 		REQUIRES( !checkOverflowAdd( length, SSH2_MIN_PADLENGTH_SIZE ) );
+		paddedLength = getPaddedSize( length + SSH2_MIN_PADLENGTH_SIZE );
+		ENSURES( !cryptStatusError( paddedLength ) );
 		ENSURES( isBufsizeRangeMin( paddedLength, 16 ) );
 		REQUIRES( !checkOverflowSub( paddedLength, length ) );
 		padLength = paddedLength - length;
@@ -440,6 +442,7 @@ int wrapPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	paddedPayloadStartPtr = ( BYTE * ) bufStartPtr + LENGTH_SIZE;
 	REQUIRES( !checkOverflowSub( length, LENGTH_SIZE ) );
 	paddedPayloadLength = length - LENGTH_SIZE;
+	packetType = byteToInt( paddedPayloadStartPtr[ 1 ] );
 
 	/* Add the SSH packet header, padding, and MAC:
 
@@ -455,8 +458,7 @@ int wrapPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	sMemDisconnect( &metadataStream );
 	ENSURES( cryptStatusOK( status ) );
 	DEBUG_PRINT(( "Wrote %s (%d) packet, length %d.\n", 
-				  getSSHPacketName( paddedPayloadStartPtr[ 1 ] ), 
-				  paddedPayloadStartPtr[ 1 ],
+				  getSSHPacketName( packetType ), packetType,
 				  paddedPayloadLength - ( 1 + ID_SIZE + padLength ) ));
 	DEBUG_DUMP_DATA( paddedPayloadStartPtr + 1 + ID_SIZE, 
 					 paddedPayloadLength - ( 1 + ID_SIZE + padLength ) );
@@ -466,7 +468,8 @@ int wrapPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	status = krnlSendMessage( SYSTEM_OBJECT_HANDLE, 
 							  IMESSAGE_GETATTRIBUTE_S, &msgData, 
 							  CRYPT_IATTRIBUTE_RANDOM_NONCE );
-	ENSURES( cryptStatusOK( status ) );
+	if( cryptStatusError( status ) )
+		return( status );
 	REQUIRES( !checkOverflowSub( length, padLength ) );
 	sMemOpen( &metadataStream, 
 			  ( BYTE * ) bufStartPtr + ( length - padLength ), 
@@ -544,13 +547,12 @@ int wrapPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	if( checkOverflowInc( sshInfo->writeSeqNo ) )
 		{
 		/* This is a should-never-occur condition so in theory we could just
-		   make it an ENSURES() condition */
+		   make it an ENSURES() */
 		retExt( CRYPT_ERROR_OVERFLOW,
 				( CRYPT_ERROR_OVERFLOW, SESSION_ERRINFO,
 				  "Packet write sequence number overflow writing %s (%d) "
 				  "packet, length %d",
-				  getSSHPacketName( paddedPayloadStartPtr[ 1 ] ), 
-				  paddedPayloadStartPtr[ 1 ],
+				  getSSHPacketName( packetType ), packetType,
 				  paddedPayloadLength - ( 1 + ID_SIZE + padLength ) ));
 		}
 	sshInfo->writeSeqNo++;

@@ -21,15 +21,12 @@
    every session after the first one will be a resumed session.  To deal 
    with this, the VC++ debug builds disable the client-side session cache 
    while every other version just ends up going through a series of session 
-   resumes.
-
-   Note that changing the follow requires an equivalent change in 
-   test/tls.c */
+   resumes */
 
 #if defined( _MSC_VER ) && \
 	( ( _MSC_VER == 1500 ) || \
 	  ( _MSC_VER == VS_LATEST_VERSION && defined( CRYPTLIB_BUILD ) ) ) && \
-	!defined( NDEBUG ) && 1
+	!defined( NDEBUG ) && 0
   #define NO_SESSION_CACHE
 #endif /* VC++ debug build */
 
@@ -366,8 +363,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int processFragmentedRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									 INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 									 INOUT_PTR STREAM *stream,
-									 IN_RANGE( 1, MAX_PACKET_SIZE + \
-												  ( MAX_PACKET_SIZE / 2 ) ) \
+									 IN_RANGE( 1, MAX_PACKET_SIZE * 2 ) \
 											const int totalLength )
 	{
 	const int dataLeft = sMemDataLeft( stream );
@@ -455,7 +451,7 @@ static int processCertRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	{
 	BOOLEAN fragmentedPacket = FALSE;
 	int packetLength, length, maxLength, packetHeaderStart, packetHeaderSize;
-	int status;
+	int position, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
@@ -544,7 +540,10 @@ static int processCertRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		/* Zero-length CA name list */
 		return( CRYPT_OK );
 		}
-	packetHeaderSize = stell( stream ) - packetHeaderStart;
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	REQUIRES( !checkOverflowSub( position, packetHeaderStart ) );
+	packetHeaderSize = position - packetHeaderStart;
 	ENSURES( isShortIntegerRangeMin( packetHeaderSize,
 						1 + 1 + ( ( sessionInfoPtr->version >= \
 									TLS_MINOR_VERSION_TLS12 ) ? \
@@ -586,8 +585,15 @@ static int processCertRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	if( cryptStatusError( status ) )
 		{
-		retExt( CRYPT_ERROR_BADDATA,
-				( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
+		/* It's possible that processFragmentedRequest() has returned a 
+		   network error at some point which we'll overwrite here, but 
+		   fragmented requests are virtually nonexistent so it's not worth
+		   trying to dig out that one special case for separate error
+		   reporting, instead we report a general problem with a fragmented
+		   packet which is a more likely error cause */
+		retExt( status,
+				( status, SESSION_ERRINFO, "%s", fragmentedPacket ? \
+				  "Invalid fragmented certificate request packet" : \
 				  "Invalid certificate request CA name list" ) );
 		}
 
@@ -633,19 +639,17 @@ static int readIdentityHint( INOUT_PTR STREAM *stream )
 		uint8		ecPointLen		-- NB uint8 not uint16
 		byte[]		ecPoint */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int readServerKeyexDH( INOUT_PTR STREAM *stream, 
-							  OUT_PTR KEYAGREE_PARAMS *keyAgreeParams,
 							  OUT_HANDLE_OPT CRYPT_CONTEXT *keyexContextPtr,
 							  OUT_LENGTH_SHORT_Z int *publicValueStart,
 							  IN_BOOL const BOOLEAN isTLSLTS )
 	{
 	void *keyData;
 	const int keyDataOffset = stell( stream );
-	int keyDataLength, dummy, status;
+	int keyDataLength, dummy, position, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
-	assert( isWritePtr( keyAgreeParams, sizeof( KEYAGREE_PARAMS ) ) );
 	assert( isWritePtr( keyexContextPtr, sizeof( CRYPT_CONTEXT ) ) );
 	assert( isWritePtr( publicValueStart, sizeof( int ) ) );
 
@@ -653,9 +657,8 @@ static int readServerKeyexDH( INOUT_PTR STREAM *stream,
 	REQUIRES( isIntegerRangeNZ( keyDataOffset ) );
 
 	/* Clear return values */
-	memset( keyAgreeParams, 0, sizeof( KEYAGREE_PARAMS ) );
 	*keyexContextPtr = CRYPT_ERROR;
-	*publicValueStart = CRYPT_ERROR;
+	*publicValueStart = 0;
 
 	/* Read the server DH public key data */
 	status = readInteger16U( stream, NULL, &dummy, MIN_PKCSIZE_THRESHOLD, 
@@ -692,33 +695,31 @@ static int readServerKeyexDH( INOUT_PTR STREAM *stream,
 
 	/* Remember the position of and skip the DH public value, which will be 
 	   processed by the caller */
-	*publicValueStart = stell( stream );
-	ENSURES( isShortIntegerRangeNZ( *publicValueStart ) ); 
+	position = stell( stream );
+	ENSURES( isShortIntegerRangeNZ( position ) ); 
+	*publicValueStart = position;
 	return( readUniversal16( stream ) );
 	}
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3, 4 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int readServerKeyexECDH( INOUT_PTR STREAM *stream, 
-								OUT_PTR KEYAGREE_PARAMS *keyAgreeParams,
 								OUT_HANDLE_OPT \
 									CRYPT_CONTEXT *keyexContextPtr,
 								OUT_LENGTH_SHORT_Z int *publicValueStart )
 	{
 	void *keyData;
 	const int keyDataOffset = stell( stream );
-	int keyDataLength, curveType, status;
+	int keyDataLength, curveType, position, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
-	assert( isWritePtr( keyAgreeParams, sizeof( KEYAGREE_PARAMS ) ) );
 	assert( isWritePtr( keyexContextPtr, sizeof( CRYPT_CONTEXT ) ) );
 	assert( isWritePtr( publicValueStart, sizeof( int ) ) );
 
 	REQUIRES( isIntegerRangeNZ( keyDataOffset ) );
 
 	/* Clear return values */
-	memset( keyAgreeParams, 0, sizeof( KEYAGREE_PARAMS ) );
 	*keyexContextPtr = CRYPT_ERROR;
-	*publicValueStart = CRYPT_ERROR;
+	*publicValueStart = 0;
 
 	/* Read the server ECDH public key data */
 	status = curveType = sgetc( stream );
@@ -749,8 +750,9 @@ static int readServerKeyexECDH( INOUT_PTR STREAM *stream,
 
 	/* Remember the position of and skip the ECDH public value, which will 
 	   be processed by the caller */
-	*publicValueStart = stell( stream );
-	ENSURES( isShortIntegerRangeNZ( *publicValueStart ) ); 
+	position = stell( stream );
+	ENSURES( isShortIntegerRangeNZ( position ) ); 
+	*publicValueStart = position;
 	return( readUniversal8( stream ) );
 	}
 
@@ -801,7 +803,7 @@ static int processServerKeyex( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									int *keyexPublicValueLen )
 
 	{
-	KEYAGREE_PARAMS keyAgreeParams, tempKeyAgreeParams;
+	KEYAGREE_PARAMS keyAgreeParams;
 	void *keyData DUMMY_INIT_PTR;
 	const BOOLEAN isECC = isEccAlgo( handshakeInfo->keyexAlgo ) ? \
 						  TRUE : FALSE;
@@ -867,14 +869,12 @@ static int processServerKeyex( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	ENSURES( isIntegerRangeNZ( keyDataOffset ) );
 	if( isECC )
 		{
-		status = readServerKeyexECDH( stream, &keyAgreeParams, 
-									  &handshakeInfo->keyexContext,
+		status = readServerKeyexECDH( stream, &handshakeInfo->keyexContext,
 									  &publicValueOffset );
 		}
 	else
 		{
-		status = readServerKeyexDH( stream, &keyAgreeParams,
-									&handshakeInfo->keyexContext, 
+		status = readServerKeyexDH( stream, &handshakeInfo->keyexContext, 
 									&publicValueOffset, isTLSLTS );
 		}
 	if( cryptStatusOK( status ) )
@@ -940,18 +940,18 @@ static int processServerKeyex( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   the TLS messages is a bit unfortunate since we get the one for phase 
 	   2 before we need the phase 1 value, so we have to cache the phase 1 
 	   result for when we need it later on */
-	memset( &tempKeyAgreeParams, 0, sizeof( KEYAGREE_PARAMS ) );
+	memset( &keyAgreeParams, 0, sizeof( KEYAGREE_PARAMS ) );
 	status = krnlSendMessage( handshakeInfo->keyexContext,
-							  IMESSAGE_CTX_ENCRYPT, &tempKeyAgreeParams,
+							  IMESSAGE_CTX_ENCRYPT, &keyAgreeParams,
 							  sizeof( KEYAGREE_PARAMS ) );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( rangeCheck( tempKeyAgreeParams.publicValueLen, 1,
+	REQUIRES( rangeCheck( keyAgreeParams.publicValueLen, 1,
 						  keyexPublicValueMaxLen ) );
-	memcpy( keyexPublicValue, tempKeyAgreeParams.publicValue,
-			tempKeyAgreeParams.publicValueLen );
-	*keyexPublicValueLen = tempKeyAgreeParams.publicValueLen;
-	zeroise( &tempKeyAgreeParams, sizeof( KEYAGREE_PARAMS ) );
+	memcpy( keyexPublicValue, keyAgreeParams.publicValue,
+			keyAgreeParams.publicValueLen );
+	*keyexPublicValueLen = keyAgreeParams.publicValueLen;
+	zeroise( &keyAgreeParams, sizeof( KEYAGREE_PARAMS ) );
 	CFI_CHECK_UPDATE( "IMESSAGE_CTX_ENCRYPT" );
 
 	/* Move back to the keyex value and complete the keyex */
@@ -1411,10 +1411,12 @@ static int beginClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* If we're talking TLS 1.3, which is an entirely different protocol to
-	   standard TLS, we can't continue with this code line */
+	   classic TLS, we can't continue with this code line */
 #ifdef USE_TLS13
 	if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 )
 		{
+		sMemDisconnect( stream );
+		
 		ENSURES( CFI_CHECK_SEQUENCE_4( "lookupScoreboardEntry", "sendPacketTLS", 
 									   "hashHSPacketWrite", "processHelloTLS" ) );
 		handshakeInfo->completedHSstate = HANDSHAKE_STATE_BEGIN;
@@ -1422,6 +1424,20 @@ static int beginClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		return( CRYPT_OK );
 		}
 #endif /* USE_TLS13 */
+
+	/* TLS 1.2 LTS implicitly enables various other crypto options, now that
+	   we've got past the initial negotiations, enable those too */
+	if( TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_TLS12LTS ) )
+		{
+		SET_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_EMS );
+		if( !TEST_FLAG( sessionInfoPtr->protocolFlags, 
+						TLS_PFLAG_GCM | TLS_PFLAG_BERNSTEIN ) )
+			{
+			SET_FLAG( sessionInfoPtr->protocolFlags, 
+					  TLS_PFLAG_ENCTHENMAC );
+			}
+		}
+	CFI_CHECK_UPDATE( "TLS12LTS" );
 
 	/* The server has acknowledged our attempt to resume a session, handle 
 	   the session resumption */
@@ -1432,6 +1448,7 @@ static int beginClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		const int resumedFlags = \
 				GET_FLAGS( sessionInfoPtr->protocolFlags, 
 						   TLS_RESUMEDSESSION_FLAGS );
+		BOOLEAN flagsOK = TRUE;
 
 		sMemDisconnect( stream );
 
@@ -1444,8 +1461,25 @@ static int beginClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   Note the "at least" check, it's possible to legitimately go from 
 		   fewer to more facilities in the resume, for example if resuming a 
 		   TLS 1.1 session, which doesn't do LTS, with a TLS 1.2 session, 
-		   which does */
-		if( ( resumedFlags & originalFlags ) != originalFlags )
+		   which does.
+		   
+		   These checks are complicated by the fact that some options are
+		   different but have the same security level, see the comments 
+		   below. 
+
+		   Firstly, if the original session used EMS then the resumed one 
+		   must too */
+		if( ( originalFlags & TLS_PFLAG_EMS ) && \
+			!( resumedFlags & TLS_PFLAG_EMS ) )
+			flagsOK = FALSE;
+			
+		/* If the original session used any kind of AEAD (which includes
+		   EtM) then the resumed one must too */
+		if( ( originalFlags & TLS_RESUMED_AEAD_FLAGS ) && \
+			!( resumedFlags & TLS_RESUMED_AEAD_FLAGS ) )
+			flagsOK = FALSE;
+
+		if( !flagsOK )
 			{
 			retExt( CRYPT_ERROR_INVALID,
 					( CRYPT_ERROR_INVALID, SESSION_ERRINFO, 
@@ -1473,24 +1507,11 @@ static int beginClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	CFI_CHECK_UPDATE( "resumeSession" );
 
-	/* TLS 1.2 LTS implicitly enables various other crypto options, now that
-	   we've got past the initial negotiations, enable those too */
-	if( TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_TLS12LTS ) )
-		{
-		SET_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_EMS );
-		if( !TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_GCM ) )
-			{
-			SET_FLAG( sessionInfoPtr->protocolFlags, 
-					  TLS_PFLAG_ENCTHENMAC );
-			}
-		}
-	CFI_CHECK_UPDATE( "TLS12LTS" );
-
 	/* Return CRYPT_OK for a standard session, OK_SPECIAL for a resumed 
 	   one */
 	ENSURES( CFI_CHECK_SEQUENCE_6( "lookupScoreboardEntry", "sendPacketTLS", 
 								   "hashHSPacketWrite", "processHelloTLS",
-								   "resumeSession", "TLS12LTS" ) );
+								   "TLS12LTS", "resumeSession" ) );
 	handshakeInfo->completedHSstate = HANDSHAKE_STATE_BEGIN;
 
 	return( status );
@@ -1560,8 +1581,8 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					  length ));
 		assert_nofuzz( DEBUG_WARN );
 		}
-#endif /* 0 */
 	CFI_CHECK_UPDATE( "checkHSPacketHeader" );
+#endif /* 0 */
 
 #ifndef CONFIG_FUZZ
 	/* Process the theoretically-optional but always-present server 
@@ -1705,6 +1726,7 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* If we're fuzzing the input then we don't need to go through any of 
 	   the following crypto calisthenics */
 	FUZZ_SET( handshakeInfo->completedHSstate, HANDSHAKE_STATE_KEYEX );
+	FUZZ_SET( sessionInfoPtr->authComplete, TRUE );
 	FUZZ_SKIP_REMAINDER();
 
 	/* If we need a client certificate, build the client certificate packet */
@@ -1714,9 +1736,9 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		return( status );
 	if( needClientCert )
 		{
-		/* If we haven't got a certificate available, tell the server.  SSL 
-		   and TLS differ here, SSL sends a no-certificate alert while TLS 
-		   sends an empty client certificate packet, which is handled 
+		/* If we haven't got a certificate available, remember it for later.  
+		   SSL and TLS differ here, SSL sends a no-certificate alert while 
+		   TLS sends an empty client certificate packet, which is handled 
 		   further on */
 		if( sessionInfoPtr->privateKey == CRYPT_ERROR )
 			{
@@ -1727,13 +1749,16 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   (some just request one anyway even though they can't do 
 			   anything with it) so from here on we just continue as if 
 			   nothing had happened */
+			DEBUG_DIAG(( "Server requested client certificate "
+						 "authentication, continuing because there's no "
+						 "client certificate available" ));
 			SET_FLAG( sessionInfoPtr->protocolFlags, 
 					  TLS_PFLAG_CLIAUTHSKIPPED );
 			needClientCert = FALSE;
 			}
 
 		/* Send our client cert (chain).  If no private key is available this 
-		   will send a zero-length chain as required by TLS  */
+		   will send a zero-length chain as required by the spec */
 		status = writeTLSCertChain( sessionInfoPtr, handshakeInfo, stream );
 		if( cryptStatusError( status ) )
 			{
@@ -1828,8 +1853,7 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			}
 		CFI_CHECK_UPDATE( "createCertVerify" );
 
-		ENSURES( CFI_CHECK_SEQUENCE_8( "checkHSPacketHeader", "readTLSCertChain", 
-									   "processServerKeyex", 
+		ENSURES( CFI_CHECK_SEQUENCE_7( "readTLSCertChain", "processServerKeyex", 
 									   "processCertRequest", "writeTLSCertChain",
 									   "createClientKeyex", "createSessionHash", 
 									   "createCertVerify" ) );
@@ -1839,10 +1863,10 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	CFI_CHECK_UPDATE( "needClientCert" );
 
-	ENSURES( CFI_CHECK_SEQUENCE_8( "checkHSPacketHeader", "readTLSCertChain", 
-								   "processServerKeyex", "processCertRequest", 
-								   "writeTLSCertChain", "createClientKeyex", 
-								   "createSessionHash", "needClientCert" ) );
+	ENSURES( CFI_CHECK_SEQUENCE_7( "readTLSCertChain", "processServerKeyex", 
+								   "processCertRequest", "writeTLSCertChain", 
+								   "createClientKeyex", "createSessionHash", 
+								   "needClientCert" ) );
 	handshakeInfo->completedHSstate = HANDSHAKE_STATE_KEYEX;
 
 	return( CRYPT_OK );

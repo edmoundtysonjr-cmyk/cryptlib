@@ -2113,7 +2113,7 @@ static void slowPollWindows( void )
 			isWorkstation = TRUE;
 			if( RegQueryValueEx( hKey, "ProductType", 0, NULL, szValue,
 								 &dwSize ) == ERROR_SUCCESS && \
-				dwSize >= 5 && strCompare( szValue, "WinNT", 5 ) )
+				dwSize >= 5 && !strSame( szValue, "WinNT", 5 ) )
 				{
 				/* Note: There are (at least) three cases for ProductType:
 				   WinNT = NT Workstation, ServerNT = NT Server, LanmanNT =

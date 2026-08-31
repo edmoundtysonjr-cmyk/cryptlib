@@ -166,13 +166,15 @@ static int readHandshakeCompletionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	BYTE macBuffer[ MD5MAC_SIZE + SHA1MAC_SIZE + 8 ];
 	BOOLEAN startOffsetChanged = FALSE;
 	const int macValueLength = \
-			TEST_FLAG( sessionInfoPtr->protocolFlags, 
-					   TLS_PFLAG_TLS12LTS ) ? 32 : TLS_HASHEDMAC_SIZE;
+					TEST_FLAG( sessionInfoPtr->protocolFlags, 
+							   TLS_PFLAG_TLS12LTS ) ? \
+					bitsToBytes( 256 ) : TLS_HASHEDMAC_SIZE;
 	CFI_CHECK_TYPE CFI_CHECK_VALUE = CFI_CHECK_INIT;
 	int length, value, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isReadPtrDynamic( hashValues, hashValuesLength ) );
+	assert( isWritePtr( readInfo, sizeof( READSTATE_INFO ) ) );
 
 	REQUIRES( sanityCheckSessionTLS( sessionInfoPtr ) );
 	REQUIRES( hashValuesLength == macValueLength );
@@ -837,6 +839,10 @@ int completeHandshakeTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								   "completeHashedMAC",
 								   "writeHandshakeCompletionData" ) );
 	handshakeInfo->completedHSstate = HANDSHAKE_STATE_COMPLETE;
+
+	/* Set the authentication-complete check value that enables data to be
+	   exchanged over the TLS link */
+	sessionInfoPtr->authComplete = TRUE;
 
 	return( CRYPT_OK );
 	}

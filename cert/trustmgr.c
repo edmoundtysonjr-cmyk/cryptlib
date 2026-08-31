@@ -805,7 +805,10 @@ int deleteTrustEntry( IN_DATAPTR const DATAPTR trustInfo,
 
 	/* Free the trust information entry contents */
 	if( entryToDelete->iCryptCert != CRYPT_ERROR )
+		{
 		krnlSendNotifier( entryToDelete->iCryptCert, IMESSAGE_DECREFCOUNT );
+		entryToDelete->iCryptCert = CRYPT_ERROR;
+		}
 	if( DATAPTR_ISSET( entryToDelete->certObject ) )
 		{
 		void *certObjectPtr = DATAPTR_GET( entryToDelete->certObject );

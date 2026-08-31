@@ -250,7 +250,7 @@ static int performAbsTrustOperation( INOUT_PTR CERT_INFO *certInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int findTrustAnchor( INOUT_PTR CERT_INFO *certInfoPtr, 
-							OUT_RANGE( -1, MAX_CHAINLENGTH ) \
+							OUT_RANGE( -1, MAX_CHAINLENGTH - 1 ) \
 								int *trustAnchorIndexPtr, 
 							OUT_HANDLE_OPT CRYPT_CERTIFICATE *trustAnchorCert )
 	{
@@ -352,6 +352,12 @@ static int setTrustAnchorErrorInfo( INOUT_PTR CERT_INFO *certInfoPtr )
 
 	assert( isWritePtr( certInfoPtr, sizeof( CERT_INFO ) ) );
 
+	/* We can get a certificate chain object with no chain attached from a 
+	   single certificate imported with KEYMGMT_FLAG_CERT_AS_CERTCHAIN so
+	   we have to catch it here before we do the lastCertIndex check */
+	if( certChainInfo->chainEnd <= 0 )
+		return( CRYPT_ERROR_INVALID );
+    
 	ENSURES( lastCertIndex >= 0 && lastCertIndex < certChainInfo->chainEnd );
 			 /* certChainInfo->chainEnd should be > 0 since we can't have a
 			    certificate chain consisting of only a single certificate
@@ -570,7 +576,8 @@ static int addMappedPolicies( INOUT_PTR POLICY_INFO *policyInfo,
 	REQUIRES( DATAPTR_ISVALID( destPolicyAttributeCursor ) );
 
 	/* If there are no mapped policies, we're done */
-	if( DATAPTR_ISNULL( sourcePolicyAttributeCursor ) )
+	if( DATAPTR_ISNULL( sourcePolicyAttributeCursor ) || \
+		DATAPTR_ISNULL( destPolicyAttributeCursor ) )
 		return( CRYPT_OK );
 
 	/* Add all mapped policies to the policy set */
@@ -965,7 +972,11 @@ static int checkConstraints( INOUT_PTR CERT_INFO *certInfoPtr,
 		/* Get information for the current certificate in the chain */
 		status = getCertInfo( certInfoPtr, &subjectCertInfoPtr, certIndex );
 		if( cryptStatusError( status ) )
+			{
+			/* Remember what caused the problem */
+			*errorCertIndex = certIndex;
 			break;
+			}
 
 		/* Check for the presence of further policy constraints.  The path 
 		   length value can only ever be decremented once set so if we find 
@@ -1163,6 +1174,10 @@ int checkCertChain( INOUT_PTR CERT_INFO *certInfoPtr )
 	POLICY_INFO policyInfo;
 	BOOLEAN explicitPolicy = TRUE;
 #endif /* USE_CERTLEVEL_PKIX_FULL */
+#ifdef USE_CERTLEVEL_PKIX_PARTIAL
+	BOOLEAN hasPathLength = FALSE;
+	int pathLength;
+#endif /* USE_CERTLEVEL_PKIX_PARTIAL */
 	CFI_CHECK_TYPE CFI_CHECK_VALUE = CFI_CHECK_INIT;
 	int certIndex, complianceLevel, status, LOOP_ITERATOR;
 
@@ -1214,6 +1229,18 @@ int checkCertChain( INOUT_PTR CERT_INFO *certInfoPtr )
 	REQUIRES_OBJECT( sanityCheckCert( issuerCertInfoPtr ),
 					 issuerCertInfoPtr->objectHandle );
 
+	/* Check whether there's a path-length constraint present.  This is 
+	   checked as part of the full checkConstraints() if we're running at
+	   USE_CERTLEVEL_PKIX_FULL, but for this particular extension we also
+	   want to check it at USE_CERTLEVEL_PKIX_PARTIAL */
+#ifdef USE_CERTLEVEL_PKIX_PARTIAL
+	status = getAttributeFieldValue( issuerCertInfoPtr->attributes,
+									 CRYPT_CERTINFO_PATHLENCONSTRAINT,
+									 CRYPT_ATTRIBUTE_NONE, &pathLength );
+	if( cryptStatusOK( status ) )
+		hasPathLength = TRUE;
+#endif /* USE_CERTLEVEL_PKIX_PARTIAL */
+
 	/* Add policies (both native and mapped) from the trust anchor to the 
 	   policy set */
 #ifdef USE_CERTLEVEL_PKIX_FULL
@@ -1232,25 +1259,17 @@ int checkCertChain( INOUT_PTR CERT_INFO *certInfoPtr )
 	   aren't any constraints placed on it by higher-level certificates so 
 	   all that we need to check at this point is the certificate itself and 
 	   its signature if it's self-signed */
+	status = checkCertDetails( issuerCertInfoPtr, issuerCertInfoPtr, 
+						( issuerCertInfoPtr->iPubkeyContext != CRYPT_ERROR ) ? \
+							issuerCertInfoPtr->iPubkeyContext : CRYPT_UNUSED,
+						NULL, TRUE, TRUE, FALSE );
 	if( certIndex >= certChainInfo->chainEnd )
 		{
 		/* The issuer certificate information is coming from the certificate 
 		   trust database, reset its error state after we've checked it */
-		status = checkCertDetails( issuerCertInfoPtr, issuerCertInfoPtr, 
-						( issuerCertInfoPtr->iPubkeyContext != CRYPT_ERROR ) ? \
-							issuerCertInfoPtr->iPubkeyContext : CRYPT_UNUSED,
-						NULL, TRUE, TRUE, FALSE );
 		clearErrorInfo( ISSUERCERT_ERRINFO );
 		issuerCertInfoPtr->errorLocus = CRYPT_ATTRIBUTE_NONE;
 		issuerCertInfoPtr->errorType = CRYPT_ERRTYPE_NONE;
-		}
-	else
-		{
-		/* The issuer certificate is contained in the chain */
-		status = checkCertDetails( issuerCertInfoPtr, issuerCertInfoPtr, 
-						( issuerCertInfoPtr->iPubkeyContext != CRYPT_ERROR ) ? \
-							issuerCertInfoPtr->iPubkeyContext : CRYPT_UNUSED,
-						NULL, TRUE, TRUE, FALSE );
 		}
 	if( cryptStatusError( status ) )
 		{
@@ -1272,6 +1291,10 @@ int checkCertChain( INOUT_PTR CERT_INFO *certInfoPtr )
 	LOOP_EXT_REV_CHECKINC( cryptStatusOK( status ) && certIndex >= -1,
 						   certIndex--, MAX_CHAINLENGTH + 1 )
 		{
+#if defined( USE_CERTLEVEL_PKIX_PARTIAL ) 
+		int newPathLength;
+#endif /* USE_CERTLEVEL_PKIX_PARTIAL */
+		
 		ENSURES( LOOP_INVARIANT_EXT_REV_XXX( certIndex, -1, MAX_CHAINLENGTH - 1,
 											 MAX_CHAINLENGTH + 1 ) );
 
@@ -1298,7 +1321,8 @@ int checkCertChain( INOUT_PTR CERT_INFO *certInfoPtr )
 			break;
 			}
 
-#ifdef USE_CERTLEVEL_PKIX_FULL
+#ifdef USE_CERTLEVEL_PKIX_PARTIAL
+  #ifdef USE_CERTLEVEL_PKIX_FULL
 		/* Check any constraints that the issuer certificate may place on 
 		   the rest of the chain */
 		if( complianceLevel >= CRYPT_COMPLIANCELEVEL_PKIX_FULL )
@@ -1315,7 +1339,53 @@ int checkCertChain( INOUT_PTR CERT_INFO *certInfoPtr )
 				break;
 				}
 			}
-#endif /* USE_CERTLEVEL_PKIX_FULL */
+		else
+  #endif /* USE_CERTLEVEL_PKIX_FULL */
+			{
+			if( complianceLevel >= CRYPT_COMPLIANCELEVEL_PKIX_PARTIAL )
+				{
+				/* Outside of USE_CERTLEVEL_PKIX_FULL we want to check at 
+				   least the path length constraint.  Note that this now has
+				   slightly different semantics than the 
+				   USE_CERTLEVEL_PKIX_FULL version because the latter 
+				   enables the full PKIX folderol rather than just ensuring
+				   that the chain stops after n certificates */
+				if( hasPathLength )
+					{
+					if( pathLength < 0 )
+						{ 
+						status = CRYPT_ERROR_INVALID; 
+						break; 
+						}
+
+					/* Perform a check that all of the other requirements 
+					   are met */
+					status = checkPathConstraints( subjectCertInfoPtr, 
+												   pathLength );
+					if( cryptStatusError( status ) )
+						break;
+
+					/* Decrement the path constraint for a non-self-issued 
+					   certificate, then set the new constraint to the 
+					   lesser of the current level and any constraint the 
+					   current certificate imposes */
+					if( !TEST_FLAG( subjectCertInfoPtr->flags, \
+									CERT_FLAG_SELFSIGNED ) )
+						pathLength--;
+					}
+				status = getAttributeFieldValue( subjectCertInfoPtr->attributes,
+									CRYPT_CERTINFO_PATHLENCONSTRAINT,
+									CRYPT_ATTRIBUTE_NONE, &newPathLength );
+				if( cryptStatusOK( status ) && \
+					( !hasPathLength || newPathLength < pathLength ) )
+					{
+					pathLength = newPathLength;
+					hasPathLength = TRUE;
+					}
+				status = CRYPT_OK;
+				}
+			}
+#endif /* USE_CERTLEVEL_PKIX_PARTIAL */
 
 		/* Move on to the next certificate */
 		krnlReleaseObject( issuerCertInfoPtr->objectHandle );

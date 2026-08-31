@@ -136,8 +136,11 @@ BOOLEAN sanityCheckNetStream( const NET_STREAM_INFO *netStream )
 
 	/* Check miscellaneous information */
 #ifdef USE_EAP
-	if( netStream->transportInfoPayloadSize < 0 || \
-		netStream->transportInfoPayloadSize > sizeof( SOCKADDR_STORAGE ) )
+	if( !( netStream->transportInfo == NULL && \
+		   netStream->transportInfoPayloadSize == 0 ) && \
+		!( netStream->transportInfo != NULL && \
+		   netStream->transportInfoPayloadSize == \
+									sizeof( SOCKADDR_STORAGE ) ) )
 		{
 		DEBUG_PUTS(( "sanityCheckNetStream: Transport info" ));
 		return( FALSE );
@@ -146,6 +149,12 @@ BOOLEAN sanityCheckNetStream( const NET_STREAM_INFO *netStream )
 	if( !isEnumRangeOpt( netStream->systemType, STREAM_PEER ) )
 		{
 		DEBUG_PUTS(( "sanityCheckNetStream: System type" ));
+		return( FALSE );
+		}
+	if( !cryptStatusOK( netStream->persistentStatus ) && \
+		!cryptStatusError( netStream->persistentStatus ) )
+		{
+		DEBUG_PUTS(( "sanityCheckNetStream: Persistent status" ));
 		return( FALSE );
 		}
 
@@ -174,7 +183,9 @@ BOOLEAN sanityCheckNetStream( const NET_STREAM_INFO *netStream )
 			return( FALSE );
 			}
 
-		/* Make sure that the write buffer hasn't been corrupted */
+		/* Make sure that the write buffer hasn't been corrupted.  The read
+		   buffer is part of the STREAM structure and is checked as part of
+		   the stream checks */
 		if( !safeBufferCheck( netStream->writeBuffer, 
 							  netStream->writeBufSize ) )
 			{
@@ -305,13 +316,20 @@ static BOOLEAN sanityCheckConnectOptions( const NET_CONNECT_INFO *connectInfo,
 			break;
 			
 		case NET_OPTION_VIRTUAL:
+			if( connectInfo->interface != NULL || \
+				connectInfo->interfaceLength != 0 )
+				{
+				DEBUG_PUTS(( "sanityCheckConnectOptions: Virtual "
+							 "connect options" ));
+				return( FALSE );
+				}
 			if( isServer )
 				{
 				if( connectInfo->name != NULL || \
 					connectInfo->nameLength != 0 )
 					{
 					DEBUG_PUTS(( "sanityCheckConnectOptions: Virtual "
-								 "connect options" ));
+								 "server connect options" ));
 					return( FALSE );
 					}
 				}
@@ -321,7 +339,7 @@ static BOOLEAN sanityCheckConnectOptions( const NET_CONNECT_INFO *connectInfo,
 					!isShortIntegerRangeNZ( connectInfo->nameLength ) )
 					{
 					DEBUG_PUTS(( "sanityCheckConnectOptions: Virtual "
-								 "connect options" ));
+								 "client connect options" ));
 					return( FALSE );
 					}
 				}
@@ -336,6 +354,9 @@ static BOOLEAN sanityCheckConnectOptions( const NET_CONNECT_INFO *connectInfo,
 				return( FALSE );
 				}
 			break;
+		
+		default:
+			retIntError_Boolean();
 		}
 	if( connectInfo->iUserObject != DEFAULTUSER_OBJECT_HANDLE && \
 		!isHandleRangeValid( connectInfo->iUserObject ) )
@@ -384,8 +405,10 @@ static int checkForProxy( INOUT_PTR NET_STREAM_INFO *netStream,
 						  OUT_LENGTH_BOUNDED_Z( proxyUrlMaxLen ) \
 							int *proxyUrlLen )
 	{
+#ifdef USE_HTTP
 	MESSAGE_DATA msgData;
 	int status;
+#endif /* USE_HTTP */
 
 	assert( isWritePtr( netStream, sizeof( NET_STREAM_INFO ) ) );
 	assert( isReadPtr( connectInfo, sizeof( NET_CONNECT_INFO ) ) );
@@ -395,7 +418,7 @@ static int checkForProxy( INOUT_PTR NET_STREAM_INFO *netStream,
 	REQUIRES( isEnumRange( protocol, STREAM_PROTOCOL ) );
 	REQUIRES( proxyUrlMaxLen > 10 && proxyUrlMaxLen <= MAX_DNS_SIZE );
 
-	/* Clear return value */
+	/* Clear return values */
 	REQUIRES( isShortIntegerRangeNZ( proxyUrlMaxLen ) ); 
 	memset( proxyUrlBuffer, 0, min( 16, proxyUrlMaxLen ) );
 	*proxyUrlLen = 0;
@@ -409,22 +432,23 @@ static int checkForProxy( INOUT_PTR NET_STREAM_INFO *netStream,
 	   We only use the case-insensitive string compares for the text-format
 	   host names since the numeric forms don't need this.  In addition
 	   since the IPv4 localhost is a /8, we check for anything with a
-	   "127." prefix */
-	if( ( hostLen > 4 && !memcmp( host, "127.", 4 ) ) || \
+	   "127." prefix.  However, this will produce FPs for anyone who decides
+	   to start their FQDN with "127.", so we check for at least "127.0.0.",
+	   as mentioned above this is an optimisation for common cases and not a
+	   hard-fail check */
+	if( ( hostLen > 8 && !memcmp( host, "127.0.0.", 8 ) ) || \
 		( hostLen == 3 && !memcmp( host, "::1", 3 ) ) || \
-		( hostLen == 9 && !strCompare( host, "localhost", 9 ) ) || \
-		( hostLen == 10 && !strCompare( host, "localhost.", 10 ) ) || \
-		( hostLen == 7 && !strCompare( host, "0.0.0.0", 7 ) ) || \
-		( hostLen == 4 && !strCompare( host, "[::]", 4 ) ) )
+		( hostLen == 9 && strSame( host, "localhost", 9 ) ) || \
+		( hostLen == 10 && strSame( host, "localhost.", 10 ) ) || \
+		( hostLen == 7 && !memcmp( host, "0.0.0.0", 7 ) ) || \
+		( hostLen == 4 && !memcmp( host, "[::]", 4 ) ) )
 		/* Are you local? */
 		{
 		/* This is a local socket!  We'll have no proxies here! */
 		return( CRYPT_OK );
 		}
 
-	/* Check to see whether we're going through a proxy.  First we check for 
-	   a protocol-specific HTTP proxy (if appropriate), if there's none then 
-	   we check for the more generic case of a SOCKS proxy */
+	/* Check to see whether we're going through a proxy */
 #ifdef USE_HTTP
 	if( protocol == STREAM_PROTOCOL_HTTP )
 		{
@@ -445,18 +469,6 @@ static int checkForProxy( INOUT_PTR NET_STREAM_INFO *netStream,
 			}
 		}
 #endif /* USE_HTTP */
-
-	/* Check whether there's a SOCKS proxy configured */
-	setMessageData( &msgData, proxyUrlBuffer, proxyUrlMaxLen );
-	status = krnlSendMessage( connectInfo->iUserObject,
-							  IMESSAGE_GETATTRIBUTE_S, &msgData,
-							  CRYPT_OPTION_NET_SOCKS_SERVER );
-	if( cryptStatusOK( status ) )
-		{
-		*proxyUrlLen = msgData.length;
-
-		return( OK_SPECIAL );
-		}
 
 	/* There's no proxy configured */
 	return( CRYPT_OK );
@@ -521,7 +533,7 @@ static int openNetworkConnection( INOUT_PTR NET_STREAM_INFO *netStream,
 	   detection try and locate the proxy information.  This only works for
 	   Windows which has built-in proxy discovery support, for everything 
 	   else it's no-op'd out */
-	if( !strCompareZ( proxyUrl, "[Autodetect]" ) )
+	if( proxyUrlLen == 12 && strSame( proxyUrl, "[Autodetect]", 12 ) )
 		{
 		status = findProxyUrl( urlBuffer, MAX_DNS_SIZE, &urlLen, 
 							   netStream->host, netStream->hostLen );
@@ -568,7 +580,7 @@ static int initStream( OUT_PTR STREAM *stream,
 					   OUT_PTR NET_STREAM_INFO *netStream,
 					   IN_ENUM( STREAM_PROTOCOL ) \
 						const STREAM_PROTOCOL_TYPE protocol,
-					   INOUT_PTR const NET_CONNECT_INFO *connectInfo,
+					   IN_PTR const NET_CONNECT_INFO *connectInfo,
 					   IN_BOOL const BOOLEAN isServer )
 	{
 	int timeout, status;
@@ -584,6 +596,7 @@ static int initStream( OUT_PTR STREAM *stream,
 	memset( stream, 0, sizeof( STREAM ) );
 	stream->type = STREAM_TYPE_NETWORK;
 	INIT_FLAGS( stream->flags, STREAM_FLAG_NONE );
+	DATAPTR_SET( stream->netStream, NULL );
 	memset( netStream, 0, sizeof( NET_STREAM_INFO ) );
 	netStream->protocol = protocol;
 	netStream->subProtocol = connectInfo->subProtocol;
@@ -684,10 +697,10 @@ static int initStreamStorage( INOUT_PTR STREAM *stream,
 									const STREAM_PROTOCOL_TYPE protocol,
 							  IN_PTR_OPT const URL_INFO *urlInfo )
 	{
-	int bufferStorageSize = 0;
+	int storageOffset = 0;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
-	assert( isReadPtr( netStream, sizeof( NET_STREAM_INFO ) ) );
+	assert( isWritePtr( netStream, sizeof( NET_STREAM_INFO ) ) );
 	assert( ( urlInfo == NULL ) || \
 			isReadPtr( urlInfo, sizeof( URL_INFO ) ) );
 
@@ -725,48 +738,54 @@ static int initStreamStorage( INOUT_PTR STREAM *stream,
 		safeBufferInit( netStream->writeBuffer, netStream->writeBufSize );
 		REQUIRES( !checkOverflowAdd( SAFEBUFFER_SIZE( NETSTREAM_BUFFER_SIZE ),
 									 SAFEBUFFER_SIZE( NETSTREAM_BUFFER_SIZE ) ) );
-		bufferStorageSize = SAFEBUFFER_SIZE( NETSTREAM_BUFFER_SIZE ) + \
-							SAFEBUFFER_SIZE( NETSTREAM_BUFFER_SIZE );
+		storageOffset = SAFEBUFFER_SIZE( NETSTREAM_BUFFER_SIZE ) + \
+						SAFEBUFFER_SIZE( NETSTREAM_BUFFER_SIZE );
 		}
 	if( urlInfo != NULL )
 		{
-		netStream->host = ( char * ) netStream->storage + bufferStorageSize;
-		REQUIRES( boundsCheckZ( bufferStorageSize, urlInfo->hostLen, 
+		netStream->host = ( char * ) netStream->storage + storageOffset;
+		REQUIRES( boundsCheckZ( storageOffset, urlInfo->hostLen, 
 								netStream->storageSize ) );
 		memcpy( netStream->host, urlInfo->host, urlInfo->hostLen );
 		netStream->hostLen = urlInfo->hostLen;
-		REQUIRES( !checkOverflowAdd( bufferStorageSize, 
-									 urlInfo->hostLen ) );
-		bufferStorageSize += urlInfo->hostLen;
+		REQUIRES( !checkOverflowAdd( storageOffset, urlInfo->hostLen ) );
+		storageOffset += urlInfo->hostLen;
 		if( urlInfo->location != NULL )
 			{
 			netStream->path = \
-					( char * ) netStream->storage + bufferStorageSize;
-			REQUIRES( boundsCheck( bufferStorageSize, urlInfo->locationLen, 
+					( char * ) netStream->storage + storageOffset;
+			REQUIRES( boundsCheck( storageOffset, urlInfo->locationLen, 
 								   netStream->storageSize ) );
 			memcpy( netStream->path, urlInfo->location, 
 					urlInfo->locationLen );
 			netStream->pathLen = urlInfo->locationLen;
-			REQUIRES( !checkOverflowAdd( bufferStorageSize, 
+			REQUIRES( !checkOverflowAdd( storageOffset, 
 										 urlInfo->locationLen ) );
-			bufferStorageSize += urlInfo->locationLen;
+			storageOffset += urlInfo->locationLen;
 			}
 		netStream->port = urlInfo->port;
 		}
 #ifdef USE_EAP
 	if( protocol == STREAM_PROTOCOL_EAP )
 		{
+		/* The structures are being placed inside a BYTE * buffer so we need
+		   to align their storage addresses */
 		netStream->subTypeInfo = \
-				( char * ) netStream->storage + bufferStorageSize;
-		REQUIRES( !checkOverflowAdd( bufferStorageSize, 
-									 sizeof( EAP_INFO ) ) );
-		bufferStorageSize += sizeof( EAP_INFO );
+				ptr_align( ( char * ) netStream->storage + storageOffset, 
+						   sizeof( void * ) );
+		REQUIRES( !checkOverflowAdd( storageOffset, 
+								sizeof( EAP_INFO ) + sizeof( void * ) ) );
+		storageOffset += sizeof( EAP_INFO ) + sizeof( void * );
 		netStream->transportInfo = \
-				( char * ) netStream->storage + bufferStorageSize;
+				ptr_align( ( char * ) netStream->storage + storageOffset, \
+						   SOCKADDR_STORAGE_ALIGNSIZE );
 		netStream->transportInfoPayloadSize = sizeof( SOCKADDR_STORAGE );
-		REQUIRES( boundsCheck( bufferStorageSize, 
-							   sizeof( SOCKADDR_STORAGE ), 
-							   netStream->storageSize ) );
+		REQUIRES( !checkOverflowAdd( storageOffset, 
+									 sizeof( SOCKADDR_STORAGE ) + \
+									 SOCKADDR_STORAGE_ALIGNSIZE ) );
+		storageOffset += sizeof( SOCKADDR_STORAGE ) + \
+						 SOCKADDR_STORAGE_ALIGNSIZE;
+		ENSURES( storageOffset <= netStream->storageSize );
 		}
 #endif /* USE_EAP */
 
@@ -801,7 +820,7 @@ static void cleanupStream( INOUT_PTR STREAM *stream,
 		}
 
 	/* Clean up stream-related buffers if necessary */
-	REQUIRES_V( isIntegerRange( netStream->storageSize ) ); 
+	REQUIRES_V( isShortIntegerRange( netStream->storageSize ) ); 
 	REQUIRES_V( !checkOverflowAdd( sizeof( NET_STREAM_INFO ), 
 								   netStream->storageSize ) );
 	zeroise( netStream, sizeof( NET_STREAM_INFO ) + netStream->storageSize );
@@ -902,8 +921,8 @@ static int processConnectOptions( INOUT_PTR STREAM *stream,
 		name = connectInfo->interface;
 		nameLength = connectInfo->interfaceLength;
 		}
-	ENSURES( urlInfo != NULL );
-	ENSURES( name != NULL );
+	ENSURES_S( urlInfo != NULL );
+	ENSURES_S( name != NULL );
 
 	/* Parse the URI into its various components */
 #ifdef USE_HTTP
@@ -1022,10 +1041,12 @@ static int completeConnect( INOUT_PTR STREAM *stream,
 	ENSURES_S( FNPTR_ISVALID( netStreamTemplate->connectFunctionOpt ) && \
 			   FNPTR_ISVALID( netStreamTemplate->disconnectFunctionOpt ) && \
 			   FNPTR_ISVALID( netStreamTemplate->getMetadataFunctionOpt ) );
-	ENSURES_S( TEST_FLAG( netStreamTemplate->nFlags, STREAM_NFLAG_ISSERVER ) || \
-			   ( urlInfo != NULL && \
-				 urlInfo->host != NULL && urlInfo->hostLen != 0 ) || \
-			   netStreamTemplate->netSocket != CRYPT_ERROR );
+	ENSURES_S( TEST_FLAG( netStreamTemplate->nFlags, \
+						  STREAM_NFLAG_ISSERVER ) || \
+			   ( urlInfo != NULL && urlInfo->host != NULL && \
+			     urlInfo->hostLen != 0 ) || \
+			   TEST_FLAG( netStreamTemplate->nFlags, \
+						  STREAM_NFLAG_USERSOCKET ) );
 
 	/* Wait for any async network driver binding to complete and make sure
 	   that the network interface has been initialised */
@@ -1071,19 +1092,25 @@ static int completeConnect( INOUT_PTR STREAM *stream,
 #ifdef USE_EAP
 	if( protocol == STREAM_PROTOCOL_EAP )
 		{
-		REQUIRES_S( !checkOverflowAdd( netStreamAllocSize, 
-									   sizeof( EAP_INFO ) + \
-										sizeof( SOCKADDR_STORAGE ) ) );
-		netStreamAllocSize += sizeof( EAP_INFO ) + \
-							  sizeof( SOCKADDR_STORAGE );
+		/* The structures are being placed inside a BYTE * buffer but have
+		   to be aligned within it so we need to take the alignment 
+		   requirements into account */
+		REQUIRES_S( \
+			!checkOverflowAdd( netStreamAllocSize, 
+							   sizeof( EAP_INFO ) + sizeof( void * ) + \
+							   sizeof( SOCKADDR_STORAGE ) + \
+									   SOCKADDR_STORAGE_ALIGNSIZE ) );
+		netStreamAllocSize += sizeof( EAP_INFO ) + sizeof( void * ) + \
+							  sizeof( SOCKADDR_STORAGE ) + \
+									  SOCKADDR_STORAGE_ALIGNSIZE;
 		}
 #endif /* USE_EAP */
 	REQUIRES_S( netStreamAllocSize == 0 || \
 				rangeCheck( netStreamAllocSize, 1, MAX_BUFFER_SIZE ) );
-	REQUIRES_S( isIntegerRangeNZ( sizeof( NET_STREAM_INFO ) + \
-								  netStreamAllocSize ) );
 	REQUIRES_S( !checkOverflowAdd( sizeof( NET_STREAM_INFO ), 
 								   netStreamAllocSize ) );
+	REQUIRES_S( isIntegerRangeNZ( sizeof( NET_STREAM_INFO ) + \
+								  netStreamAllocSize ) );
 	netStreamInfo = clAlloc( "completeConnect", sizeof( NET_STREAM_INFO ) + \
 												netStreamAllocSize );
 	if( netStreamInfo == NULL )
@@ -1177,9 +1204,6 @@ static int completeConnect( INOUT_PTR STREAM *stream,
 	status = connectViaHttpProxy( stream, errorInfo );
 	if( cryptStatusError( status ) )
 		{
-		/* Copy back the error information to the caller */
-		copyErrorInfo( errorInfo, NETSTREAM_ERRINFO );
-
 		/* Clean up.  As before we need to shut down the underlying 
 		   transport connection on the way out */
 		cleanupStream( stream, TRUE );
@@ -1376,6 +1400,14 @@ int sNetListen( OUT_PTR STREAM *stream,
 RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int sNetDisconnect( INOUT_PTR STREAM *stream )
 	{
+	NET_STREAM_INFO *netStream = DATAPTR_GET( stream->netStream );
+
+	/* The fuzzing can have moved the stream into who-knows-what state so we 
+	   just free the memory */
+	if( netStream != NULL )
+		clFree( "sNetDisconnect", netStream );
+	DATAPTR_SET( stream->netStream, NULL );
+
 	return( CRYPT_OK );
 	}
 
@@ -1464,8 +1496,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 4 ) ) \
 int sNetConnect( OUT_PTR STREAM *stream, 
 				 IN_ENUM( STREAM_PROTOCOL ) \
 					const STREAM_PROTOCOL_TYPE protocol,
-				 const NET_CONNECT_INFO *connectInfo, 
-				 INOUT_PTR ERROR_INFO *errorInfo )
+				 IN_PTR const NET_CONNECT_INFO *connectInfo, 
+				 OUT_PTR ERROR_INFO *errorInfo )
 	{
 	UNUSED_ARG( connectInfo );
 
@@ -1479,8 +1511,8 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 4 ) ) \
 int sNetListen( OUT_PTR STREAM *stream, 
 				IN_ENUM( STREAM_PROTOCOL ) \
 					const STREAM_PROTOCOL_TYPE protocol,
-				const NET_CONNECT_INFO *connectInfo, 
-				INOUT_PTR ERROR_INFO *errorInfo )
+				IN_PTR const NET_CONNECT_INFO *connectInfo, 
+				OUT_PTR ERROR_INFO *errorInfo )
 	{
 	UNUSED_ARG( connectInfo );
 
@@ -1499,7 +1531,7 @@ int sNetDisconnect( INOUT_PTR STREAM *stream )
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-int sNetParseURL( INOUT_PTR URL_INFO *urlInfo, 
+int sNetParseURL( OUT_PTR URL_INFO *urlInfo, 
 				  IN_BUFFER( urlLen ) const BYTE *url, 
 				  IN_LENGTH_SHORT const int urlLen, 
 				  IN_ENUM_OPT( URL_TYPE ) const URL_TYPE urlTypeHint )

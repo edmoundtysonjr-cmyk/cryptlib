@@ -196,6 +196,7 @@
 /* Information on exported key/signature data.  This is an extended version
    of the data returned by the externally-visible cryptQueryObject() routine */
 
+#define AUTHENCPARAM_MIN_SIZE	16
 #define AUTHENCPARAM_MAX_SIZE	128
 
 typedef struct {

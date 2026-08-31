@@ -1224,8 +1224,8 @@ int checkFirewallError( INOUT_PTR NET_STREAM_INFO *netStream )
 																 DRIVER_INFO ) - 1 ) );
 
 			if( driverNameLen >= driverInfoTbl[ driverIndex ].nameLen && \
-				!strnicmp( driverName, driverInfoTbl[ driverIndex ].name,
-						   driverInfoTbl[ driverIndex ].nameLen ) )
+				strSame( driverName, driverInfoTbl[ driverIndex ].name,
+						 driverInfoTbl[ driverIndex ].nameLen ) )
 				{
 				DynamicUnload( hPSAPI );
 				retExt( CRYPT_ERROR_TIMEOUT,

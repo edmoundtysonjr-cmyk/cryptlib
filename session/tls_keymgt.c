@@ -502,7 +502,7 @@ int createSharedPremasterSecret( OUT_BUFFER( premasterSecretMaxLength, \
 	BYTE decodedValue[ 64 + 8 ];
 	static const BYTE zeroes[ CRYPT_MAX_TEXTSIZE + 8 ] = { 0 };
 	int valueLength = sharedSecretLength;
-	int status;
+	int position, status;
 
 	assert( isWritePtrDynamic( premasterSecret, premasterSecretMaxLength ) );
 	assert( isWritePtr( premasterSecretLength, sizeof( int ) ) );
@@ -578,9 +578,10 @@ int createSharedPremasterSecret( OUT_BUFFER( premasterSecretMaxLength, \
 		sMemDisconnect( &stream );
 		return( status );
 		}
-	*premasterSecretLength = stell( &stream );
+	position = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( isShortIntegerRangeNZ( *premasterSecretLength ) );
+	ENSURES( isShortIntegerRangeNZ( position ) );
+	*premasterSecretLength = position;
 
 	return( CRYPT_OK );
 	}
@@ -696,7 +697,7 @@ int unwrapPremasterSecret( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   Yet another oracle exists if we get a valid PKCS #1 message and
 	   continue past this point but the key is invalid causing the handshake 
 	   to fail later on, which is why this code is disabled and triggers 
-	   compile warnings if it's ever re-enabled */
+	   compile warnings if it's ever re-enabled via USE_RSA_SUITES */
 	handshakeInfo->premasterSecretSize = TLS_SECRET_SIZE;
 	setMechanismWrapInfo( &mechanismInfo, ( MESSAGE_CAST ) data, dataLength,
 						  handshakeInfo->premasterSecret, TLS_SECRET_SIZE, 
@@ -781,6 +782,8 @@ static int premasterToMaster( IN_PTR const SESSION_INFO *sessionInfoPtr,
 
 	if( TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_EMS ) )
 		{
+		REQUIRES( handshakeInfo->sessionHashSize >= MIN_HASHSIZE && \
+				  handshakeInfo->sessionHashSize <= CRYPT_MAX_HASHSIZE );
 		REQUIRES( boundsCheck( 22, handshakeInfo->sessionHashSize, 
 							   64 + TLS_NONCE_SIZE + TLS_NONCE_SIZE ) );
 		memcpy( nonceBuffer, "extended master secret", 22 );
@@ -908,7 +911,7 @@ static int loadKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					 IN_BOOL const BOOLEAN isClient )
 	{
 	MESSAGE_DATA msgData;
-	BYTE *keyBlockPtr = ( BYTE * ) keyBlock;
+	const BYTE *keyBlockPtr = ( const BYTE * ) keyBlock;
 	int status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -936,7 +939,7 @@ static int loadKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	if( !TEST_FLAG( sessionInfoPtr->protocolFlags, 
 					( TLS_PFLAG_GCM | TLS_PFLAG_BERNSTEIN ) ) )
 		{
-		setMessageData( &msgData, keyBlockPtr, 
+		setMessageData( &msgData, ( MESSAGE_CAST ) keyBlockPtr, 
 						sessionInfoPtr->authBlocksize );
 		status = krnlSendMessage( isClient ? \
 										sessionInfoPtr->iAuthOutContext : \
@@ -946,7 +949,8 @@ static int loadKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		if( cryptStatusError( status ) )
 			return( status );
 		setMessageData( &msgData, 
-						keyBlockPtr + sessionInfoPtr->authBlocksize,
+						( MESSAGE_CAST ) ( keyBlockPtr + \
+										   sessionInfoPtr->authBlocksize ),
 						sessionInfoPtr->authBlocksize );
 		status = krnlSendMessage( isClient ? \
 										sessionInfoPtr->iAuthInContext: \
@@ -983,7 +987,8 @@ static int loadKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 #endif /* USE_POLY1305 */
 
 	/* Now load the encryption keys */
-	setMessageData( &msgData, keyBlockPtr, handshakeInfo->cryptKeysize );
+	setMessageData( &msgData, ( MESSAGE_CAST ) keyBlockPtr, 
+					handshakeInfo->cryptKeysize );
 	status = krnlSendMessage( isClient ? \
 									sessionInfoPtr->iCryptOutContext : \
 									sessionInfoPtr->iCryptInContext,
@@ -992,7 +997,8 @@ static int loadKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	if( cryptStatusError( status ) )
 		return( status );
 	keyBlockPtr += handshakeInfo->cryptKeysize;
-	setMessageData( &msgData, keyBlockPtr, handshakeInfo->cryptKeysize );
+	setMessageData( &msgData, ( MESSAGE_CAST ) keyBlockPtr, 
+					handshakeInfo->cryptKeysize );
 	status = krnlSendMessage( isClient ? \
 									sessionInfoPtr->iCryptInContext : \
 									sessionInfoPtr->iCryptOutContext,
@@ -1001,10 +1007,6 @@ static int loadKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	if( cryptStatusError( status ) )
 		return( status );
 	keyBlockPtr += handshakeInfo->cryptKeysize;
-
-	/* If we're using a stream cipher then there are no IVs */
-	if( isStreamCipher( sessionInfoPtr->cryptAlgo ) )
-		return( CRYPT_OK );	/* No IV, we're done */
 
 	/* If we're using GCM or the Bernstein protocol suite then the IV is 
 	   handled specially, for GCM it's composed of two parts, an explicit 
@@ -1021,6 +1023,7 @@ static int loadKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							   TLS_PFLAG_BERNSTEIN ) ? \
 							   BERNSTEIN_IV_SIZE : GCM_SALT_SIZE;
 
+		REQUIRES( rangeCheck( ivLength, 1, CRYPT_MAX_IVSIZE ) );
 		memcpy( isClient ? tlsInfo->aeadWriteSalt : tlsInfo->aeadReadSalt, 
 				keyBlockPtr, ivLength );
 		memcpy( isClient ? tlsInfo->aeadReadSalt : tlsInfo->aeadWriteSalt, 
@@ -1031,18 +1034,22 @@ static int loadKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 #endif /* USE_GCM || USE_CHACHA20 */
 
+	/* If we're using a stream cipher then there are no IVs */
+	if( isStreamCipher( sessionInfoPtr->cryptAlgo ) )
+		return( CRYPT_OK );	/* No IV, we're done */
+
 	/* It's a standard block cipher, load the IVs.  This load is actually 
 	   redundant for TLS 1.1+ since it uses explicit IVs, we do it anyway to 
 	   document that an IV load takes place but we also ignore the return
 	   value since it'll be replaced by the explicit IV later */
-	setMessageData( &msgData, keyBlockPtr,
+	setMessageData( &msgData, ( MESSAGE_CAST ) keyBlockPtr,
 					sessionInfoPtr->cryptBlocksize );
 	( void ) krnlSendMessage( isClient ? sessionInfoPtr->iCryptOutContext : \
 										 sessionInfoPtr->iCryptInContext,
 							  IMESSAGE_SETATTRIBUTE_S, &msgData,
 							  CRYPT_CTXINFO_IV );
 	keyBlockPtr += sessionInfoPtr->cryptBlocksize;
-	setMessageData( &msgData, keyBlockPtr,
+	setMessageData( &msgData, ( MESSAGE_CAST ) keyBlockPtr,
 					sessionInfoPtr->cryptBlocksize );
 	return( krnlSendMessage( isClient ? sessionInfoPtr->iCryptInContext : \
 										sessionInfoPtr->iCryptOutContext,
@@ -1092,8 +1099,7 @@ int initCryptoTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{
 		/* We've already got the master secret present from the session that
 		   we're resuming from, reuse that */
-		REQUIRES( rangeCheck( handshakeInfo->premasterSecretSize, 16,
-							  masterSecretSize ) );
+		REQUIRES( handshakeInfo->premasterSecretSize == masterSecretSize );
 		memcpy( masterSecret, handshakeInfo->premasterSecret,
 				handshakeInfo->premasterSecretSize );
 		}

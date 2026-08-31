@@ -1057,10 +1057,15 @@ static int skipAdditionalEntries( INOUT_PTR STREAM *stream,
 	REQUIRES( isIntegerRangeNZ( endPos ) );
 
 	LOOP_SMALL( noAdditionalEntries = 0, 
-				stell( stream ) < endPos && noAdditionalEntries < 5,
+				( status = stell( stream ) ) < endPos && \
+					noAdditionalEntries < 5,
 				noAdditionalEntries++ )
 		{
 		ENSURES( LOOP_INVARIANT_SMALL( noAdditionalEntries, 0, 4 ) );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		status = readUniversal( stream );
 		if( cryptStatusError( status ) )
@@ -1104,7 +1109,6 @@ int readAttribute( INOUT_PTR STREAM *stream,
 	{
 	SETOF_STACK setofStack;
 	SETOF_STATE_INFO *setofInfoPtr;
-	const int endPos = stell( stream ) + attributeLength;
 #ifdef USE_RPKI
 	CRYPT_ATTRIBUTE_TYPE fieldID = attributeInfoPtr->fieldID;
 	int maxAttributeFields = min( 5 + ( attributeLength / 3 ), 256 );
@@ -1114,7 +1118,7 @@ int readAttribute( INOUT_PTR STREAM *stream,
 	BOOLEAN attributeContinues = TRUE;
 	int flags = criticalFlag ? ATTR_FLAG_CRITICAL : ATTR_FLAG_NONE;
 	LOOP_INDEX attributeFieldsProcessed;
-	int status;
+	int endPos, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( attributePtrPtr, sizeof( DATAPTR_ATTRIBUTE ) ) );
@@ -1125,12 +1129,17 @@ int readAttribute( INOUT_PTR STREAM *stream,
 	
 	REQUIRES( isShortIntegerRange( attributeLength ) );
 	REQUIRES( isBooleanValue( criticalFlag ) );
-	REQUIRES( !checkOverflowAdd( stell( stream ), attributeLength ) );
-	ENSURES( isIntegerRangeMin( endPos, attributeLength ) );
 
 	/* Clear return values */
 	*errorLocus = CRYPT_ATTRIBUTE_NONE;
 	*errorType = CRYPT_ERRTYPE_NONE;
+
+	/* Calculate the end position for the attribute */
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, attributeLength ) );
+	endPos += attributeLength;
+	ENSURES( isIntegerRangeMin( endPos, attributeLength ) );
 
 	/* Set an upper limit for how many attribute fields we should be seeing 
 	   before we report a problem.  We have to apply special-case handling
@@ -1177,7 +1186,7 @@ int readAttribute( INOUT_PTR STREAM *stream,
 	   associated actions are indicated by the comment tags */
 	LOOP_LARGE( attributeFieldsProcessed = 0,
 				( attributeContinues || !setofStackIsEmpty( &setofStack ) ) && \
-					stell( stream ) < endPos && \
+					( status = stell( stream ) ) < endPos && \
 					attributeFieldsProcessed < maxAttributeFields,
 				attributeFieldsProcessed++ /* Also changed in loop body */ )
 		{
@@ -1188,6 +1197,10 @@ int readAttribute( INOUT_PTR STREAM *stream,
 										   maxAttributeFields - 1 ) );
 				 /* The attributeFieldsProcessed increment is occasionally reset 
 				    in the case of non-present optional attributes */
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		/* Inside a SET/SET OF/SEQUENCE/SEQUENCE OF: Check for the end of the
 		   item/collection of items.  This must be the first action taken
@@ -1555,14 +1568,20 @@ continueDecoding:
 	   pointers to the same inaccessible site-internal servers, although 
 	   these are already handled above), if there's any extraneous data left 
 	   then we just skip it */
-	if( stell( stream ) < endPos )
+	if( ( status = stell( stream ) ) < endPos )
 		{
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
+
 		DEBUG_DIAG(( "Skipping extraneous data at end of attribute" ));
 		assert_nofuzz( DEBUG_WARN );
 		status = skipAdditionalEntries( stream, errorInfo, endPos );
 		if( cryptStatusError( status ) )
 			return( status );
 		}
+	if( cryptStatusError( status ) )
+		return( status );	/* Residual error from stell() */
 
 	return( CRYPT_OK );
 	}

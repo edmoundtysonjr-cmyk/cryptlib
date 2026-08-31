@@ -440,7 +440,7 @@ static int reportAuthFailure( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				  ( providedAuthType == SSH_AUTHTYPE_PUBKEY ) ? \
 					"public/private key" : "password",
 				  needsPW ? "password" : "public/private key" ) );
-			}
+		}
 
 	/* Break down the authentication response as per the table above to try 
 	   and return some sort of useful information to the caller */
@@ -558,7 +558,7 @@ static int sendAuthRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	if( cryptStatusError( status ) )
 		{
-		sMemDisconnect( &stream );
+		sMemClose( &stream );	/* Zeroise stream data */
 		return( status );
 		}
 
@@ -573,7 +573,7 @@ static int sendAuthRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	else
 		status = wrapSendPacketSSH2( sessionInfoPtr, &stream );
-	sMemDisconnect( &stream );
+	sMemClose( &stream );		/* Zeroise stream data */
 	
 	return( status );
 	}
@@ -586,6 +586,7 @@ static int readAuthResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							 OUT_LENGTH_Z int *packetLength,
 							 IN_BOOL const BOOLEAN isPAMAuth )
 	{
+	const SSH_INFO *sshInfo = sessionInfoPtr->sessionSSH;
 #ifdef USE_SSH_EXTENDED
 	STREAM stream;
 #endif /* USE_SSH_EXTENDED */
@@ -611,7 +612,7 @@ static int readAuthResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* If the server sent extension information, process it and then retry 
 	   the server response read */
 #ifdef USE_SSH_EXTENDED
-	if( sessionInfoPtr->sessionSSH->packetType == SSH_MSG_EXT_INFO )
+	if( sshInfo->packetType == SSH_MSG_EXT_INFO )
 		{
 		sMemConnect( &stream, sessionInfoPtr->receiveBuffer, length );
 		status = readExtensionsSSH( sessionInfoPtr, &stream );
@@ -619,16 +620,19 @@ static int readAuthResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		if( cryptStatusError( status ) )
 			return( status );
 
-		/* Retry the authentication response read */
+		/* Retry the authentication response read, making sure that we don't
+		   get a second SSH_MSG_EXT_INFO */
 		status = length = readAuthPacketSSH2( sessionInfoPtr, authType, 
 											  ID_SIZE );
 		if( cryptStatusError( status ) )
 			return( status );
+		if( sshInfo->packetType == SSH_MSG_EXT_INFO )
+			return( CRYPT_ERROR_BADDATA );
 		}
 #endif /* USE_SSH_EXTENDED */
 	*packetLength = length;
-	*type = sessionInfoPtr->sessionSSH->packetType;
-	if( sessionInfoPtr->sessionSSH->packetType == SSH_MSG_USERAUTH_SUCCESS )
+	*type = sshInfo->packetType;
+	if( sshInfo->packetType == SSH_MSG_USERAUTH_SUCCESS )
 		{
 		/* We've successfully authenticated ourselves and we're done */
 		return( CRYPT_OK );
@@ -754,8 +758,8 @@ static int pamAuthenticate( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							  &nameLength );	/* Name */
 	if( cryptStatusOK( status ) )
 		{
-		readUniversal32( &stream );				/* Instruction */
-		readUniversal32( &stream );				/* Language */
+		( void ) readUniversal32( &stream );	/* Instruction */
+		( void ) readUniversal32( &stream );	/* Language */
 		status = noPrompts = readUint32( &stream );	/* No.prompts */
 		if( !cryptStatusError( status ) )
 			{
@@ -796,7 +800,7 @@ static int pamAuthenticate( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   it may be necessary to do a substring search */
 	if( promptLength < 8 || \
 		!strIsPrintable( promptBuffer, promptLength ) || \
-		strCompare( promptBuffer, "Password", 8 ) )
+		!strSame( promptBuffer, "Password", 8 ) )
 		{
 		/* The following may produce somewhat inconsistent results in terms
 		   of what it reports because it's unclear what 'name' actually is, 
@@ -847,7 +851,7 @@ static int pamAuthenticate( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		if( cryptStatusOK( status ) )
 			status = sendPacketSSH2( sessionInfoPtr, &stream );
 		}
-	sMemDisconnect( &stream );
+	sMemClose( &stream );	/* Zeroise stream data */
 
 	return( status );
 	}
@@ -963,7 +967,7 @@ static int processPamAuthentication( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 			return( processAuthFailure( sessionInfoPtr, length, 
 										SSH_AUTHTYPE_PASSWORD, FALSE ) );
 			}
-		ENSURES( type == SSH_MSG_USERAUTH_INFO_REQUEST )
+		ENSURES( type == SSH_MSG_USERAUTH_INFO_REQUEST );
 				 /* Guaranteed by the packet read with type = 
 				    SSH_MSG_SPECIAL_USERAUTH_PAM */
 

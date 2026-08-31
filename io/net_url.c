@@ -42,8 +42,8 @@ static BOOLEAN sanityCheckURL( const URL_INFO *urlInfo )
 		return( FALSE );
 		}
 
-	/* Make sure the schema, user info, and location are either absent or 
-	   have valid values */
+	/* Make sure the schema, user info, location, and port are either absent 
+	   or have valid values */
 	if( !checkUrlValue( urlInfo->schema, urlInfo->schemaLen, 
 						MIN_SCHEMA_SIZE + 3, MAX_SCHEMA_SIZE + 3 ) )
 						/* [...] + "://" */
@@ -63,7 +63,13 @@ static BOOLEAN sanityCheckURL( const URL_INFO *urlInfo )
 		DEBUG_PUTS(( "sanityCheckURL: Location" ));
 		return( FALSE );
 		}
-
+	if( urlInfo->port != 0 && \
+		!rangeCheck( urlInfo->port, MIN_PORT_NUMBER, MAX_DEST_PORT_NUMBER ) )
+		{
+		DEBUG_PUTS(( "sanityCheckURL: Port" ));
+		return( FALSE );
+		}
+		
 	/* The host always has to be present.  We allow a single special case in
 	   which the host name is less than MIN_HOST_SIZE bytes for the IPv6 
 	   loopback address "::1" */
@@ -82,6 +88,8 @@ static BOOLEAN sanityCheckURL( const URL_INFO *urlInfo )
 
 	return( TRUE );
 	}
+#else
+  #define sanityCheckURL( x )		TRUE
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 /****************************************************************************
@@ -139,7 +147,7 @@ static int checkSchema( IN_BUFFER( schemaLen ) const void *schema,
 														 URL_SCHEMA_INFO ) - 1 ) );
 
 		if( urlSchemaInfo[ i ].schemaLength == schemaLen && \
-			!strCompare( urlSchemaInfo[ i ].schema, schema, schemaLen ) )
+			strSame( urlSchemaInfo[ i ].schema, schema, schemaLen ) )
 			break;
 		}
 	ENSURES( LOOP_BOUND_OK );
@@ -179,6 +187,68 @@ static int checkSchema( IN_BUFFER( schemaLen ) const void *schema,
 	return( CRYPT_OK );
 	}
 
+/* Check a hostname for validity */
+
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
+static BOOLEAN checkHostNameValid( IN_BUFFER( hostNameLen ) \
+										const char *hostName,
+								   IN_LENGTH_DNS const int hostNameLen,
+								   IN_BOOL const BOOLEAN isTemplateURL )
+	{
+	LOOP_INDEX i;
+
+	assert( isReadPtrDynamic( hostName, hostNameLen ) );
+
+	REQUIRES_B( hostNameLen > 0 && hostNameLen <= MAX_HOST_SIZE );
+	REQUIRES_B( isBooleanValue( isTemplateURL ) );
+
+	/* A DNS name can only contain A-Z, a-z, 0-9, '-', and '.', and not begin
+	   or end with the '-' part.  It can also contain '_', for example for 
+	   DNS SRV, but then CAs usually won't issue certificates for it.  There 
+	   doesn't seem to be any good reason to exclude it, so we allow it 
+	   alongside the other values.
+	   
+	   Apart from filtering out invalid characters, this check also excludes 
+	   percent-encoded values and other trickery, although not IDNA-encoded 
+	   forms */
+	LOOP_LARGE( i = 0, i < hostNameLen, i++ )
+		{
+		const int ch = byteToInt( hostName[ i ] );
+
+		ENSURES_B( LOOP_INVARIANT_LARGE( i, 0, hostNameLen - 1 ) );
+
+		/* If this is a template URL, for example from a wildcard 
+		   certificate, then some characters that aren't normally permitted 
+		   are allowed */
+		if( isTemplateURL && ch == '*' )
+			continue;
+
+		assert_nofuzz( ch != '*' );	/* Alert on wildcard use in debug mode */
+		if( !isAlNum( ch ) && ch != '-' && ch != '.' && ch != '_' )
+			return( FALSE );
+		}
+	ENSURES_B( LOOP_BOUND_OK );
+
+	/* We can't have a name with a '-' or '.' at the ends (technically a '.'
+	   at the end is valid but it shouldn't be for our use) */
+	if( hostName[ 0 ] == '-' || hostName[ hostNameLen - 1 ] == '-' || \
+		hostName[ 0 ] == '.' || hostName[ hostNameLen - 1 ] == '.' )
+		return( FALSE );
+
+	/* Finally, look for two consecutive '.'s.  Two consecutive '-'s are
+	   valid for IDNA encoding */
+	LOOP_LARGE( i = 0, i < hostNameLen - 1, i++ )
+		{
+		ENSURES_B( LOOP_INVARIANT_LARGE( i, 0, hostNameLen - 2 ) );
+
+		if( hostName[ i ] == '.' && hostName[ i + 1 ] == '.' )
+			return( FALSE );
+		}
+	ENSURES_B( LOOP_BOUND_OK );
+
+	return( TRUE );
+	}
+
 /* Parse an RFC 1738 URI into:
 
 	<schema>://[<user>@]<host>[:<port>]/<path> components
@@ -202,18 +272,21 @@ static int checkSchema( IN_BUFFER( schemaLen ) const void *schema,
    'char *') until proven otherwise.
    
    However even in this case it assumes that some level of common sense has
-   been applied to the URI, in other words that the CA hasn't signd a
+   been applied to the URI, in other words that the CA hasn't signed a
    certificate that uses URI-encoding tricks that would require a full-
    fledged URI processor to handle.  The only place where this would ever
    be an issue is with certificate name constraints, and the documentation
    warns against relying on these because of the ease with which they're
    bypassed.  For example the PKIX spec never addresses most URI 
    complications like use of percent encodings, so either the encoded or 
-   decoded form could be regarded as valid, leading to a a Schroedinger's 
+   decoded form could be regarded as valid, leading to a Schroedinger's 
    constraint where comparing two forms with or without percent-encoding has 
    them both valid and invalid at the same time until you submit it to a PKI 
    app.  This would make a good, if slow, random number generator, one bit 
-   per PKI code base */
+   per PKI code base.
+   
+   So in summary it verifies that a URI is in roughly the correct shape to
+   be used, but isn't a strict validating parser */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int parseURL( OUT_PTR URL_INFO *urlInfo, 
@@ -243,7 +316,7 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 	if( defaultPort != CRYPT_UNUSED )
 		urlInfo->port = defaultPort;
 
-	/* Make sure that the input contains valid characters.  Note that this
+	/* Make sure that the input contains valid characters.  Note that this 
 	   doesn't check for valid URL forms, merely that the individual 
 	   characters are valid.  Beyond this point we know that the 'BYTE *' 
 	   is legitimately a 'char *' */
@@ -305,6 +378,16 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 		   used */
 		if( offset < 1 || offset > strLen || offset > MAX_URL_SIZE )
 			return( CRYPT_ERROR_BADDATA );
+		if( offset + 1 < strLen && \
+			strFindCh( strPtr + offset + 1, 
+					   strLen - ( offset + 1 ), '@' ) >= 0 )
+			{
+			/* There should only be one '@' present, or at least RFC 3986 
+			   section 3.2.1 says that we should use the last one if several 
+			   are present so if we find another one we've split the URL at 
+			   the wrong place */
+			return( CRYPT_ERROR_BADDATA );
+			}
 		userInfoLen = strExtract( &userInfo, strPtr, 0, offset );
 		if( userInfoLen < 1 || userInfoLen > CRYPT_MAX_TEXTSIZE )
 			return( CRYPT_ERROR_BADDATA );
@@ -341,8 +424,7 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 	   string representation, which would conflict with the way that ports
 	   are denoted in URLs) so if we find one at the start of the URI we 
 	   treat it as an IPv6 address */
-	if( *strPtr == '[' && \
-		( strLen != 12 || strCompare( strPtr, "[Autodetect]", 12 ) ) )
+	if( *strPtr == '[' )
 		{
 		/* Locate the end of the RFC 2732 IPv6 address.  The returned offset 
 		   can't be greater than the length - 1 but we make the check 
@@ -357,7 +439,9 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 		   format is approximately valid.  This is an extra level of 
 		   checking that IPv4 addresses and DNS names don't have, but since
 		   we know that it's an IPv6 address we may as well catch any 
-		   problems here.
+		   problems here.  Note that this will reject oddities like IPv4-
+		   mapped addresses and other RFC 4291 weirdness, but we shouldn't
+		   be seeing these anyway.
 		   
 		   We start at offset 1 to skip the '[' at the start and stop before
 		   the ']' at the end */
@@ -397,6 +481,8 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 				minLen = 3;
 			}
 		offset++;	/* Skip ']' */
+		if( hostNameLen < minLen || hostNameLen > MAX_HOST_SIZE )
+			return( CRYPT_ERROR_BADDATA );
 		}
 	else
 		{
@@ -406,18 +492,43 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 		   following the name */
 		offset = strFindCh( strPtr, strLen, ':' );
 		offset2 = strFindCh( strPtr, strLen, '/' );
-		if( offset < 0 )
-			offset = offset2;
-		else
+		if( offset == 0 || offset2 == 0 )
 			{
-			ENSURES( offset >= 0 );
-			if( offset2 >= 0 )
-				offset = min( offset, offset2 );
+			/* There's no host name present, for example for "http://:80" */
+			return( CRYPT_ERROR_BADDATA );
 			}
 		if( offset <= 0 )
 			{
-			/* The remaining string is the server name, we're done (the 
-			   string has already been trimmed in earlier code) */
+			/* No ':', try for a '/' */
+			offset = offset2;
+			}
+		else
+			{
+			ENSURES( offset > 0 );
+			if( offset2 >= 0 )
+				offset = min( offset, offset2 );
+			}
+		hostNameLen = ( offset <= 0 ) ? strLen : offset;
+
+		/* RFC 3986 section 3.2 also allows '?' and '#' at this point, which
+		   we shouldn't be seeing as part of the host name */
+		offset2 = strFindCh( strPtr, strLen, '?' );
+		if( offset2 >= 0 && offset2 < hostNameLen )
+			return( CRYPT_ERROR_BADDATA );
+		offset2 = strFindCh( strPtr, strLen, '#' );
+		if( offset2 >= 0 && offset2 < hostNameLen )
+			return( CRYPT_ERROR_BADDATA );
+
+		/* If the remaining string is the server name, we're done (the 
+		   string has already been trimmed in earlier code) */
+		if( offset <= 0 )
+			{
+			if( strLen < minLen || strLen > MAX_HOST_SIZE )
+				return( CRYPT_ERROR_BADDATA );
+			if( !checkHostNameValid( strPtr, strLen,
+									 ( urlTypeHint == URL_TYPE_TEMPLATE ) ? \
+									   TRUE : FALSE ) )
+				return( CRYPT_ERROR_BADDATA );
 			urlInfo->host = strPtr;
 			urlInfo->hostLen = strLen;
 
@@ -429,9 +540,13 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 		/* There's port/location info following the server name.  Trailing
 		   whitespace will be stripped later */
 		hostNameLen = strExtract( &hostName, strPtr, 0, offset );
+		if( hostNameLen < minLen || hostNameLen > MAX_HOST_SIZE )
+			return( CRYPT_ERROR_BADDATA );
+		if( !checkHostNameValid( hostName, hostNameLen,
+								 ( urlTypeHint == URL_TYPE_TEMPLATE ) ? \
+								   TRUE : FALSE ) )
+			return( CRYPT_ERROR_BADDATA );
 		}
-	if( hostNameLen < minLen || hostNameLen > MAX_HOST_SIZE )
-		return( CRYPT_ERROR_BADDATA );
 	urlInfo->host = hostName;
 	urlInfo->hostLen = hostNameLen;
 
@@ -450,7 +565,7 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 
 		return( CRYPT_OK );
 		}
-	if( strLen < 3 || strLen > MAX_URL_SIZE )
+	if( strLen < MIN_LOCATION_SIZE || strLen > MAX_URL_SIZE )
 		return( CRYPT_ERROR_BADDATA );
 
 	/* Check for a port after a ':' */
@@ -469,7 +584,7 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 		/* Extract the port number */
 		portStrLen = strParseNumeric( strPtr, strLen, &port, MIN_PORT_NUMBER, 
 									  MAX_DEST_PORT_NUMBER );
-		if( portStrLen < 2 || portStrLen > 6 )
+		if( portStrLen < 2 || portStrLen > 5 )
 			return( CRYPT_ERROR_BADDATA );
 		urlInfo->port = port;
 
@@ -488,7 +603,7 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 
 			return( CRYPT_OK );
 			}
-		if( strLen < 3 || strLen > MAX_URL_SIZE )
+		if( strLen < MIN_LOCATION_SIZE || strLen > MAX_URL_SIZE )
 			return( CRYPT_ERROR_BADDATA );
 		}
 
@@ -500,6 +615,8 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 	   offset to 0 and not 1 */
 	locationLen = strExtract( &location, strPtr, 0, strLen );
 	if( locationLen < MIN_LOCATION_SIZE || locationLen > MAX_LOCATION_SIZE )
+		return( CRYPT_ERROR_BADDATA );
+	if( strFilter( location, locationLen, " \"<>\\^{}|", 10 ) > 0 )
 		return( CRYPT_ERROR_BADDATA );
 	urlInfo->location = location;
 	urlInfo->locationLen = locationLen;

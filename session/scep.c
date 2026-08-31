@@ -204,7 +204,7 @@ BOOLEAN checkSCEPCACert( IN_HANDLE const CRYPT_CERTIFICATE iCaCert,
    user is valid or by auto-generating one if the user has specified
    auto-detection */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int processUserName( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							IN_BUFFER( userNameLength ) const BYTE *userName,
 							IN_LENGTH_SHORT const int userNameLength )
@@ -283,10 +283,10 @@ static int processUserName( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		ENSURES( LOOP_INVARIANT_LARGE( index, 0, userNameLength - 1 ) );
 
 		ch = byteToInt( userName[ index ] );
-		if( isAlnum( ch ) )
+		if( isAlNum( ch ) )
 			continue;
 		position = strFindCh( "'()+,-./:=? \x00", 12, ch );
-		if( position < 0 )
+		if( position < 0 )	/* X.680 PrintableString non-alphanumerics */
 			return( CRYPT_ARGERROR_STR1 );
 		}
 	ENSURES( LOOP_BOUND_OK );
@@ -299,10 +299,6 @@ static int processUserName( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int processKeyFingerprint( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
-	const SESSION_ATTRIBUTE_LIST *fingerprintPtr = \
-				findSessionInfo( sessionInfoPtr,
-								 CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2 );
-	MESSAGE_DATA msgData;
 #ifdef USE_ERRMSGS
 	char certName[ CRYPT_MAX_TEXTSIZE + 8 ];
 #endif /* USE_ERRMSGS */
@@ -312,33 +308,21 @@ int processKeyFingerprint( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 
 	REQUIRES( sanityCheckSessionSCEP( sessionInfoPtr ) );
 
-	/* If the caller has supplied a certificate fingerprint, compare it to 
-	   the received certificate's fingerprint to make sure that we're 
-	   talking to the right system */
-	if( fingerprintPtr != NULL )
-		{
-		setMessageData( &msgData, fingerprintPtr->value, 
-						fingerprintPtr->valueLength );
-		status = krnlSendMessage( sessionInfoPtr->iAuthInContext, 
-								  IMESSAGE_COMPARE, &msgData, 
-								  MESSAGE_COMPARE_FINGERPRINT_SHA2 );
-		if( cryptStatusError( status ) )
-			{
-			retExt( CRYPT_ERROR_WRONGKEY,
-					( CRYPT_ERROR_WRONGKEY, SESSION_ERRINFO, 
-					  "Server certificate for '%s' doesn't match key "
-					  "fingerprint",
-					  getCertHolderName( sessionInfoPtr->iAuthInContext, 
-										 certName, CRYPT_MAX_TEXTSIZE ) ) );
-			}
-		}
-	else
+	/* Check the server certificate fingerprint against any stored
+	   fingerprint */
+	status = checkCertFingerprint( sessionInfoPtr, 
+								   sessionInfoPtr->iAuthInContext );
+	if( cryptStatusOK( status ) )
+		return( CRYPT_OK );		/* Fingerprint verified */
+
+	/* If there's no fingerprint present, remember it in case the caller 
+	   wants to check it.  We don't worry if the add fails, it's a minor 
+	   thing and not worth aborting the overall operation for */
+	if( status == OK_SPECIAL )
 		{
 		BYTE certFingerprint[ CRYPT_MAX_HASHSIZE + 8 ];
+		MESSAGE_DATA msgData;
 
-		/* Remember the certificate fingerprint in case the caller wants to 
-		   check it.  We don't worry if the add fails, it's a minor thing 
-		   and not worth aborting the overall operation for */
 		setMessageData( &msgData, certFingerprint, CRYPT_MAX_HASHSIZE );
 		status = krnlSendMessage( sessionInfoPtr->iAuthInContext, 
 								  IMESSAGE_GETATTRIBUTE_S, &msgData, 
@@ -349,9 +333,16 @@ int processKeyFingerprint( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 									  CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2,
 									  certFingerprint, msgData.length );
 			}
+		
+		return( CRYPT_OK );
 		}
 
-	return( CRYPT_OK );
+	/* Fingerprint mismatch, let the caller know */
+	retExt( CRYPT_ERROR_WRONGKEY,
+			( CRYPT_ERROR_WRONGKEY, SESSION_ERRINFO, 
+			  "Server certificate for '%s' doesn't match key fingerprint",
+			  getCertHolderName( sessionInfoPtr->iAuthInContext, 
+								 certName, CRYPT_MAX_TEXTSIZE ) ) );
 	}
 
 /* Create SCEP signing attributes */
@@ -612,7 +603,7 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								 IN_PTR const void *data,
 								 IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE type )
 	{
-	CRYPT_CERTIFICATE cryptCert = *( ( CRYPT_CERTIFICATE * ) data );
+	CRYPT_CERTIFICATE cryptCert;
 	SCEP_INFO *scepInfo = sessionInfoPtr->sessionSCEP;
 #ifdef USE_ERRMSGS
 	char certName[ CRYPT_MAX_TEXTSIZE + 8 ];
@@ -700,6 +691,7 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		return( CRYPT_ERROR_INITED );
 
 	/* Make sure that everything is set up ready to go */
+	cryptCert = *( ( CRYPT_CERTIFICATE * ) data );
 	status = krnlSendMessage( cryptCert, IMESSAGE_GETATTRIBUTE, &isInited, 
 							  CRYPT_CERTINFO_IMMUTABLE );
 	if( cryptStatusError( status ) )
@@ -774,16 +766,29 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			}
 		}
 
-	/* Add the request and increment its usage count.  For the CA 
-	   certificate, we ignore the return value from processKeyFingerprint()
-	   since this is merely recording the fingerprint on the off chance that 
-	   the caller wants to check it later rather than reading it directly
-	   from the certificate */
+	/* Add the request and increment its usage count */
 	krnlSendNotifier( cryptCert, IMESSAGE_INCREFCOUNT );
 	if( type == CRYPT_SESSINFO_CACERTIFICATE )
 		{
+		/* It's a CA certificate, process it.  processKeyFingerprint() does
+		   double duty here, it either adds the fingerprint if it's not 
+		   already present or checks the certificate against the fingerprint
+		   if it is.  This check is normally applied client-side to check 
+		   the server's certificate, but is also required here if the caller
+		   adds CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2 first and then 
+		   CRYPT_SESSINFO_CACERTIFICATE, since we have to ensure that the two
+		   match.  Adding in the other order is blocked since adding
+		   CRYPT_SESSINFO_CACERTIFICATE also sets the fingerprint, so a 
+		   later attempt to add it will fail */
 		sessionInfoPtr->iAuthInContext = cryptCert;
-		( void ) processKeyFingerprint( sessionInfoPtr );
+		status = processKeyFingerprint( sessionInfoPtr );
+		if( cryptStatusError( status ) )
+			{
+			krnlSendNotifier( sessionInfoPtr->iAuthInContext, 
+							  IMESSAGE_DECREFCOUNT );
+			sessionInfoPtr->iAuthInContext = CRYPT_ERROR;
+			return( CRYPT_ARGERROR_NUM1 );
+			}
 		}
 	else
 		sessionInfoPtr->iCertRequest = cryptCert;
@@ -791,7 +796,7 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	return( CRYPT_OK );
 	}
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int checkAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								   IN_PTR const void *data,
 								   IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE type )

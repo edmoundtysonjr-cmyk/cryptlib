@@ -72,8 +72,8 @@ static int generateCertID( IN_BUFFER( dnLength ) const void *dn,
 		sMemClose( &stream );
 		return( status );
 		}
-	offset = stell( &stream );
-	ENSURES( !cryptStatusError( offset ) );
+	status = offset = stell( &stream );
+	ENSURES( !cryptStatusError( status ) );
 	hashFunction( hashInfo, NULL, 0, buffer, offset, HASH_STATE_START );
 	hashFunction( hashInfo, NULL, 0, dn, dnLength, HASH_STATE_CONTINUE );
 	sseek( &stream, 0 );
@@ -81,8 +81,8 @@ static int generateCertID( IN_BUFFER( dnLength ) const void *dn,
 						   DEFAULT_TAG );
 	if( cryptStatusOK( status ) )
 		{
-		offset = stell( &stream );
-		ENSURES( !cryptStatusError( offset ) );
+		status = offset = stell( &stream );
+		ENSURES( !cryptStatusError( status ) );
 		hashFunction( hashInfo, certID, certIdLength, buffer, offset, 
 					  HASH_STATE_END );
 		}
@@ -1215,7 +1215,7 @@ int checkCertValidity( INOUT_PTR CERT_INFO *certInfoPtr,
 		if( cryptStatusError( status ) )
 			return( status );
 		status = krnlSendMessage( iSigCheckObject, IMESSAGE_SETATTRIBUTE,
-								  MESSAGE_VALUE_CURSORLAST,
+								  MESSAGE_VALUE_CURSORFIRST,
 								  CRYPT_CERTINFO_CURRENT_CERTIFICATE );
 		if( cryptStatusError( status ) )
 			{

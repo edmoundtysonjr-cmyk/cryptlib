@@ -108,7 +108,7 @@ static int getItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 	*iCryptHandle = CRYPT_ERROR;
 
 	/* Set the keyID as the query portion of the URL if necessary */
-	if( keyIDlength != 6 || strCompare( keyID, "[none]", 6 ) )
+	if( keyIDlength != 6 || !strSame( keyID, "[none]", 6 ) )
 		{
 		/* Make sure that the keyID is of an appropriate size */
 		if( keyIDlength > CRYPT_MAX_TEXTSIZE )
@@ -320,7 +320,7 @@ static int shutdownFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr )
 
 		REQUIRES( isIntegerRangeNZ( keysetInfoPtr->keyDataSize ) ); 
 		zeroise( keyData, keysetInfoPtr->keyDataSize );
-		safeBufferFree( keyData );
+		safeBufferFree( keyData, keysetInfoPtr->keyDataSize );
 		DATAPTR_SET( keysetInfoPtr->keyData, NULL );
 		keysetInfoPtr->keyDataSize = 0;
 		}

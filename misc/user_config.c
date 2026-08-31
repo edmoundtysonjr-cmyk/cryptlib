@@ -90,7 +90,19 @@ static const BUILTIN_OPTION_INFO builtinOptionInfo[] = {
 	MK_OPTION( CRYPT_OPTION_PKC_KEYSIZE, bitsToBytes( 1536 ), 4 ),
 	MK_OPTION( CRYPT_OPTION_PKC_FORMAT,	CRYPT_PKCFORMAT_DEFAULT, 5 ),
 
-	/* Additional encryption options, replacing an obsolete option */
+	/* Additional encryption options, replacing an obsolete option.  Note 
+	   that the kernel prevents this from being set to anything other than 
+	   { 256, 384, 512 } bits so it's not possible to set 
+	   CRYPT_OPTION_ENCR_HASH to SHA-2 and CRYPT_OPTION_ENCR_HASHPARAM to 20
+	   for SHA-1.  SHA-1 is left parameterless, so with 
+	   CRYPT_OPTION_ENCR_HASHPARAM ignored.  Performing any kind of complete
+	   checking on this is difficult since it'd both have to be matched to 
+	   both CRYPT_OPTION_ENCR_HASH and CRYPT_OPTION_ENCR_MAC (which would
+	   have to be hardcoded into the setOption(), and would require that 
+	   changes be performed in exactly the right sequence with some changes
+	   being impossible, e.g. setting { SHA-1, 20 } would make it impossible
+	   to switch to SHA-2 because either the algorithm or parameter wouldn't
+	   be permitted for the existing value */
 	MK_OPTION( CRYPT_OPTION_ENCR_HASHPARAM, bitsToBytes( 256 ), 6 ),
 
 	/* Algorithm = Key derivation options.  On a slower CPU we use a 

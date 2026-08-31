@@ -103,7 +103,7 @@ int setSerialNumber( INOUT_PTR CERT_INFO *certInfoPtr,
 		status = writeInteger( &stream, serialNumber, serialNumberLength,
 							   DEFAULT_TAG );
 		if( cryptStatusOK( status ) )
-			length = stell( &stream );
+			status = length = stell( &stream );
 		sMemDisconnect( &stream );
 		if( cryptStatusError( status ) )
 			return( status );
@@ -648,7 +648,7 @@ int addCertComponent( INOUT_PTR CERT_INFO *certInfoPtr,
 				CERT_CERT_INFO *certCertInfoPtr = certInfoPtr->cCertCert;
 				LOOP_INDEX i;
 
-				if( certCertInfoPtr->chainEnd >= MAX_CHAINLENGTH - 1 )
+				if( certCertInfoPtr->chainEnd > MAX_CHAINLENGTH - 1 )
 					return( CRYPT_ERROR_OVERFLOW );
 
 				/* Perform a simple check to make sure that it hasn't been
@@ -679,8 +679,12 @@ int addCertComponent( INOUT_PTR CERT_INFO *certInfoPtr,
 
 				/* Add the user certificate and increment its reference 
 				   count */
-				krnlSendNotifier( addedCert, IMESSAGE_INCREFCOUNT );
+				REQUIRES( rangeCheck( certCertInfoPtr->chainEnd, 
+									  0, MAX_CHAINLENGTH - 1 ) );
 				certCertInfoPtr->chain[ certCertInfoPtr->chainEnd++ ] = addedCert;
+				ENSURES( rangeCheck( certCertInfoPtr->chainEnd, 
+									 1, MAX_CHAINLENGTH ) );
+				krnlSendNotifier( addedCert, IMESSAGE_INCREFCOUNT );
 
 				return( CRYPT_OK );
 				}

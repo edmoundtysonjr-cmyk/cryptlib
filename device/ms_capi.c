@@ -1270,7 +1270,7 @@ static int initFunction( DEVICE_INFO *deviceInfo, const char *name,
 
 	/* If we're auto-detecting the device, try various choices */
 	if( driverNameLength == 12 && \
-		!strnicmp( "[Autodetect]", name, driverNameLength ) )
+		!strCompareZ( "[Autodetect]", name, driverNameLength ) )
 		{
 		if( CryptAcquireContextA( &hProv, keysetName, MS_ENHANCED_PROV, 
 								  PROV_RSA_FULL, 0 ) )

@@ -152,7 +152,8 @@ static int scanPacketGroup( INOUT_PTR STREAM *stream,
 				break;
 			}
 
-		/* Skip the current packet in the buffer */
+		/* Skip the current packet in the buffer.  We've already checked the
+		   CTB above so we pass in NULL for the CTB value pointer */
 		status = pgpReadPacketHeader( stream, NULL, &length, 
 									  getMinPacketSize( type ),
 									  MAX_INTLENGTH_SHORT );
@@ -296,6 +297,9 @@ static int readRSAKeyComponents( INOUT_PTR STREAM *stream,
 	{
 	int length, totalLength = 1, status;
 				/* Initial length 1 is for the algorithm ID byte */
+#ifdef USE_PGP2
+	int position;
+#endif /* USE_PGP2 */
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( keyInfo, sizeof( PGP_KEYINFO ) ) );
@@ -317,8 +321,10 @@ static int readRSAKeyComponents( INOUT_PTR STREAM *stream,
 	/* Move back and copy out the last PGP_KEYID_SIZE bytes of n as the PGP 
 	   2.x key ID */
 	static_assert( PGP_KEYID_SIZE < MIN_PKCSIZE, "PGP keyID size" );
-	REQUIRES( !checkOverflowSub( stell( stream ), PGP_KEYID_SIZE ) );
-	status = sseek( stream, stell( stream ) - PGP_KEYID_SIZE );
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	REQUIRES( !checkOverflowSub( position, PGP_KEYID_SIZE ) );
+	status = sseek( stream, position - PGP_KEYID_SIZE );
 	if( cryptStatusOK( status ) )
 		{
 		REQUIRES( rangeCheck( PGP_KEYID_SIZE, 1, PGP_KEYID_SIZE ) );
@@ -915,6 +921,8 @@ static int readKey( INOUT_PTR STREAM *stream,
 	/* If it's a private keyring, process the private key components */
 	if( !isPublicKey )
 		{
+		int position;
+		
 		/* Handle decryption information for private-key components if 
 		   necessary */
 		status = readPrivateKeyDecryptionInfo( stream, keyInfo );
@@ -937,12 +945,14 @@ static int readKey( INOUT_PTR STREAM *stream,
 			}
 
 		/* What's left is the private-key data */
-		if( endPos < stell( stream ) )
+		position = stell( stream );
+		REQUIRES( isIntegerRangeNZ( position ) );
+		if( endPos < position )
 			length = UNDERFLOW_MARKER;
 		else
 			{
-			REQUIRES( !checkOverflowSub( endPos, stell( stream ) ) );
-			length = endPos - stell( stream );
+			REQUIRES( !checkOverflowSub( endPos, position ) );
+			length = endPos - position;
 			}
 		if( !isShortIntegerRangeMin( length, 16 ) )
 			return( CRYPT_ERROR_BADDATA );

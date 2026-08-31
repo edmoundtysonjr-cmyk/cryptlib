@@ -100,7 +100,7 @@ int encodePKIUserValue( OUT_BUFFER( encValMaxLen, *encValLen ) char *encVal,
 
 	assert( isWritePtrDynamic( encVal, encValMaxLen ) );
 	assert( isWritePtr( encValLen, sizeof( int ) ) );
-	assert( isReadPtrDynamic( value, dataBytes ) );
+	assert( isReadPtrDynamic( value, valueLen ) );
 
 	REQUIRES( isShortIntegerRangeMin( encValMaxLen, 10 ) );
 	REQUIRES( isShortIntegerRangeMin( valueLen, 8 ) );
@@ -116,7 +116,7 @@ int encodePKIUserValue( OUT_BUFFER( encValMaxLen, *encValLen ) char *encVal,
 	memset( encVal, 0, min( 16, encValMaxLen ) );
 	*encValLen = 0;
 
-	/* Copy across the data bytes, leaving a gap at the start for the
+	/* Copy across the data bytes, leaving a 1-byte gap at the start for the
 	   checksum */
 	memset( valBuf, 0, 128 );
 	REQUIRES( boundsCheck( 1, dataBytes - 1, 128 ) );
@@ -154,6 +154,8 @@ int encodePKIUserValue( OUT_BUFFER( encValMaxLen, *encValLen ) char *encVal,
 				}
 			else
 				{
+				REQUIRES( bitCount >= 4 && bitCount < 8 );
+
 				/* The data spans two bytes, shift the bits from the high
 				   byte up and the bits from the low byte down */
 				chunkValue = ( ( valBuf[ byteCount ] & \
@@ -163,10 +165,10 @@ int encodePKIUserValue( OUT_BUFFER( encValMaxLen, *encValLen ) char *encVal,
 				}
 			}
 		ENSURES( chunkValue >= 0 && chunkValue <= 0x1F );
+		REQUIRES( length + 1 < encValMaxLen );
 		encVal[ length++ ] = codeTable[ chunkValue ];
 		if( length < encValMaxLen && ( i % 5 ) == 0 && i < noCodeGroups * 5 )
 			encVal[ length++ ] = '-';
-		ENSURES( length < encValMaxLen );
 
 		/* Advance by 5 bits */
 		bitCount += 5;
@@ -228,7 +230,7 @@ BOOLEAN isPKIUserValue( IN_BUFFER( encValLength ) const char *encVal,
 			ENSURES_B( LOOP_INVARIANT_SMALL_ALT( j, 0, 4 ) );
 
 			ch = byteToInt( encVal[ i++ ] );
-			if( !isAlnum( ch ) )
+			if( !isAlNum( ch ) )
 				return( FALSE );
 			}
 		ENSURES_B( LOOP_BOUND_OK_ALT );
@@ -273,14 +275,18 @@ int decodePKIUserValue( OUT_BUFFER( valueMaxLen, *valueLen ) BYTE *value,
 	   than the more obvious CRYPT_ERROR_OVERFLOW since something returned 
 	   from this low a level should be a consistent error code indicating 
 	   that there's a problem with the PKI user value as a whole */
-	if( encValLength < ( 3 * 5 ) || encValLength > CRYPT_MAX_TEXTSIZE )
+	if( encValLength < ( 3 * 5 ) + 2 || encValLength > CRYPT_MAX_TEXTSIZE )
 		{
 		DEBUG_DIAG(( "PKI user value has invalid length" ));
 		assert( DEBUG_WARN );
 		return( CRYPT_ERROR_BADDATA );
 		}
-
-	REQUIRES( isPKIUserValue( encVal, encValLength ) );
+	if( !isPKIUserValue( encVal, encValLength ) )
+		{
+		DEBUG_DIAG(( "PKI user value is invalid" ));
+		assert( DEBUG_WARN );
+		return( CRYPT_ERROR_BADDATA );
+		}
 
 	/* Undo the formatting of the encoded value from XXXXX-XXXXX-XXXXX... 
 	   to XXXXXXXXXXXXXXX... */
@@ -297,16 +303,17 @@ int decodePKIUserValue( OUT_BUFFER( valueMaxLen, *valueLen ) BYTE *value,
 
 			ENSURES( LOOP_INVARIANT_SMALL_ALT( j, 0, 4 ) );
 
-			/* Note that we increment 'i' as part of reading ch so the range 
-			   check is '>' rather than '>='.  In addition we know that 
-			   length can never overflow encBuf because encValLength is 
-			   smaller than or equal to the size of encBuf, and length will 
-			   always be smaller than encValLength */
+			/* In the following we know that length can never overflow 
+			   encBuf because encValLength is smaller than or equal to the 
+			   size of encBuf, and length will always be smaller than 
+			   encValLength */
+			if( i >= encValLength )
+				return( CRYPT_ERROR_OVERFLOW );
 			ch = byteToInt( encVal[ i++ ] );
-			if( !isAlnum( ch ) || i > encValLength )
+			if( !isAlNum( ch ) )
 				return( CRYPT_ERROR_BADDATA );
 			REQUIRES( rangeCheck( length, 0, CRYPT_MAX_TEXTSIZE - 1 ) );
-			encBuf[ length++ ] = intToByte( toUpper( ch ) );
+			encBuf[ length++ ] = intToByte( toUpper( byteToInt( ch ) ) );
 			}
 		ENSURES( LOOP_BOUND_OK_ALT );
 		if( i < encValLength && encVal[ i++ ] != '-' )
@@ -321,22 +328,16 @@ int decodePKIUserValue( OUT_BUFFER( valueMaxLen, *valueLen ) BYTE *value,
 	memset( valBuf, 0, 128 );
 	LOOP_LARGE( i = 0, i < length, i ++ )
 		{
-		int ch;
-		LOOP_INDEX_ALT chunkValue;
+		int chunkValue;
 
 		ENSURES( LOOP_INVARIANT_LARGE( i, 0, length - 1 ) );
 
-		ch = byteToInt( encBuf[ i ] );
-		LOOP_MED_ALT( chunkValue = 0, chunkValue < 0x20, chunkValue++ )
-			{
-			ENSURES( LOOP_INVARIANT_MED_ALT( chunkValue, 0, 0x1F ) );
-
-			if( codeTable[ chunkValue ] == ch )
-				break;
-			}
-		ENSURES( LOOP_BOUND_OK_ALT );
-		if( chunkValue >= 0x20 )
+		chunkValue = strFindCh( codeTable, 32, byteToInt( encBuf[ i ] ) );
+		if( chunkValue < 0 )
 			return( CRYPT_ERROR_BADDATA );
+
+		REQUIRES( byteCount >= 0 && byteCount + 1 < 128 );
+				  /* +1 because worst-case we write two bytes */
 
 		/* Extract the next 5-bit chunk and convert it to text form */
 		if( bitCount < 3 )
@@ -374,7 +375,7 @@ int decodePKIUserValue( OUT_BUFFER( valueMaxLen, *valueLen ) BYTE *value,
 			byteCount++;
 			}
 		ENSURES( bitCount >= 0 && bitCount < 8 );
-		ENSURES( byteCount >= 0 && byteCount < valueMaxLen );
+		ENSURES( byteCount >= 0 && byteCount + 1 < 128 );
 		}
 	ENSURES( LOOP_BOUND_OK );
 

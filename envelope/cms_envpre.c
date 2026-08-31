@@ -25,7 +25,7 @@
 
 /* Create a context for a particular envelope action type */
 
-CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int createActionContext( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 								IN_ENUM( ACTION ) const ACTION_TYPE actionType,
 								IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
@@ -113,7 +113,7 @@ static int createActionContext( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 /* Create the contexts needed for the enveloping process */
 
-CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int createEnvelopeContexts( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	{
 	const ACTION_LIST *actionListPtr;
@@ -174,8 +174,7 @@ static int createEnvelopeContexts( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
 static int processKeyexchangeAction( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 									 INOUT_PTR ACTION_LIST *preActionListPtr,
-									 IN_HANDLE_OPT \
-										const CRYPT_DEVICE iCryptDevice,
+									 IN_HANDLE const CRYPT_DEVICE iCryptDevice,
 									 INOUT_PTR ERROR_INFO *errorInfo )
 	{
 	ACTION_LIST *actionListPtr = DATAPTR_GET( envelopeInfoPtr->actionList );
@@ -189,14 +188,18 @@ static int processKeyexchangeAction( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	REQUIRES( preActionListPtr != NULL && \
 			  ( preActionListPtr->action == ACTION_KEYEXCHANGE_PKC || \
 				preActionListPtr->action == ACTION_KEYEXCHANGE ) );
-	REQUIRES( iCryptDevice == CRYPT_UNUSED || \
+	REQUIRES( iCryptDevice == CRYPTO_OBJECT_HANDLE || \
 			  isHandleRangeValid( iCryptDevice ) );
 	REQUIRES( actionListPtr != NULL );
 	REQUIRES( sanityCheckActionList( actionListPtr ) );
 
 	/* If the session key/MAC/generic-secret context is tied to a device, 
 	   make sure that the key exchange object is in the same device */
-	if( iCryptDevice != CRYPT_UNUSED )
+#if 0	/* 20/8/26 Never reached since objects are either created internally 
+				   on the CRYPTO_OBJECT_HANDLE object or cloned to it if 
+				   provided externally, this is left here in case it's 
+				   needed in the future for crypto device use */
+	if( iCryptDevice != CRYPTO_OBJECT_HANDLE )
 		{
 		CRYPT_DEVICE iKeyexDevice;
 
@@ -213,11 +216,10 @@ static int processKeyexchangeAction( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 						"Session key" : "MAC key" ) );
 			}
 		}
+#endif /* 0 */
 
-	/* Connect the controller to the subject and remember that this action 
-	   now has a controlling action */
+	/* Connect the controller to the subject */
 	DATAPTR_SET( preActionListPtr->associatedAction, actionListPtr );
-	CLEAR_FLAG( actionListPtr->flags, ACTION_FLAG_NEEDSCONTROLLER );
 
 	/* Evaluate the size of the exported action.  If it's a conventional key
 	   exchange then we force the use of the CMS format since there's no 
@@ -260,8 +262,10 @@ static int processKeyexchangeAction( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	   and adds a lot of extra complexity and things to go wrong */
 	if( isDlpAlgo( keyexAlgorithm ) || isEccAlgo( keyexAlgorithm ) )
 		return( OK_SPECIAL );
+#ifdef USE_OAEP
 	if( keyexFormat == CRYPT_PKCFORMAT_OAEP )
 		return( OK_SPECIAL );
+#endif /* USE_OAEP */
 	return( CRYPT_OK );
 	}
 
@@ -270,7 +274,7 @@ static int processKeyexchangeAction( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int cmsPreEnvelopeEncrypt( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	{
-	CRYPT_DEVICE iCryptDevice = CRYPT_UNUSED;
+	CRYPT_DEVICE iCryptDevice;
 	LOOP_INDEX_PTR ACTION_LIST *actionListPtr = \
 					DATAPTR_GET( envelopeInfoPtr->actionList );
 	BOOLEAN hasIndefSizeActions = FALSE;
@@ -300,6 +304,8 @@ int cmsPreEnvelopeEncrypt( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 					  "Couldn't create encryption contexts for the "
 					  "enveloping process" ) );
 			}
+		iCryptDevice = CRYPTO_OBJECT_HANDLE;	
+					   /* Contexts created on the crypt device object */
 		actionListPtr = DATAPTR_GET( envelopeInfoPtr->actionList );
 		}
 	else
@@ -320,7 +326,7 @@ int cmsPreEnvelopeEncrypt( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 								  MESSAGE_GETDEPENDENT, &iCryptDevice,
 								  OBJECT_TYPE_DEVICE );
 		if( cryptStatusError( status ) )
-			iCryptDevice = CRYPT_UNUSED;
+			iCryptDevice = CRYPTO_OBJECT_HANDLE;
 		}
 	REQUIRES( actionListPtr != NULL );
 	REQUIRES( sanityCheckActionList( actionListPtr ) );
@@ -382,7 +388,7 @@ int cmsPreEnvelopeEncrypt( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	envelopeInfoPtr->cryptActionSize = hasIndefSizeActions ? \
 									   CRYPT_UNUSED : totalSize;
 	ENSURES( envelopeInfoPtr->cryptActionSize == CRYPT_UNUSED || \
-			 isBufsizeRangeNZ( envelopeInfoPtr->cryptActionSize ) );
+			 isShortIntegerRangeNZ( envelopeInfoPtr->cryptActionSize ) );
 
 	/* If we're MACing the data (either directly or because we're performing
 	   authenticated encryption), hashing is now active.  The two actions 
@@ -421,15 +427,15 @@ int cmsInitSigParams( const ACTION_LIST *actionListPtr,
 	BOOLEAN_INT useDefaultAttributes;
 	int status;
 
+	assert( isReadPtr( actionListPtr, sizeof( ACTION_LIST ) ) );
+	assert( isWritePtr( sigParams, sizeof( SIG_PARAMS ) ) );
+
 	REQUIRES( sanityCheckActionList( actionListPtr ) );
 	REQUIRES( formatType == CRYPT_FORMAT_CRYPTLIB || \
 			  formatType == CRYPT_FORMAT_CMS || \
 			  formatType == CRYPT_FORMAT_SMIME );
 	REQUIRES( iCryptOwner == DEFAULTUSER_OBJECT_HANDLE || \
 			  isHandleRangeValid( iCryptOwner ) );
-
-	assert( isReadPtr( actionListPtr, sizeof( ACTION_LIST ) ) );
-	assert( isWritePtr( sigParams, sizeof( SIG_PARAMS ) ) );
 
 	initSigParams( sigParams );
 
@@ -611,15 +617,19 @@ static int processSignatureAction( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	else
 		{
 		actionListPtr->encodedSize = signatureSize;
-		REQUIRES( !checkOverflowAdd( envelopeInfoPtr->signActionSize, 
-									 signatureSize ) );
-		envelopeInfoPtr->signActionSize += signatureSize;
+		if( !TEST_FLAG( envelopeInfoPtr->dataFlags, \
+						ENVDATA_FLAG_HASINDEFTRAILER ) )
+			{
+			REQUIRES( !checkOverflowAdd( envelopeInfoPtr->signActionSize, 
+										 signatureSize ) );
+			envelopeInfoPtr->signActionSize += signatureSize;
+			}
 		}
 	if( TEST_FLAG( envelopeInfoPtr->dataFlags, 
 				   ENVDATA_FLAG_HASINDEFTRAILER ) )
 		envelopeInfoPtr->signActionSize = CRYPT_UNUSED;
 	ENSURES( envelopeInfoPtr->signActionSize == CRYPT_UNUSED || \
-			 isBufsizeRangeNZ( envelopeInfoPtr->signActionSize ) );
+			 isShortIntegerRangeNZ( envelopeInfoPtr->signActionSize ) );
 
 	return( CRYPT_OK );
 	}
@@ -627,9 +637,9 @@ static int processSignatureAction( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int cmsPreEnvelopeSign( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	{
-	const ACTION_LIST *postActionListPtr;
+	ACTION_LIST *postActionListPtr;
 	LOOP_INDEX_PTR ACTION_LIST *actionListPtr;
-	int status;
+	int status = CRYPT_OK;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 
@@ -650,8 +660,26 @@ int cmsPreEnvelopeSign( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	   data with signing attributes present */
 	if( TEST_FLAG( envelopeInfoPtr->flags, ENVELOPE_FLAG_ATTRONLY ) )
 		{
-		if( envelopeInfoPtr->type != CRYPT_FORMAT_CMS || \
-			postActionListPtr->iExtraData == CRYPT_ERROR )
+		/* Check that all of the post-actions have signing attributes 
+		   present.  If not then the signature will end up with the default
+		   auto-genereated attributes */
+		LOOP_MED( actionListPtr = postActionListPtr, 
+				  actionListPtr != NULL,
+				  actionListPtr = DATAPTR_GET( actionListPtr->next ) )
+			{
+			REQUIRES( sanityCheckActionList( actionListPtr ) );
+
+			ENSURES( LOOP_INVARIANT_MED_GENERIC() );
+
+			if( actionListPtr->iExtraData == CRYPT_ERROR )
+				{
+				status = CRYPT_ERROR_NOTINITED;
+				break;
+				}
+			}
+		ENSURES( LOOP_BOUND_OK );
+		if( cryptStatusError( status ) || \
+			envelopeInfoPtr->type != CRYPT_FORMAT_CMS )
 			{
 			setObjectErrorInfo( envelopeInfoPtr, 
 								CRYPT_ENVINFO_SIGNATURE_EXTRADATA,
@@ -707,7 +735,7 @@ int cmsPreEnvelopeSign( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 		}
 
 	/* Evaluate the size of each signature action */
-	LOOP_MED( actionListPtr = ( ACTION_LIST * ) postActionListPtr,  
+	LOOP_MED( actionListPtr = postActionListPtr,  
 			  actionListPtr != NULL,
 			  actionListPtr = DATAPTR_GET( actionListPtr->next ) )
 		{
@@ -736,7 +764,7 @@ int cmsPreEnvelopeSign( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 			return( status );
 		envelopeInfoPtr->extraDataSize = msgData.length;
 		}
-	ENSURES( isBufsizeRange( envelopeInfoPtr->extraDataSize ) );
+	ENSURES( isShortIntegerRange( envelopeInfoPtr->extraDataSize ) );
 
 	/* Hashing is now active (you have no chance to survive make your 
 	   time) */

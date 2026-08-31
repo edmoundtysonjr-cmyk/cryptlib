@@ -29,7 +29,7 @@ static BOOLEAN checkSerialNumber( IN_PTR_OPT const void *serialNumber,
 								  IN_PTR_OPT const void *serialNumberBuffer,
 								  IN_LENGTH_SHORT_Z const int serialNumberSize )
 	{
-	assert( serialNumber == NULL || \
+	assert( serialNumber == NULL || serialNumberSize == 0 || \
 			isReadPtr( serialNumber, serialNumberSize ) );
 
 	REQUIRES_B( isShortIntegerRange( serialNumberSize ) );
@@ -69,8 +69,8 @@ static BOOLEAN checkDataPointers( IN_PTR_OPT const void *certificatePtr,
 	assert( certificatePtr == NULL || \
 			isReadPtr( certificatePtr, certificateSize ) );
 	assert( ( dataPtr == NULL ) || isReadPtr( dataPtr, dataSize ) );
-			/* dataPtr may be NULL with dataSize non-zero if it's a DN stored
-			   in the data object */
+			/* With no certificate present, dataPtr may be NULL with 
+			   dataSize non-zero if it's a DN stored in the data object */
 
 	REQUIRES_B( ( certificatePtr == NULL && certificateSize == 0 ) || \
 				( certificatePtr != NULL && \
@@ -175,7 +175,7 @@ static BOOLEAN sanityCheckCertificate( const CERT_INFO *certInfoPtr )
 		   order.  A chainPos of -1 is valid for the leaf certificate, which 
 		   is past the end of the chain */
 		if( certInfo->chainEnd < 0 || \
-			certInfo->chainEnd >= MAX_CHAINLENGTH || \
+			certInfo->chainEnd > MAX_CHAINLENGTH || \
 			certInfo->chainPos < -1 || \
 			certInfo->chainPos >= certInfo->chainEnd )
 			{
@@ -191,18 +191,29 @@ static BOOLEAN sanityCheckCertificate( const CERT_INFO *certInfoPtr )
 			return( FALSE );
 			}
 		}
-	LOOP_SMALL( i = 0, i < MAX_CHAINLENGTH, i++ )
+	LOOP_EXT( i = 0, i < MAX_CHAINLENGTH, i++, MAX_CHAINLENGTH + 1 )
 		{
-		ENSURES( LOOP_INVARIANT_SMALL( i, 0, MAX_CHAINLENGTH - 1 ) );
-		
-		if( certInfo->chain[ i ] != CRYPT_ERROR && \
-			!isHandleRangeValid( certInfo->chain[ i ] ) )
+		ENSURES_B( LOOP_INVARIANT_EXT( i, 0, MAX_CHAINLENGTH - 1, 
+									   MAX_CHAINLENGTH + 1 ) );
+
+		if( i < certInfo->chainEnd )
 			{
-			DEBUG_PUTS(( "sanityCheckCert: Certificate chain entry" ));
-			return( FALSE );
+			if( !isHandleRangeValid( certInfo->chain[ i ] ) )
+				{ 
+				DEBUG_PUTS(( "sanityCheckCert: Chain entry" )); 
+				return( FALSE ); 
+				}
+			}
+		else
+			{
+			if( certInfo->chain[ i ] != CRYPT_ERROR )
+				{ 
+				DEBUG_PUTS(( "sanityCheckCert: Spurious chain entry" )); 
+				return( FALSE ); 
+				}
 			}
 		}
-	ENSURES( LOOP_BOUND_OK );
+	ENSURES_B( LOOP_BOUND_OK );
 	if( certInfo->hashAlgo != CRYPT_ALGO_NONE )
 		{
 		if( !isHashAlgo( certInfo->hashAlgo ) || \
@@ -232,13 +243,13 @@ static BOOLEAN sanityCheckCertReq( const CERT_INFO *certInfoPtr )
 							reqInfo->serialNumberBuffer,
 							reqInfo->serialNumberLength ) )
 		{
-		DEBUG_PUTS(( "sanityCheckCert: Serial number" ));
+		DEBUG_PUTS(( "sanityCheckCertReq: Serial number" ));
 		return( FALSE );
 		}
 	if( reqInfo->requestFromRA != TRUE && \
 		reqInfo->requestFromRA != FALSE )
 		{
-		DEBUG_PUTS(( "sanityCheckCert: RA flag" ));
+		DEBUG_PUTS(( "sanityCheckCertReq: RA flag" ));
 		return( FALSE );
 		}
 
@@ -263,7 +274,7 @@ static BOOLEAN sanityCheckCertRev( const CERT_INFO *certInfoPtr )
 			 revInfo->responderUrlSize >= MIN_URL_SIZE && \
 			 revInfo->responderUrlSize <= MAX_URL_SIZE ) ) )
 		{
-		DEBUG_PUTS(( "sanityCheckCert: Revocation responder URL" ));
+		DEBUG_PUTS(( "sanityCheckCertRev: Revocation responder URL" ));
 		return( FALSE );
 		}
 	if( revInfo->hashAlgo != CRYPT_ALGO_NONE )
@@ -272,19 +283,19 @@ static BOOLEAN sanityCheckCertRev( const CERT_INFO *certInfoPtr )
 			revInfo->hashParam < MIN_HASHSIZE || \
 			revInfo->hashParam > CRYPT_MAX_HASHSIZE )
 			{
-			DEBUG_PUTS(( "sanityCheckCert: Revocation hash algorithm" ));
+			DEBUG_PUTS(( "sanityCheckCertRev: Revocation hash algorithm" ));
 			return( FALSE );
 			}
 		}
 	if( !isEnumRangeOpt( revInfo->signatureLevel, CRYPT_SIGNATURELEVEL ) )
 		{
-		DEBUG_PUTS(( "sanityCheckCert: Revocation signature level" ));
+		DEBUG_PUTS(( "sanityCheckCertRev: Revocation signature level" ));
 		return( FALSE );
 		}
 	if( !DATAPTR_ISVALID( revInfo->revocations ) || \
 		!DATAPTR_ISVALID( revInfo->currentRevocation ) )
 		{
-		DEBUG_PUTS(( "sanityCheckCert: Revocation safe pointers" ));
+		DEBUG_PUTS(( "sanityCheckCertRev: Revocation safe pointers" ));
 		return( FALSE );
 		}
 	if( DATAPTR_ISSET( revInfo->revocations ) )
@@ -295,7 +306,7 @@ static BOOLEAN sanityCheckCertRev( const CERT_INFO *certInfoPtr )
 		ENSURES_B( revInfoPtr != NULL );
 		if( !sanityCheckRevInfo( revInfoPtr ) )
 			{
-			DEBUG_PUTS(( "sanityCheckCert: Revocation info" ));
+			DEBUG_PUTS(( "sanityCheckCertRev: Revocation info" ));
 			return( FALSE );
 			}
 		}
@@ -307,7 +318,7 @@ static BOOLEAN sanityCheckCertRev( const CERT_INFO *certInfoPtr )
 		ENSURES_B( revInfoPtr != NULL );
 		if( !sanityCheckRevInfo( revInfoPtr ) )
 			{
-			DEBUG_PUTS(( "sanityCheckCert: Revocation current revocation" ));
+			DEBUG_PUTS(( "sanityCheckCertRev: Revocation current revocation" ));
 			return( FALSE );
 			}
 		}
@@ -333,18 +344,18 @@ static BOOLEAN sanityCheckCertVal( const CERT_INFO *certInfoPtr )
 			 valInfo->responderUrlSize >= MIN_URL_SIZE && \
 			 valInfo->responderUrlSize <= MAX_URL_SIZE ) ) )
 		{
-		DEBUG_PUTS(( "sanityCheckCert: Validity responder URL" ));
+		DEBUG_PUTS(( "sanityCheckCertVal: Validity responder URL" ));
 		return( FALSE );
 		}
 	if( !isEnumRangeOpt( valInfo->responseType, RTCSRESPONSE_TYPE ) )
 		{
-		DEBUG_PUTS(( "sanityCheckCert: Validity response type" ));
+		DEBUG_PUTS(( "sanityCheckCertVal: Validity response type" ));
 		return( FALSE );
 		}
 	if( !DATAPTR_ISVALID( valInfo->validityInfo ) || \
 		!DATAPTR_ISVALID( valInfo->currentValidity ) )
 		{
-		DEBUG_PUTS(( "sanityCheckCert: Validity safe pointers" ));
+		DEBUG_PUTS(( "sanityCheckCertVal: Validity safe pointers" ));
 		return( FALSE );
 		}
 	if( DATAPTR_ISSET( valInfo->validityInfo ) )
@@ -355,7 +366,7 @@ static BOOLEAN sanityCheckCertVal( const CERT_INFO *certInfoPtr )
 		ENSURES_B( valInfoPtr != NULL );
 		if( !sanityCheckValInfo( valInfoPtr ) )
 			{
-			DEBUG_PUTS(( "sanityCheckCert: Validity info" ));
+			DEBUG_PUTS(( "sanityCheckCertVal: Validity info" ));
 			return( FALSE );
 			}
 		}
@@ -367,7 +378,7 @@ static BOOLEAN sanityCheckCertVal( const CERT_INFO *certInfoPtr )
 		ENSURES_B( valInfoPtr != NULL );
 		if( !sanityCheckValInfo( valInfoPtr ) )
 			{
-			DEBUG_PUTS(( "sanityCheckCert: Validity current validity" ));
+			DEBUG_PUTS(( "sanityCheckCertVal: Validity current validity" ));
 			return( FALSE );
 			}
 		}
@@ -390,7 +401,7 @@ static BOOLEAN sanityCheckCertPKIUser( const CERT_INFO *certInfoPtr )
 	   single boolean */
 	if( pkiUserInfo->isRA != TRUE && pkiUserInfo->isRA != FALSE )
 		{
-		DEBUG_PUTS(( "sanityCheckCert: pkiUser RA flag" ));
+		DEBUG_PUTS(( "sanityCheckCertPKIUser: pkiUser RA flag" ));
 		return( FALSE );
 		}
 
@@ -568,6 +579,7 @@ BOOLEAN sanityCheckCert( IN_PTR const CERT_INFO *certInfoPtr )
 				{
 				if( DATAPTR_ISNULL( certInfoPtr->subjectName ) && \
 					certInfoPtr->subjectDNptr != NULL && \
+					certInfoPtr->subjectDNsize == 2 && \
 					!memcmp( certInfoPtr->subjectDNptr, "\x30\x00", 2 ) )
 					nullDN = TRUE;
 				}
@@ -721,9 +733,6 @@ BOOLEAN sanityCheckCert( IN_PTR const CERT_INFO *certInfoPtr )
 		case CRYPT_CERTTYPE_ATTRIBUTE_CERT:
 #endif /* USE_ATTRCERT */
 		case CRYPT_CERTTYPE_CERTCHAIN:
-		case CRYPT_ICERTTYPE_CMS_CERTSET:
-		case CRYPT_ICERTTYPE_TLS_CERTCHAIN:
-		case CRYPT_ICERTTYPE_TLS13_CERTCHAIN:
 			if( !sanityCheckCertificate( certInfoPtr ) )
 				return( FALSE );
 			break;
@@ -740,7 +749,6 @@ BOOLEAN sanityCheckCert( IN_PTR const CERT_INFO *certInfoPtr )
 		case CRYPT_CERTTYPE_CRL:
 		case CRYPT_CERTTYPE_OCSP_REQUEST:
 		case CRYPT_CERTTYPE_OCSP_RESPONSE:
-		case CRYPT_ICERTTYPE_REVINFO:
 			if( !sanityCheckCertRev( certInfoPtr ) )
 				return( FALSE );
 			break;
@@ -771,6 +779,15 @@ BOOLEAN sanityCheckCert( IN_PTR const CERT_INFO *certInfoPtr )
 				}
 			break;
 #endif /* USE_CERTREQ || USE_CMSATTR */
+
+		case CRYPT_ICERTTYPE_CMS_CERTSET:
+		case CRYPT_ICERTTYPE_TLS_CERTCHAIN:
+		case CRYPT_ICERTTYPE_TLS13_CERTCHAIN:
+		case CRYPT_ICERTTYPE_CMP_CERTSEQUENCE:
+		case CRYPT_ICERTTYPE_REVINFO:
+			/* Used for internal processing but should never appear as an 
+			   actual object type */
+			retIntError_Boolean();
 
 		default:
 			retIntError_Boolean();

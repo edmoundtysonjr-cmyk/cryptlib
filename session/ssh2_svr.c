@@ -70,7 +70,9 @@ static int initPubkeyAlgo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			{ NULL, 0, CRYPT_ALGO_NONE, CRYPT_ALGO_NONE }
 		};
 #endif /* USE_ED25519 */
+#ifdef USE_ECDSA
 	int status;
+#endif /* USE_ECDSA */
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
@@ -328,9 +330,10 @@ static int processDHE( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	status = readUniversal32( &stream );	/* ID string */
 	ENSURES( cryptStatusOK( status ) );
 	keyDataStart = stell( &stream );
-	REQUIRES( isShortIntegerRangeNZ( keyDataStart ) );
+	ENSURES( isShortIntegerRangeNZ( keyDataStart ) );
 	keyDataLength = sMemDataLeft( &stream );
 	sMemDisconnect( &stream );
+	ENSURES( isShortIntegerRangeNZ( keyDataLength ) );
 
 	/* Then we create and send the SSH packet using as the payload the key
 	   data content of the SSH public key */
@@ -551,16 +554,25 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{
 		/* There's an incorrectly-guessed keyex following the client hello, 
 		   skip it.  This appears to be extremely unlikely to nonexistent in
-		   practice because versions up to 3.4.9 in 2026 hardcoded the 
-		   required minimum size at MIN_PKCSIZE which would have rejected 
-		   any guessed ECC keyex but this never caused any problems so it's
-		   unlikely it was ever encountered */
-		status = readHSPacketSSH2( sessionInfoPtr, 
-					( handshakeInfo->isFixedDH || handshakeInfo->isECDH ) ? \
-					  SSH_MSG_KEXDH_INIT : SSH_MSG_KEX_DH_GEX_INIT, 
-					handshakeInfo->isECDH ? \
-						ID_SIZE + sizeofString32( MIN_PKCSIZE_BERNSTEIN ) : \
-						ID_SIZE + sizeofString32( MIN_PKCSIZE ) );
+		   practice because versions up to 3.4.9.x in 2026 both hardcoded 
+		   the required minimum size at MIN_PKCSIZE which would have 
+		   rejected any guessed ECC keyex and conditionally read a
+		   SSH_MSG_KEX_DH_GEX_INIT which would never be seen at this point
+		   since it's preceded by the SSH_MSG_KEX_DH_GEX_REQUEST negotiation.
+		   This never caused any problems so it's unlikely that it was ever 
+		   encountered. 
+		   
+		   In fact we'd never see anything in the SSH_MSG_KEX_DH_GEX_REQUEST/
+		   SSH_MSG_KEX_DH_GEX_GROUP/SSH_MSG_KEX_DH_GEX_INIT/
+		   SSH_MSG_KEX_DH_GEX_REPLY family because you can't guess something 
+		   that has to be negotiated, so it could only be SSH_MSG_KEXDH_INIT/
+		   SSH_MSG_KEX_ECDH_INIT/SSH_MSG_KEX_HYBRID_INIT, all of which have 
+		   the value 30.  This means that we can clear whatever the guessed
+		   packet was by reading anything with that value.  For the length
+		   we use the shortest possible keyex value to cover all the bases */
+		status = readHSPacketSSH2( sessionInfoPtr, SSH_MSG_KEXDH_INIT,
+								   ID_SIZE + \
+									sizeofString32( MIN_PKCSIZE_BERNSTEIN ) );
 		}
 	if( !cryptStatusError( status ) )	/* readHSPSSH2() returns a length */
 		{
@@ -575,11 +587,8 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   (see the long comment in ssh.h), the following multi-option code is
 	   required to handle them.  The original way to do it was to use an
 	   explicitly-specified DH key, but an alternative mechanism uses a
-	   negotiated DH key value, in which case we have to request the keyex 
-	   key from the server.  This additional negotiation requires 
-	   disconnecting and re-connecting the data packet stream since it 
-	   exchanges further data with the server, so if there's an error return 
-	   we don't disconnect the stream before we exit */
+	   negotiated DH key value, in which case we have to negotiate the keyex 
+	   details with the client */
 	if( handshakeInfo->isFixedDH )
 		{
 		REQUIRES( !handshakeInfo->isECDH );
@@ -591,7 +600,7 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	else
 		{
-#ifdef USE_ECDH 
+#if defined( USE_ECDH ) || defined( USE_X25519 )
 		/* A second possibility is when we're using ECDH rather than DH, for 
 		   which we have to use ECDH contexts and values */
 		if( handshakeInfo->isECDH )
@@ -603,7 +612,7 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 										 handshakeInfo->keyexAlgo );
 			}
 		else
-#endif /* USE_ECDH */
+#endif /* USE_ECDH || USE_X25519 */
 			{
 			status = processDHE( sessionInfoPtr, handshakeInfo );
  			}
@@ -683,7 +692,8 @@ static int exchangeServerKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	ERROR_INFO localErrorInfo;
 	void *keyPtr DUMMY_INIT_PTR, *dataPtr;
 	CFI_CHECK_TYPE CFI_CHECK_VALUE = CFI_CHECK_INIT;
-	int keyLength, dataLength, sigLength DUMMY_INIT, packetOffset, status;
+	int keyLength, keyexLength DUMMY_INIT, dataLength;
+	int sigLength DUMMY_INIT, packetOffset, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
@@ -716,10 +726,11 @@ static int exchangeServerKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								 keyAgreeParams.publicValueLen );
 		}
 	if( cryptStatusOK( status ) )
-		handshakeInfo->serverKeyexValueLength = stell( &stream );
+		status = keyexLength = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
+	handshakeInfo->serverKeyexValueLength = keyexLength;
 	ENSURES( isShortIntegerRangeNZ( handshakeInfo->serverKeyexValueLength ) );
 	CFI_CHECK_UPDATE( "IMESSAGE_CTX_ENCRYPT" );
 
@@ -894,6 +905,7 @@ static int exchangeServerKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	status = initSecurityInfo( sessionInfoPtr, handshakeInfo );
 	if( cryptStatusError( status ) )
 		{
+		sMemDisconnect( &stream );
 		retExt( status,
 				( status, SESSION_ERRINFO,
 				  "Couldn't initialise session security information" ) );
@@ -953,6 +965,8 @@ static int exchangeServerKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			return( status );
 			}
 		}
+#else
+	ENSURES( !handshakeInfo->sendExtInfo );
 #endif /* USE_SSH_EXTENDED */
 	sMemDisconnect( &stream );
 	CFI_CHECK_UPDATE( "SSH_MSG_NEWKEYS" );
@@ -990,9 +1004,9 @@ static int completeServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		int stringLength;
 
 		/* If the caller has supplied user information to match against then 
-		   we require a match against the fixed caller-supplied information 
-		   rather than accepting what the client sends us and passing it 
-		   back to the caller to check */
+		   we require a match against the fixed caller-supplied information.
+		   If not then we accept what the client sends us and pass it back 
+		   to the caller to check with a status of CRYPT_ENVELOPE_RESOURCE */
 		if( findSessionInfo( sessionInfoPtr, CRYPT_SESSINFO_USERNAME ) != NULL )
 			userInfoPresent = TRUE;
 
@@ -1026,11 +1040,11 @@ static int completeServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		/* Wait for the client's pre-authentication packets, which aren't 
 		   used for any authentication but which are required anyway by the
 		   protocol.  For some reason SSH requires the use of two messages 
-		   where one would do, first an "I'm about to authenticate" packet 
-		   and then an "I'm authenticating" packet after that ("What are you 
-		   preparing?! You're always preparing! Just go!").  Since the 
-		   former isn't useful for anything we clear it to get it out of the 
-		   way so that we can perform the actual authentication:
+		   where one would do, first an "I'm preparing to authenticate" 
+		   packet and then an "I'm authenticating" packet after that ("What 
+		   are you preparing?! You're always preparing! Just go!").  Since 
+		   the former isn't useful for anything we clear it to get it out of 
+		   the way so that we can perform the actual authentication:
 
 			byte	type = SSH_MSG_SERVICE_REQUEST
 			string	service_name = "ssh-userauth"
@@ -1073,11 +1087,18 @@ static int completeServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	CFI_CHECK_UPDATE( "SSH_MSG_NEWKEYS" );
 
-	/* Process the client's authentication */
+	/* Process the client's authentication.  If there's no existing user 
+	   info present to match against then we'll get back a 
+	   CRYPT_ENVELOPE_RESOURCE to tell the caller to check what we're read,
+	   otherwise we shouldn't be getting a CRYPT_ENVELOPE_RESOURCE */
 	status = processServerAuth( sessionInfoPtr, handshakeInfo, 
 								userInfoPresent );
 	if( cryptStatusError( status ) )
+		{
+		ENSURES( ( !userInfoPresent && status == CRYPT_ENVELOPE_RESOURCE ) || \
+				 ( status != CRYPT_ENVELOPE_RESOURCE ) );
 		return( status );
+		}
 	CFI_CHECK_UPDATE( "processServerAuth" );
 
 	/* Handle the channel open */

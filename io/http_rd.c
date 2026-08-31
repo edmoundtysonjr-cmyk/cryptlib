@@ -60,7 +60,7 @@ static const HTTP_REQUEST_INFO httpReqInfo[] = {
 *																			*
 ****************************************************************************/
 
-/* Callback function used by readTextLine() to read characters from a
+/* Callback function used by readHttpLine() to read characters from a
    stream.  When reading text data over a network we don't know how much
    more data is to come so we have to read a byte at a time looking for an
    EOL.  In addition we can't use the simple optimisation of reading two
@@ -68,7 +68,7 @@ static const HTTP_REQUEST_INFO httpReqInfo[] = {
    requires a CRLF.  This is horribly inefficient but is pretty much
    eliminated through the use of opportunistic read-ahead buffering */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL_RANGE( 0, 255 ) STDC_NONNULL_ARG( ( 1 ) ) \
 static int readCharFunction( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr )
 	{
 	STREAM *stream = streamPtr;
@@ -79,7 +79,18 @@ static int readCharFunction( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr
 
 	status = bufferedTransportRead( stream, &ch, 1, &length,
 									TRANSPORT_FLAG_NONE );
-	return( cryptStatusError( status ) ? status : ch );
+	if( cryptStatusError( status ) )
+		return( status );
+	if( length <= 0 )
+		{
+		/* Buffered transport reads are blocking so we should never get back 
+		   a length of zero with an OK status, this check is present purely 
+		   as a safety feature */
+		assert( DEBUG_WARN );
+		return( CRYPT_ERROR_READ );
+		}
+	
+	return( byteToInt( ch ) );
 	}
 
 #ifdef USE_SOFTERROR_RECOVERY
@@ -152,11 +163,18 @@ static int readRequestHeader( INOUT_PTR STREAM *stream,
 	REQUIRES( isShortIntegerRangeMin( lineBufSize, MIN_LINEBUF_SIZE ) );
 	REQUIRES( sanityCheckHttpDataInfo( httpDataInfo ) );
 	REQUIRES( TEST_FLAG( netStream->nFlags, STREAM_NFLAG_ISSERVER ) );
+#ifdef USE_WEBSOCKETS 
 	REQUIRES( ( ( TEST_FLAG( netStream->nhFlags, STREAM_NHFLAG_GET ) || \
 				  TEST_FLAG( netStream->nhFlags, STREAM_NHFLAG_WS_UPGRADE ) ) && \
 				uriInfo != NULL ) || \
 			  ( !TEST_FLAG( netStream->nhFlags, STREAM_NHFLAG_GET ) && \
 				uriInfo == NULL ) );
+#else
+	REQUIRES( ( TEST_FLAG( netStream->nhFlags, STREAM_NHFLAG_GET ) && \
+				uriInfo != NULL ) || \
+			  ( !TEST_FLAG( netStream->nhFlags, STREAM_NHFLAG_GET ) && \
+				uriInfo == NULL ) );
+#endif /* USE_WEBSOCKETS */
 
 	/* Clear return values */
 	REQUIRES( isShortIntegerRangeNZ( lineBufSize ) ); 
@@ -171,9 +189,8 @@ static int readRequestHeader( INOUT_PTR STREAM *stream,
 	   for this because it only applies to very old pure-HTTP (rather than
 	   HTTP-as-a-transport-layer) clients, which are unlikely to be hitting a
 	   PKI responder */
-	status = readTextLine( stream, lineBuffer, lineBufSize, &length, 
-						   &isTextDataError, readCharFunction, 
-						   READTEXT_NONE );
+	status = readHttpLine( stream, lineBuffer, lineBufSize, &length, 
+						   &isTextDataError, readCharFunction );
 	if( cryptStatusError( status ) )
 		{
 		/* If it's an HTTP-level error (e.g. line too long), send back an
@@ -202,8 +219,8 @@ static int readRequestHeader( INOUT_PTR STREAM *stream,
 		reqInfoPtr = &httpReqInfo[ i ];
 		if( TEST_FLAG( netStream->nhFlags, reqInfoPtr->reqTypeFlag ) && \
 			length >= reqInfoPtr->reqNameLen && \
-			!strCompare( lineBuffer, reqInfoPtr->reqName, \
-						 reqInfoPtr->reqNameLen ) )
+			strSame( lineBuffer, reqInfoPtr->reqName, \
+					 reqInfoPtr->reqNameLen ) )
 			{
 			reqType = reqInfoPtr->reqType;
 			reqNameLen = reqInfoPtr->reqNameLen;
@@ -245,8 +262,12 @@ static int readRequestHeader( INOUT_PTR STREAM *stream,
 	bufPtr += offset;
 	REQUIRES( !checkOverflowSub( length, offset ) );
 	length -= offset;
+#ifdef USE_WEBSOCKETS 
 	if( reqType == STREAM_HTTPREQTYPE_GET && \
 		!TEST_FLAG( netStream->nhFlags, STREAM_NHFLAG_WS_UPGRADE ) )
+#else
+	if( reqType == STREAM_HTTPREQTYPE_GET )
+#endif /* USE_WEBSOCKETS */
 		{
 		/* Safety check, make sure that we can handle the HTTP GET */
 		REQUIRES( uriInfo != NULL );
@@ -337,6 +358,7 @@ static int readRequestHeader( INOUT_PTR STREAM *stream,
 	if( reqType != STREAM_HTTPREQTYPE_GET )
 		httpDataInfo->bytesAvail = headerInfo.contentLength;
 	*flags = GET_FLAGS( headerInfo.flags, HTTP_FLAG_MAX );
+#ifdef USE_WEBSOCKETS 
 	if( TEST_FLAG( netStream->nhFlags, STREAM_NHFLAG_WS_UPGRADE ) )
 		{
 		/* Safety check, STREAM_NHFLAG_WS_UPGRADE implies the earlier 
@@ -358,6 +380,7 @@ static int readRequestHeader( INOUT_PTR STREAM *stream,
 				headerInfo.wsAuthLen );
 		uriInfo->authLen = headerInfo.wsAuthLen;
 		}
+#endif /* USE_WEBSOCKETS */
 
 	return( CRYPT_OK );
 	}
@@ -437,8 +460,10 @@ static int readResponseHeader( INOUT_PTR STREAM *stream,
 					   input in this case */
 					*flags |= HTTP_FLAG_NOOP;
 					}
+#ifdef USE_WEBSOCKETS
 				if( httpStatus == 101 )
 					*flags |= HTTP_FLAG_UPGRADE;
+#endif /* USE_WEBSOCKETS */
 				}
 			else
 				*flags |= HTTP_FLAG_NOOP;
@@ -485,8 +510,13 @@ static int readResponseHeader( INOUT_PTR STREAM *stream,
 		   ephemeral flags that we set earlier.  initHeaderInfo() copied the 
 		   flags into the HTTP_HEADER_INFO, this copies the updated flags 
 		   back out again after the header-lines read */
+#ifdef USE_WEBSOCKETS
 		*flags = GET_FLAGS( headerInfo.flags, HTTP_FLAG_MAX ) & \
 							~( HTTP_FLAG_NOOP | HTTP_FLAG_UPGRADE );
+#else
+		*flags = GET_FLAGS( headerInfo.flags, \
+							HTTP_FLAG_MAX ) & ~HTTP_FLAG_NOOP;
+#endif /* USE_WEBSOCKETS */
 		httpDataInfo->bytesAvail = headerInfo.contentLength;
 
 		/* If it's not something like a redirect that needs special-case
@@ -654,8 +684,10 @@ static int readFunction( INOUT_PTR STREAM *stream,
 	REQUIRES( netStream != NULL && sanityCheckNetStream( netStream ) );
 	REQUIRES( maxLength == sizeof( HTTP_DATA_INFO ) );
 	REQUIRES( sanityCheckHttpDataInfo( httpDataInfo ) );
+#ifdef USE_WEBSOCKETS 
 	REQUIRES( !TEST_FLAG( netStream->nhFlags, STREAM_NHFLAG_WS_UPGRADE ) || \
 			  httpDataInfo->uriInfo != NULL );
+#endif /* USE_WEBSOCKETS */
 
 	/* Clear return value */
 	*length = 0;
@@ -704,7 +736,7 @@ static int readFunction( INOUT_PTR STREAM *stream,
 				return( CRYPT_ERROR_MEMORY );
 			REQUIRES( isIntegerRangeNZ( httpDataInfo->bufSize ) ); 
 			zeroise( httpDataInfo->buffer, httpDataInfo->bufSize );
-			safeBufferFree( httpDataInfo->buffer );
+			safeBufferFree( httpDataInfo->buffer, httpDataInfo->bufSize );
 			httpDataInfo->buffer = newBuffer;
 			httpDataInfo->bufSize = httpDataInfo->bytesAvail;
 			}
@@ -731,11 +763,13 @@ static int readFunction( INOUT_PTR STREAM *stream,
 
 	/* If the peer has sent us a protocol upgrade request, all of the 
 	   information was contained in the header and we're done */
+#ifdef USE_WEBSOCKETS 
 	if( TEST_FLAG( netStream->nhFlags, STREAM_NHFLAG_WS_UPGRADE ) )
 		{
 		*length = maxLength;
 		return( CRYPT_OK );
 		}
+#endif /* USE_WEBSOCKETS */
 
 	/* Read the payload data from the client/server */
 	status = bufferedTransportRead( stream, httpDataInfo->buffer, 
@@ -774,8 +808,9 @@ static int readFunction( INOUT_PTR STREAM *stream,
 		   more useful error message, not any kind of security check */
 		if( httpDataInfo->bytesAvail < 256 || ( byteBufPtr[ 0 ] != 0x30 ) || \
 			!( byteBufPtr[ 1 ] & 0x80 ) || \
-			( isAlpha( byteBufPtr[ 2 ] ) && isAlpha( byteBufPtr[ 3 ] ) && \
-			  isAlpha( byteBufPtr[ 4 ] ) ) )
+			( isAlpha( byteToInt( byteBufPtr[ 2 ] ) ) && \
+			  isAlpha( byteToInt( byteBufPtr[ 3 ] ) ) && \
+			  isAlpha( byteToInt( byteBufPtr[ 4 ] ) ) ) )
 			{
 			retExtSan( CRYPT_ERROR_READ,
 					   ( CRYPT_ERROR_READ, NETSTREAM_ERRINFO, 

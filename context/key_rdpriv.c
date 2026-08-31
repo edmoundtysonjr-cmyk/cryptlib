@@ -502,7 +502,7 @@ static int readRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 	const CAPABILITY_INFO *capabilityInfoPtr = \
 								DATAPTR_GET( contextInfoPtr->capabilityInfo );
 	PKC_INFO *pkcInfo = DATAPTR_GET( contextInfoPtr->ctxPKC );
-	int length, endPos, status, LOOP_ITERATOR;
+	int length, endPos, position, status, LOOP_ITERATOR;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( contextInfoPtr, sizeof( CONTEXT_INFO ) ) );
@@ -520,8 +520,10 @@ static int readRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );	/* Outer wrapper */
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	status = readShortInteger( stream, NULL );	/* Version */
 	if( cryptStatusOK( status ) )
@@ -600,7 +602,9 @@ static int readRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 		return( status );
 
 	/* Check whether there are any attributes present */
-	if( stell( stream ) >= endPos )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( position >= endPos )
 		{
 		ENSURES( sanityCheckPKCInfo( pkcInfo ) );
 
@@ -611,8 +615,10 @@ static int readRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 	status = readConstructed( stream, &length, 0 );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 
 	/* Read the collection of attributes.  Unlike any other key-storage 
@@ -621,12 +627,16 @@ static int readRsaPrivateKeyOld( INOUT_PTR STREAM *stream,
 	   process whatever attributes may be present in order to find the
 	   keyUsage (if there is any) in order to set the object action 
 	   permissions */
-	LOOP_MED_WHILE( stell( stream ) < endPos )
+	LOOP_MED_WHILE( ( status = stell( stream ) ) < endPos )
 		{
 		BYTE oid[ MAX_OID_SIZE + 8 ];
 		int oidLength, actionFlags, value;
 
 		ENSURES( LOOP_INVARIANT_MED_GENERIC() );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		/* Read the attribute.  Since there's only one attribute type that 
 		   we can use, we hardcode the read in here rather than performing a 

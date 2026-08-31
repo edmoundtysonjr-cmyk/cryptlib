@@ -239,7 +239,7 @@ int setKeysetAttributeS( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 			/* If we're in the middle of an existing query the user needs to
 			   cancel it before starting another one */
 			if( isBusyFunction( keysetInfoPtr ) && \
-				( dataLength != 6 || strCompare( data, "cancel", 6 ) ) )
+				( dataLength != 6 || !strSame( data, "cancel", 6 ) ) )
 				return( exitErrorIncomplete( keysetInfoPtr, attribute ) );
 
 			/* Send the query to the data source */

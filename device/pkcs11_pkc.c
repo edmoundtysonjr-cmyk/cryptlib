@@ -2330,7 +2330,7 @@ static int ecdsaInitKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	sMemOpen( &stream, oidBuffer, MAX_OID_SIZE );
 	cryptStatus = writeECCOID( &stream, ecdsaKey->curveType );
 	if( cryptStatusOK( cryptStatus ) )
-		oidSize = stell( &stream );
+		cryptStatus = oidSize = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( cryptStatus ) )
 		return( cryptStatus );
@@ -2367,9 +2367,9 @@ static int ecdsaInitKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	cryptStatus = writeOctetString( &stream, ecPointPtr, ecPointSize, 
 									DEFAULT_TAG );
 	if( cryptStatusOK( cryptStatus ) )
-		encodedPointSize = stell( &stream );
+		cryptStatus = encodedPointSize = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( cryptStatusOK( cryptStatus ) );
+	ENSURES( !cryptStatusError( cryptStatus ) );
 
 	/* Get the information for the device associated with this context */
 	cryptStatus = getContextDeviceInfo( contextInfoPtr->objectHandle, 
@@ -2480,7 +2480,7 @@ static int ecdsaGenerateKey( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 	sMemOpen( &stream, oidBuffer, MAX_OID_SIZE );
 	cryptStatus = writeECCOID( &stream, curveType );
 	if( cryptStatusOK( cryptStatus ) )
-		oidSize = stell( &stream );
+		cryptStatus = oidSize = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( cryptStatus ) )
 		return( cryptStatus );

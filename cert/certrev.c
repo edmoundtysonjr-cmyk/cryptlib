@@ -759,8 +759,8 @@ int readCRLentry( INOUT_PTR STREAM *stream,
 	{
 	REVOCATION_INFO *currentEntry;
 	BYTE serialNumber[ MAX_SERIALNO_SIZE + 8 ];
-	int serialNumberLength, endPos, length, status;
 	time_t revocationTime;
+	int serialNumberLength, endPos, length, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( listHeadPtr, sizeof( DATAPTR ) ) );
@@ -780,7 +780,7 @@ int readCRLentry( INOUT_PTR STREAM *stream,
 		return( status );
 	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
 	endPos = stell( stream ) + length;
-	ENSURES( isIntegerRangeNZ( endPos ) );
+	ENSURES( isIntegerRangeMin( endPos, length ) );
 
 	/* Read the integer component of the serial number (limited to a sane
 	   length) and the revocation time */
@@ -810,9 +810,13 @@ int readCRLentry( INOUT_PTR STREAM *stream,
 	   entry extensions we read the extensions themselves as
 	   CRYPT_CERTTYPE_NONE rather than CRYPT_CERTTYPE_CRL to make sure
 	   that they're processed as required */
-	if( stell( stream ) <= endPos - MIN_ATTRIBUTE_SIZE )
+	if( ( status = stell( stream ) ) <= endPos - MIN_ATTRIBUTE_SIZE )
 		{
 		ERROR_INFO localErrorInfo;
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		clearErrorInfo( &localErrorInfo );
 		status = readAttributes( stream, &currentEntry->attributes,
@@ -1445,7 +1449,7 @@ static int readOcspRequestEntry( INOUT_PTR STREAM *stream,
 		return( status );
 	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
 	endPos = stell( stream ) + length;
-	ENSURES( isIntegerRangeNZ( endPos ) );
+	ENSURES( isIntegerRangeMin( endPos, length ) );
 
 	/* Read the ID information */
 	status = readOcspID( stream, &idType, idBuffer, MAX_ID_SIZE, &length );
@@ -1790,7 +1794,7 @@ static int readOcspResponseEntry( INOUT_PTR STREAM *stream,
 		return( status );
 	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
 	endPos = stell( stream ) + length;
-	ENSURES( isIntegerRangeNZ( endPos ) );
+	ENSURES( isIntegerRangeMin( endPos, length ) );
 
 	/* Read the ID information */
 	status = readOcspID( stream, &idType, idBuffer, MAX_ID_SIZE, &length );
@@ -1906,8 +1910,12 @@ static int readOcspResponseEntry( INOUT_PTR STREAM *stream,
 	   wrapper here and read the extensions themselves as CRYPT_CERTTYPE_NONE 
 	   rather than CRYPT_CERTTYPE_OCSP to make sure that they're processed 
 	   as required */
-	if( stell( stream ) <= endPos - MIN_ATTRIBUTE_SIZE )
+	if( ( status = stell( stream ) ) <= endPos - MIN_ATTRIBUTE_SIZE )
 		{
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
+
 		status = readConstructed( stream, &length, CTAG_OP_EXTENSIONS );
 		if( cryptStatusOK( status ) && length > 0 )
 			{

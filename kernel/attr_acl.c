@@ -131,13 +131,15 @@ static const RANGE_SUBRANGE_TYPE allowedCertCursorSubrangesEx[] = {
 	{ CRYPT_ERROR, CRYPT_ERROR }, { CRYPT_ERROR, CRYPT_ERROR }
 	};
 static const RANGE_SUBRANGE_TYPE allowedEnvCursorSubranges[] = {
+	/* Left as a subranged ACL in case future updates add direct cursor
+	   positioning as for certificates */
 	{ CRYPT_CURSOR_FIRST, CRYPT_CURSOR_LAST },
-	{ CRYPT_ENVINFO_FIRST, CRYPT_ENVINFO_LAST },
 	{ CRYPT_ERROR, CRYPT_ERROR }, { CRYPT_ERROR, CRYPT_ERROR }
 	};
 static const RANGE_SUBRANGE_TYPE allowedSessionCursorSubranges[] = {
+	/* Left as a subranged ACL in case future updates add direct cursor
+	   positioning as for certificates */
 	{ CRYPT_CURSOR_FIRST, CRYPT_CURSOR_LAST },
-	{ CRYPT_SESSINFO_FIRST, CRYPT_SESSINFO_LAST },
 	{ CRYPT_ERROR, CRYPT_ERROR }, { CRYPT_ERROR, CRYPT_ERROR }
 	};
 
@@ -760,7 +762,7 @@ static const ATTRIBUTE_ACL contextACL[] = {
 		ST_CTX_CONV | ST_CTX_MAC, ST_NONE, ST_NONE, 
 		MKPERM( xxx_xWx ), ATTRIBUTE_FLAG_TRIGGER,
 		ROUTE( OBJECT_TYPE_CONTEXT ),
-		RANGE( 1, MAX_ATTRIBUTE_SIZE ) ),
+		RANGE( MIN_NAME_LENGTH, MAX_ATTRIBUTE_SIZE ) ),
 #ifdef USE_FIPS140
 	MKACL_S_EX(	/* Key */
 		CRYPT_CTXINFO_KEY,
@@ -3323,7 +3325,7 @@ static const ATTRIBUTE_ACL envelopeACL[] = {
 		ST_NONE, ST_ENV_ANY, ST_NONE, 
 		MKPERM_ENVELOPE( xxx_xWx ),
 		ROUTE( OBJECT_TYPE_ENVELOPE ),
-		RANGE( 1, CRYPT_MAX_TEXTSIZE ) ),
+		RANGE( MIN_NAME_LENGTH, CRYPT_MAX_TEXTSIZE ) ),
 	MKACL_O(	/* Conventional encryption key */
 		CRYPT_ENVINFO_KEY,
 		ST_NONE, ST_ENV_ENV | ST_ENV_DEENV, ST_NONE, 
@@ -3935,7 +3937,7 @@ static const ATTRIBUTE_ACL sessionACL[] = {
 	MKACL_S(	/* SSH pre-authentication value */
 		CRYPT_SESSINFO_SSH_PREAUTH,
 		ST_NONE, ST_NONE, ST_SESS_SSH | ST_SESS_SSH_SVR, 
-		MKPERM_SSH( Rxx_RWD ),
+		MKPERM_SSH( xxx_xWx ),
 		ROUTE( OBJECT_TYPE_SESSION ), RANGE( 2, CRYPT_MAX_TEXTSIZE ) ),
 
 	MKACL_N(	/* TLS protocol options */

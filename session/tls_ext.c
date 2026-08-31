@@ -76,6 +76,7 @@ static int readExtension( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( actionType, sizeof( TLSHELLO_ACTION_TYPE ) ) );
+	assert( isWritePtr( extErrorInfoSet, sizeof( BOOLEAN ) ) );
 
 	REQUIRES( type >= 0 && type <= 65535 );
 	REQUIRES( isShortIntegerRange( extLength ) );
@@ -107,7 +108,7 @@ static int readExtension( INOUT_PTR STREAM *stream,
 			status = value = sgetc( stream );
 			if( cryptStatusError( status ) )
 				return( status );
-			if( value < 1 || value > 5 )
+			if( extLength != 1 || value < 1 || value > 5 )
 				return( CRYPT_ERROR_BADDATA );
 
 /*			sessionInfoPtr->maxPacketSize = fragmentTbl[ value ]; */
@@ -120,7 +121,8 @@ static int readExtension( INOUT_PTR STREAM *stream,
 			   (or a private key in general) available.  In theory we could
 			   be using PSK + ECDH but that's unlikely so we assume that the
 			   absence of a private key means no ECC */
-			if( sessionInfoPtr->privateKey == CRYPT_ERROR )
+			if( isServer( sessionInfoPtr ) && \
+				sessionInfoPtr->privateKey == CRYPT_ERROR )
 				{
 				handshakeInfo->disableECC = TRUE;
 				return( sSkip( stream, extLength, MAX_INTLENGTH_SHORT ) );
@@ -296,11 +298,10 @@ int readExtensions( INOUT_PTR STREAM *stream,
 							TLSHELLO_ACTION_TYPE *actionType,
 					IN_LENGTH_SHORT const int length )
 	{
-	const int endPos = stell( stream ) + length;
 	LOOP_INDEX noExtensions;
 	int extensionSeen[ MAX_EXTENSIONS + 8 ];
 	int extListLen, extensionSeenLast = 0;
-	int status;
+	int offset, endPos, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -310,11 +311,20 @@ int readExtensions( INOUT_PTR STREAM *stream,
 	REQUIRES( sanityCheckSessionTLS( sessionInfoPtr ) );
 	REQUIRES( sanityCheckTLSHandshakeInfo( handshakeInfo ) );
 	REQUIRES( isShortIntegerRangeNZ( length ) );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	REQUIRES( isShortIntegerRangeMin( endPos, length ) );
 
 	/* Clear return value */
 	*actionType = TLSHELLO_ACTION_NONE;
+
+	/* Calculate the end position for the extensions.  This is the first 
+	   access to the stream from an external call so we explicitly check for 
+	   errors rather than using a hard-fail ENSURES() */
+	status = endPos = stell( stream );
+	if( cryptStatusError( status ) )
+		return( status );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
+	REQUIRES( isShortIntegerRangeMin( endPos, length ) );
 
 	/* Read the extension header and make sure that it's valid:
 
@@ -349,15 +359,20 @@ int readExtensions( INOUT_PTR STREAM *stream,
 
 	/* Process the extensions */
 	LOOP_MED( noExtensions = 0,
-			  noExtensions < MAX_EXTENSIONS && stell( stream ) < endPos, 
+			  noExtensions < MAX_EXTENSIONS && \
+				( status = stell( stream ) ) < endPos, 
 			  noExtensions++ )
 		{
 		TLSHELLO_ACTION_TYPE localActionType;
 		BOOLEAN extErrorInfoSet;
 		const char *description = NULL;
-		int type, extLen DUMMY_INIT, minLength, maxLength;
+		int type, extLen DUMMY_INIT, minLength, maxLength, position;
 
 		ENSURES( LOOP_INVARIANT_MED( noExtensions, 0, MAX_EXTENSIONS - 1 ) );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		/* Read the header for the next extension and get the extension-
 		   checking information.  The length check at this point is just a
@@ -437,6 +452,27 @@ int readExtensions( INOUT_PTR STREAM *stream,
 		DEBUG_DUMP_STREAM( stream, stell( stream ), extLen );
 		DEBUG_PRINT_END();
 
+		/* A second, more precise length check.  We place this after all of 
+		   the above so that we can provide more detailed information if 
+		   there's a problem */
+		status = offset = stell( stream );
+		if( cryptStatusError( status ) || \
+			checkOverflowAdd( offset, extLen ) || \
+			offset + extLen > endPos )
+			{
+			if( description != NULL )
+				{
+				retExt( CRYPT_ERROR_BADDATA,
+						( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
+						  "Invalid TLS %s extension length %d", 
+						  description, extLen ) );
+				}
+			retExt( CRYPT_ERROR_BADDATA,
+					( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
+					  "Invalid TLS extension length %d for extension "
+					  "type %d", extLen, type ) );
+			}
+
 		/* Process the extension data */
 		status = readExtension( stream, sessionInfoPtr, handshakeInfo, 
 								type, extLen, &localActionType, 
@@ -466,7 +502,21 @@ int readExtensions( INOUT_PTR STREAM *stream,
 					  "Invalid TLS extension data for extension "
 					  "type %d", type ) );
 			}
-
+			
+		/* Make sure that we've consumed the entire extension, meaning that 
+		   the length we were given matches the data.  It's not actually 
+		   clear what this buys us since any misread will be caught at the 
+		   next data-read attempt and/or the length check at the end of the
+		   loop, but we do it anyway */
+		status = position = stell( stream );
+		if( cryptStatusError( status ) || position != offset + extLen )
+			{										  /* Add checked earlier */
+			retExt( CRYPT_ERROR_BADDATA,
+					( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
+					  "Invalid TLS extension data length for extension "
+					  "type %d", type ) );
+			}
+	
 		/* In the case of TLS 1.3 where the keyex is handled via data 
 		   stuffed into extensions we can end up with no usable keyex 
 		   information present, in which case we have to tell the client 
@@ -481,13 +531,17 @@ int readExtensions( INOUT_PTR STREAM *stream,
 #endif /* USE_TLS13 */
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( noExtensions >= MAX_EXTENSIONS )
+	status = offset = stell( stream );
+	if( cryptStatusError( status ) )
+		return( status );
+	if( noExtensions >= MAX_EXTENSIONS && offset < endPos )
 		{
 		retExt( CRYPT_ERROR_OVERFLOW,
 				( CRYPT_ERROR_OVERFLOW, SESSION_ERRINFO, 
 				  "Excessive number (more than %d) of TLS extensions "
-				  "encountered", noExtensions ) );
+				  "encountered", MAX_EXTENSIONS ) );
 		}
+	ENSURES( offset == endPos );
 
 	/* If we haven't negotiated TLS 1.3 and the client has forced a hello 
 	   retry which only exists in TLS 1.3, report the failure as a keyex
@@ -543,9 +597,10 @@ static int sizeofExtensions( const SESSION_INFO *sessionInfoPtr,
 							 OUT_PTR EXT_SIZE_INFO *extSizeInfo )
 	{
 	STREAM nullStream;
-	int status;
+	int position, status;
 
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
+	assert( isReadPtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 	assert( isWritePtr( extSizeInfo, sizeof( EXT_SIZE_INFO ) ) );
 
 	REQUIRES( tlsMinVersion >= TLS_MINOR_VERSION_TLS && \
@@ -565,9 +620,9 @@ static int sizeofExtensions( const SESSION_INFO *sessionInfoPtr,
 		status = writeSNI( &nullStream, sessionInfoPtr );
 		if( cryptStatusOK( status ) )
 			{
-			extSizeInfo->serverNameExtLen = stell( &nullStream );
-			REQUIRES( \
-				isShortIntegerRangeNZ( extSizeInfo->serverNameExtLen ) );
+			position = stell( &nullStream );
+			REQUIRES( isShortIntegerRangeNZ( position ) );
+			extSizeInfo->serverNameExtLen = position;
 			}
 		sMemClose( &nullStream );
 		if( cryptStatusError( status ) )
@@ -589,9 +644,9 @@ static int sizeofExtensions( const SESSION_INFO *sessionInfoPtr,
 									 tlsMinVersion );
 	if( cryptStatusOK( status ) )
 		{
-		extSizeInfo->supportedVersionsExtLen = stell( &nullStream );
-		REQUIRES( \
-			isShortIntegerRangeNZ( extSizeInfo->supportedVersionsExtLen ) );
+		position = stell( &nullStream );
+		REQUIRES( isShortIntegerRangeNZ( position ) );
+		extSizeInfo->supportedVersionsExtLen = position;
 		}
 	sMemClose( &nullStream );
 	if( cryptStatusError( status ) )
@@ -605,8 +660,9 @@ static int sizeofExtensions( const SESSION_INFO *sessionInfoPtr,
 	status = writeSignatureAlgos( &nullStream );
 	if( cryptStatusOK( status ) )
 		{
-		extSizeInfo->sigHashExtLen = stell( &nullStream );
-		REQUIRES( isShortIntegerRangeNZ( extSizeInfo->sigHashExtLen ) );
+		position = stell( &nullStream );
+		REQUIRES( isShortIntegerRangeNZ( position ) );
+		extSizeInfo->sigHashExtLen = position;
 		}
 	sMemClose( &nullStream );
 	if( cryptStatusError( status ) )
@@ -626,9 +682,9 @@ static int sizeofExtensions( const SESSION_INFO *sessionInfoPtr,
 		status = writeSupportedGroups( &nullStream, sessionInfoPtr );
 		if( cryptStatusOK( status ) )
 			{
-			extSizeInfo->supportedGroupsExtLen = stell( &nullStream );
-			REQUIRES( \
-				isShortIntegerRangeNZ( extSizeInfo->supportedGroupsExtLen ) );
+			position = stell( &nullStream );
+			REQUIRES( isShortIntegerRangeNZ( position ) );
+			extSizeInfo->supportedGroupsExtLen = position;
 			}
 		sMemClose( &nullStream );
 		if( cryptStatusError( status ) )
@@ -661,16 +717,19 @@ static int sizeofExtensions( const SESSION_INFO *sessionInfoPtr,
 	   write function takes the handshake information as a non-const 
 	   parameter because the special-snowflake PQC algorithms modify it as 
 	   part of what should be a passive write, however for the size-
-	   calculation process nothing is changed so we just cast it to the
-	   appropriate form */
+	   calculation process with a null stream only a dummy data block of
+	   the appropriate size is written so nothing is changed.  To allow
+	   this we cast it to non-const to allow the call to proceed, but it
+	   still functions as a const parameter */
 	extSizeInfo->keyexHdrLen = UINT16_SIZE + UINT16_SIZE;
 	sMemNullOpen( &nullStream );
 	status = writeKeyexTLS13( &nullStream, 
 					( TLS_HANDSHAKE_INFO * ) handshakeInfo, FALSE );
 	if( cryptStatusOK( status ) )
 		{
-		extSizeInfo->keyexExtLen = stell( &nullStream );
-		REQUIRES( isShortIntegerRangeNZ( extSizeInfo->keyexExtLen ) );
+		position = stell( &nullStream );
+		REQUIRES( isShortIntegerRangeNZ( position ) );
+		extSizeInfo->keyexExtLen = position;
 		}
 	sMemClose( &nullStream );
 	if( cryptStatusError( status ) )
@@ -952,7 +1011,7 @@ int writeServerExtensions( INOUT_PTR STREAM *stream,
 		extListLen += UINT16_SIZE + UINT16_SIZE + UINT16_SIZE;
 		}											/* Supported versions */
 #endif /* USE_TLS13 */
-	if( isEccAlgo( handshakeInfo->keyexAlgo ) && \
+	if( !isTLS13 && isEccAlgo( handshakeInfo->keyexAlgo ) && \
 		handshakeInfo->sendECCPointExtn )
 		{
 		extListLen += UINT16_SIZE + UINT16_SIZE + 1 + 1;
@@ -1070,7 +1129,7 @@ int writeServerExtensions( INOUT_PTR STREAM *stream,
 			return( status );
 		DEBUG_PRINT_BEGIN();
 		DEBUG_PRINT(( "Wrote extension supported versions (%d), length "
-					  "2.\n", TLS_MINOR_VERSION_TLS13 ));
+					  "2.\n", TLS_EXT_SUPPORTED_VERSIONS ));
 		DEBUG_DUMP_STREAM( stream, stell( stream ) - UINT16_SIZE, 
 						   UINT16_SIZE );
 		DEBUG_PRINT_END();
@@ -1081,7 +1140,7 @@ int writeServerExtensions( INOUT_PTR STREAM *stream,
 	   suite, send back the appropriate response.  We don't have to send 
 	   back the curve ID that we've chosen because this is communicated 
 	   explicitly in the server keyex */
-	if( isEccAlgo( handshakeInfo->keyexAlgo ) && \
+	if( !isTLS13 && isEccAlgo( handshakeInfo->keyexAlgo ) && \
 		handshakeInfo->sendECCPointExtn )
 		{
 		writeExtensionHdr( stream, TLS_EXT_EC_POINT_FORMATS, 1 + 1 );	
@@ -1104,11 +1163,19 @@ int writeServerExtensions( INOUT_PTR STREAM *stream,
 		{
 		/* If this is a Hello Retry Request disguised as a Server Hello,
 		   we write the group that we expect the client to use rather than
-		   any actual keyex data */
+		   any actual keyex data.  We can end up with a NULL keyexGroupInfo 
+		   if the client hasn't tried anything that we support, in which 
+		   case we tell it to go P256 or go home */
 		if( handshakeInfo->flags & HANDSHAKE_FLAG_RETRIEDCLIENTHELLO )
 			{
+			const TLS_GROUP_INFO *groupInfoPtr = \
+										handshakeInfo->keyexGroupInfo;
+			
 			writeExtensionHdr( stream, TLS_EXT_KEY_SHARE, UINT16_SIZE );
-			status = writeUint16( stream, TLS_GROUP_SECP256R1 );
+			status = writeUint16( stream, 
+								  ( groupInfoPtr != NULL ) ? \
+									groupInfoPtr->tlsGroupID : \
+									TLS_GROUP_SECP256R1 );
 			if( cryptStatusError( status ) )
 				return( status );
 			DEBUG_PRINT_BEGIN();

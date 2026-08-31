@@ -664,14 +664,14 @@ static int openKeysetStream( INOUT_PTR STREAM *stream,
 	   PKCS #15 if no contraindication is found in the file suffix */
 	if( suffixPos > 0 && namePtr[ suffixPos ] == '.' )
 		{
-		if( !strCompare( namePtr + suffixPos + 1, "pgp", 3 ) || \
-			!strCompare( namePtr + suffixPos + 1, "gpg", 3 ) || \
-			!strCompare( namePtr + suffixPos + 1, "pkr", 3 ) )
+		if( strSame( namePtr + suffixPos + 1, "pgp", 3 ) || \
+			strSame( namePtr + suffixPos + 1, "gpg", 3 ) || \
+			strSame( namePtr + suffixPos + 1, "pkr", 3 ) )
 			subType = KEYSET_SUBTYPE_PGP_PUBLIC;
-		if( !strCompare( namePtr + suffixPos + 1, "skr", 3 ) )
+		if( strSame( namePtr + suffixPos + 1, "skr", 3 ) )
 			subType = KEYSET_SUBTYPE_PGP_PRIVATE;
-		if( !strCompare( namePtr + suffixPos + 1, "pfx", 3 ) || \
-			!strCompare( namePtr + suffixPos + 1, "p12", 3 ) )
+		if( strSame( namePtr + suffixPos + 1, "pfx", 3 ) || \
+			strSame( namePtr + suffixPos + 1, "p12", 3 ) )
 			subType = KEYSET_SUBTYPE_PKCS12;
 		}
 

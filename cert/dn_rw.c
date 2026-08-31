@@ -163,7 +163,7 @@ static int readRDNcomponent( INOUT_PTR STREAM *stream,
 	void *value;
 	const int rdnStart = stell( stream );
 	int type, valueLength, valueStringType, stringTag;
-	int flags = DN_FLAG_NOCHECK, status;
+	int position, flags = DN_FLAG_NOCHECK, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( dnPtr, sizeof( DATAPTR_DN ) ) );
@@ -226,8 +226,10 @@ static int readRDNcomponent( INOUT_PTR STREAM *stream,
 	   +10 value is the minimum length for an AVA: SEQUENCE { OID, value } 
 	   (2-bytes SEQUENCE + 5 bytes OID + 2 bytes (tag + length) + 1 byte min-
 	   length data) */
-	REQUIRES( !checkOverflowSub( stell( stream ), rdnStart ) );
-	if( rdnDataLeft >= ( stell( stream ) - rdnStart ) + 10 )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	REQUIRES( !checkOverflowSub( position, rdnStart ) );
+	if( rdnDataLeft >= ( position - rdnStart ) + 10 )
 		flags |= DN_FLAG_CONTINUED;
 
 	/* Convert the string into the local character set.  This may result in 

@@ -343,8 +343,10 @@ int readPkiStatusInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	status = readShortInteger( stream, &value );
 	if( cryptStatusOK( status ) && !isIntegerRange( value ) )
@@ -371,16 +373,24 @@ int readPkiStatusInfo( INOUT_PTR STREAM *stream,
 		status = readSequence( stream, &length );
 		if( cryptStatusError( status ) )
 			return( status );
-		REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-		innerEndPos = stell( stream ) + length;
+		innerEndPos = stell( stream );
+		REQUIRES( isIntegerRangeNZ( innerEndPos ) );
+		REQUIRES( !checkOverflowAdd( innerEndPos, length ) );
+		innerEndPos += length;
 		ENSURES( isIntegerRangeMin( innerEndPos, length ) );
 		status = readCharacterString( stream, errorMessage, MAX_ERRMSG_SIZE, 
 									  &length, BER_STRING_UTF8 );
 		if( cryptStatusOK( status ) )
 			{
 			errorMessage[ length ] = '\0';
-			if( stell( stream ) < innerEndPos )
+			if( ( status = stell( stream ) ) < innerEndPos )
+				{
+				/* Catch the residual error code from stell() */
+				if( cryptStatusError( status ) )
+					return( status );
+
 				status = readUniversal( stream );
+				}
 			}
 		if( cryptStatusError( status ) )
 			{

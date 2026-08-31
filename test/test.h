@@ -1225,6 +1225,7 @@ int testSessionTLSBadSSL( void );
 #ifdef TEST_SESSION_LOOPBACK
   /* SSH */
   int testSessionSSHClientServer( void );
+  int testSessionSSHClientServerConfirmAuth( void );
   int testSessionSSHClientServerDsaKey( void );
   int testSessionSSHClientServerEccKey( void );
   int testSessionSSHClientServerEd25519Key( void );
@@ -1246,8 +1247,6 @@ int testSessionTLSBadSSL( void );
   int testSessionSSHClientServerDebugCheck( void );
   
   /* TLS */
-  int testSessionSSLClientServer( void );
-  int testSessionSSLClientCertClientServer( void );
   int testSessionTLSClientServer( void );
   int testSessionTLSSharedKeyClientServer( void );
   int testSessionTLSNoSharedKeyClientServer( void );
@@ -1262,6 +1261,7 @@ int testSessionTLSBadSSL( void );
   int testSessionTLS12ClientServerEccKey( void );
   int testSessionTLS12ClientServerEcc384Key( void );
   int testSessionTLS12ClientCertClientServer( void );
+  int testSessionTLS12NoClientCertClientServer( void );
   int testSessionTLS12ClientCertManualClientServer( void );
   int testSessionTLS12BulkTransferClientServer( void );
   int testSessionTLS12LocalServerSocketClientServer( void );

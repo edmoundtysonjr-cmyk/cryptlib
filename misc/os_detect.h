@@ -433,6 +433,7 @@
   #pragma warning( error: 4553 )	/* '==' has no effect; did you mean '=' */
   #pragma warning( error: 4555 )	/* expr.has no effect; expected expr.with side-effect */
   #pragma warning( error: 4701 )	/* Potentially uninitialized local variable */
+  #pragma warning( error: 4995 )	/* 'name' was marked as #pragma deprecated */
 #endif /* Visual C++ */
 
 /* Under VC++/VS a number of warnings are disabled by default, including 

@@ -347,7 +347,7 @@ int setofBegin( INOUT_PTR SETOF_STACK *setofStack,
 	{
 	const SETOF_STATE_INFO *parentSetofInfoPtr;
 	SETOF_STATE_INFO *setofInfoPtr;
-	int setofLength, status;
+	int setofLength, position, status;
 
 	assert( isWritePtr( setofStack, sizeof( SETOF_STACK ) ) );
 	assert( isWritePtr( setofInfoPtrPtr, sizeof( SETOF_STATE_INFO * ) ) );
@@ -381,9 +381,11 @@ int setofBegin( INOUT_PTR SETOF_STACK *setofStack,
 
 	/* Sanity-check the wrapper length information to make sure that it 
 	   makes sense */
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
 	if( !isShortIntegerRange( setofLength ) || \
-		checkOverflowAdd( stell( stream ), setofLength ) || \
-		stell( stream ) + setofLength > dataEndPos )
+		checkOverflowAdd( position, setofLength ) || \
+		position + setofLength > dataEndPos )
 		return( CRYPT_ERROR_BADDATA );
 
 	/* When processing a SEQUENCE with default values for the elements the 
@@ -451,6 +453,7 @@ int setofCheckRestart( IN_PTR const STREAM *stream,
 							const ATTRIBUTE_INFO **attributeInfoPtrPtr )
 	{
 	const ATTRIBUTE_INFO *attributeInfoPtr;
+	const int position = stell( stream );
 
 	assert( isReadPtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( setofInfoPtr, sizeof( SETOF_STATE_INFO ) ) );
@@ -458,10 +461,11 @@ int setofCheckRestart( IN_PTR const STREAM *stream,
 	assert( isReadPtr( *attributeInfoPtrPtr, sizeof( ATTRIBUTE_INFO ) ) );
 
 	REQUIRES( sanityCheckSetofStateInfo( setofInfoPtr ) );
+	REQUIRES( isIntegerRangeNZ( position ) );
 
 	/* If we've passed the end of the SET OF/SEQUENCE OF, let the caller 
 	   know that we're done */
-	if( stell( stream ) >= setofInfoPtr->endPos )
+	if( position >= setofInfoPtr->endPos )
 		return( OK_SPECIAL );
 
 	/* We require at least one entry in a nonempty SET OF/SEQUENCE OF (which
@@ -480,7 +484,7 @@ int setofCheckRestart( IN_PTR const STREAM *stream,
 	   in other words if we're still at the starting position, then further 
 	   iterations through the loop won't make any difference, there's a bug 
 	   in the decoder */
-	ENSURES( stell( stream ) > setofInfoPtr->startPos );
+	ENSURES( position > setofInfoPtr->startPos );
 
 	/* Retry from the restart point */
 	attributeInfoPtr = attributeInfoPtr + 1;
@@ -502,7 +506,7 @@ int setofCheckEnd( IN_PTR const STREAM *stream,
 	const ATTRIBUTE_INFO *oldAttributeInfoPtr = *attributeInfoPtrPtr;
 	const ATTRIBUTE_INFO *attributeInfoPtr = *attributeInfoPtrPtr;
 	const SETOF_STATE_INFO *setofInfoPtr;
-	const int currentPos = stell( stream );
+	const int position = stell( stream );
 	int LOOP_ITERATOR;
 
 	assert( isReadPtr( stream, sizeof( STREAM ) ) );
@@ -511,28 +515,28 @@ int setofCheckEnd( IN_PTR const STREAM *stream,
 	assert( isReadPtr( *attributeInfoPtrPtr, sizeof( ATTRIBUTE_INFO ) ) );
 
 	REQUIRES( sanityCheckSetofStack( setofStack ) );
-	REQUIRES( isShortIntegerRangeNZ( currentPos ) );
+	REQUIRES( isShortIntegerRangeNZ( position ) );
 	
 	setofInfoPtr = setofTOS( setofStack );
 	ENSURES( setofInfoPtr != NULL );
 
 	/* If we're still within the SET/SEQUENCE, we're done */
-	if( currentPos < setofInfoPtr->endPos )
+	if( position < setofInfoPtr->endPos )
 		return( CRYPT_OK );
 
 	/* If we've read past the end of the SET/SEQUENCE then there's a problem
 	   with the data.  Usually this will be caught by the encoding-validity
 	   check, but if it's been disabled due to an oblivious-mode read then
 	   we can end up catching the problem here */
-	if( currentPos > setofInfoPtr->endPos )
+	if( position > setofInfoPtr->endPos )
 		return( CRYPT_ERROR_BADDATA );
 
 	/* We've reached the end of one or more layers of SET/SEQUENCE, keep 
 	   popping SET/SEQUENCE state information until we can continue.   Note
-	   that we check currentPos with '>=' rather than the more obvious '='
+	   that we check 'position' with '>=' rather than the more obvious '='
 	   so that we can catch encoding errors and/or memory faults */
 	LOOP_EXT_WHILE( !setofStackIsEmpty( setofStack ) && \
-					currentPos >= setofInfoPtr->endPos, 
+					position >= setofInfoPtr->endPos, 
 					SETOF_STATE_STACKSIZE )
 		{
 #if 0	/* 18/5/26 See comment further down */
@@ -574,7 +578,7 @@ int setofCheckEnd( IN_PTR const STREAM *stream,
 		   there are no more elements present, go to the end of the 
 		   SET/SEQUENCE information in the decoding table */
 #if 0	/* 18/5/26 This doesn't actually do anything, the check
-				   currentPos >= setofInfoPtr->endPos is also the loop 
+				   position >= setofInfoPtr->endPos is also the loop 
 				   condition, alongside !setofStackIsEmpty() which was 
 				   checked above, so we always go through another loop 
 				   iteration which sets attributeInfoPtr = 
@@ -583,7 +587,7 @@ int setofCheckEnd( IN_PTR const STREAM *stream,
 				   redundant apart from its use in a postcondition in
 				   setofCheckRestart() */
 		if( !( flags & SETOF_FLAG_RESTARTPOINT ) && \
-			currentPos >= setofInfoPtr->endPos )
+			position >= setofInfoPtr->endPos )
 			{
 			int status;
 

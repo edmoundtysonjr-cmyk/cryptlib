@@ -281,6 +281,7 @@ typedef struct {
 	int sessionCacheID;					/* Session cache ID for this session */
 	int minVersion, maxVersion;			/* Min.and max.protocol versions */
 	int ivSize;							/* Explicit IV size for TLS 1.1+ */
+	int noopPacketCount;				/* Count of no-op packets */
 
 	/* The incoming and outgoing packet sequence number, for detecting 
 	   insertion/deletion attacks */
@@ -293,10 +294,10 @@ typedef struct {
 	   TLS 1.2 and TLS 1.3 use different ways of handling the GCM IV, see
 	   tls13crypt.c:loadKeys() for details */
 #if defined( USE_GCM ) || defined( USE_CHACHA20 )
-	BUFFER_FIXED( CRYPT_MAX_HASHSIZE ) \
-	BYTE aeadReadSalt[ CRYPT_MAX_HASHSIZE + 8 ];
-	BUFFER_FIXED( CRYPT_MAX_HASHSIZE ) \
-	BYTE aeadWriteSalt[ CRYPT_MAX_HASHSIZE + 8 ];
+	BUFFER_FIXED( CRYPT_MAX_IVSIZE ) \
+	BYTE aeadReadSalt[ CRYPT_MAX_IVSIZE + 8 ];
+	BUFFER_FIXED( CRYPT_MAX_IVSIZE ) \
+	BYTE aeadWriteSalt[ CRYPT_MAX_IVSIZE + 8 ];
 	int aeadSaltSize;
 #endif /* USE_GCM || USE_CHACHA20 */
 
@@ -365,8 +366,10 @@ typedef struct {
 	SSH_RESPONSE_INFO response;
 
 	/* Whether an SSH user authentication packet has been read ready for the
-	   server to act on */
+	   server to act on, and whether we're waiting for the caller to confirm
+	   the user's authentication */
 	BOOLEAN authRead;
+	BOOLEAN confirmUserAuth;
 
 	/* A buffer for the SSH packet header, which is read out-of-band.  The
 	   actual size required is LENGTH_SIZE + MIN_PACKET_SIZE but these 
@@ -631,7 +634,10 @@ typedef CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 #endif /* USE_WEBSOCKETS || USE_EAP */
 
 typedef struct SI {
-	/* Control and status information */
+	/* Control and status information.  The authComplete flag is a safety 
+	   interlock value that's required to be true on any attempt to send or
+	   receive data over a secure session, this is a backstop to an attempt
+	   at an authentication bypass during the handshake stage */
 	CRYPT_SESSION_TYPE type;			/* Session type */
 	DATAPTR protocolInfo;				/* Session subtype information */
 	int version;						/* Protocol version/subtype */
@@ -643,6 +649,7 @@ typedef struct SI {
 	SAFE_FLAGS flags;					/* Session information flags SESSION_FLAG_x */
 	SAFE_FLAGS protocolFlags;			/* Protocol-specific flags for each protocol */
 	AUTHRESPONSE_TYPE authResponse;		/* Response to user-auth request */
+	BOOLEAN authComplete;				/* Authentication complete check value */
 
 	/* Session type-specific information */
 	union {
@@ -924,12 +931,16 @@ CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN checkAttributesConsistent( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								   IN_ATTRIBUTE \
 										const CRYPT_ATTRIBUTE_TYPE attribute );
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1 ) ) \
+int checkCertFingerprint( INOUT_PTR SESSION_INFO *sessionInfoPtr,
+						  IN_HANDLE const CRYPT_CERTIFICATE iCryptCert );
+
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int getSessionErrorInfo( IN_PTR const SESSION_INFO *sessionInfoPtr,
 						 INOUT_PTR ERROR_INFO *errorInfo );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 3 ) ) \
-int checkServerCertValid( const CRYPT_CERTIFICATE iServerKey,
-						  const CRYPT_USER iCryptUser,
+int checkServerCertValid( IN_HANDLE const CRYPT_CERTIFICATE iServerKey,
+						  IN_HANDLE const CRYPT_USER iCryptUser,
 						  INOUT_PTR ERROR_INFO *errorInfo );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int activateSession( INOUT_PTR SESSION_INFO *sessionInfoPtr );

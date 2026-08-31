@@ -17,14 +17,6 @@
   #include "misc/pgp.h"
 #endif /* Compiler-specific includes */
 
-/* The maximum number of content items that we can add to a content list.
-   Encrypted messages sent to very large distribution lists can potentially 
-   have a large number of per-recipient wrapped keys, although this stuff is
-   so rarely used that way that there's no hard data on it.  So far a bound
-   of 50 items seems to be a pretty safe bet */
-
-#define MAX_CONTENT_ITEMS	50
-
 #ifdef USE_ENVELOPES
 
 /****************************************************************************
@@ -75,6 +67,8 @@ static BOOLEAN sanityCheckContentCrypt( IN_PTR \
 	assert( isReadPtr( contentListPtr, sizeof( CONTENT_LIST ) ) );
 	assert( isReadPtr( contentEncrInfo, sizeof( CONTENT_ENCR_INFO ) ) );
 
+	REQUIRES_B( contentListPtr->type == CONTENT_CRYPT );
+
 	/* Check crypto parameters */
 	if( ( contentEncrInfo->cryptAlgo != CRYPT_ALGO_NONE && \
 		  !isConvAlgo( contentEncrInfo->cryptAlgo ) && \
@@ -111,6 +105,8 @@ static BOOLEAN sanityCheckContentSig( IN_PTR \
 	assert( isReadPtr( contentListPtr, sizeof( CONTENT_LIST ) ) );
 	assert( isReadPtr( contentSigInfo, sizeof( CONTENT_SIG_INFO ) ) );
 	assert( objectPtr == NULL || isReadPtr( objectPtr, 2 ) );
+
+	REQUIRES_B( contentListPtr->type == CONTENT_SIGNATURE );
 
 	/* Check signing parameters */
 	if( ( contentSigInfo->hashAlgo != CRYPT_ALGO_NONE && \
@@ -171,11 +167,14 @@ static BOOLEAN sanityCheckContentAuthenc( IN_PTR \
 	assert( isReadPtr( contentListPtr, sizeof( CONTENT_LIST ) ) );
 	assert( isReadPtr( contentAuthEncInfo, sizeof( CONTENT_AUTHENC_INFO ) ) );
 
+	REQUIRES_B( contentListPtr->type == CONTENT_AUTHENC );
+
 	/* If the content-list entry hasn't been set up yet then all parameters 
 	   must be clear */
 	if( contentAuthEncInfo->authEncAlgo == CRYPT_ALGO_NONE )
 		{
-		if( contentAuthEncInfo->authEncParamLength != 0 || \
+		if( contentAuthEncInfo->authEncKeysize != 0 || \
+			contentAuthEncInfo->authEncParamLength != 0 || \
 			contentAuthEncInfo->kdfParamStart != 0 || \
 			contentAuthEncInfo->kdfParamLength != 0 || \
 			contentAuthEncInfo->encParamStart != 0 || \
@@ -194,6 +193,12 @@ static BOOLEAN sanityCheckContentAuthenc( IN_PTR \
 	if( !isSpecialAlgo( contentAuthEncInfo->authEncAlgo ) ) 
 		{
 		DEBUG_PUTS(( "sanityCheckContentList: Authenc algorithm" ));
+		return( FALSE );
+		}
+	if( contentAuthEncInfo->authEncKeysize <= 0 || \
+		contentAuthEncInfo->authEncKeysize > CRYPT_MAX_KEYSIZE )
+		{
+		DEBUG_PUTS(( "sanityCheckContentList: Authenc key size" ));
 		return( FALSE );
 		}
 	if( contentAuthEncInfo->authEncParamLength <= 0 || \
@@ -341,17 +346,20 @@ BOOLEAN moreContentItemsPossible( IN_PTR_OPT \
 				sanityCheckContentList( contentListPtr ) );
 
 	LOOP_EXT( contentListCount = 0,
-			  contentListPtr != NULL && \
-					contentListCount < MAX_CONTENT_ITEMS,
-			  ( contentListPtr = DATAPTR_GET( contentListPtr->next ),
-					contentListCount++ ), 
-			  MAX_CONTENT_ITEMS + 1 )
+			  contentListPtr != NULL && contentListCount < MAX_ENV_ITEMS,
+			  contentListCount++, MAX_ENV_ITEMS + 1 )
 		{
-		ENSURES_B( LOOP_INVARIANT_EXT_GENERIC( MAX_CONTENT_ITEMS + 1 ) );
+		ENSURES_B( LOOP_INVARIANT_EXT_GENERIC( MAX_ENV_ITEMS + 1 ) );
+
+		/* This both fetches the next item and checks that the list is 
+		   valid.  On a corrupted list we return FALSE, so nothing more will
+		   be done with it */
+		REQUIRES_B( DATAPTR_ISVALID( contentListPtr->next ) );
+		contentListPtr = DATAPTR_GET( contentListPtr->next );
 		}
 	ENSURES_B( LOOP_BOUND_OK );
 
-	return( ( contentListCount < MAX_CONTENT_ITEMS ) ? TRUE : FALSE );
+	return( ( contentListCount < MAX_ENV_ITEMS ) ? TRUE : FALSE );
 	}
 
 /* Find an item in a content list */
@@ -374,9 +382,9 @@ static CONTENT_LIST *findContentListItem( IN_PTR_OPT \
 				contentListCursor != NULL && \
 					contentListCursor->envInfo != envInfo,
 				contentListCursor = DATAPTR_GET( contentListCursor->next ),
-			  MAX_CONTENT_ITEMS + 1 )
+			  MAX_ENV_ITEMS + 1 )
 		{
-		ENSURES_N( LOOP_INVARIANT_EXT_GENERIC( MAX_CONTENT_ITEMS + 1 ) );
+		ENSURES_N( LOOP_INVARIANT_EXT_GENERIC( MAX_ENV_ITEMS + 1 ) );
 		}
 	ENSURES_N( LOOP_BOUND_OK );
 
@@ -424,9 +432,14 @@ int createContentListItem( OUT_BUFFER_ALLOC_OPT( sizeof( CONTENT_LIST ) ) \
 	DATAPTR_SET( newItem->next, NULL );
 	if( type == CONTENT_SIGNATURE )
 		{
-		newItem->clSigInfo.iSigCheckKey = CRYPT_ERROR;
-		newItem->clSigInfo.iExtraData = CRYPT_ERROR;
-		newItem->clSigInfo.iTimestamp = CRYPT_ERROR;
+		CONTENT_SIG_INFO *sigInfo = &newItem->clSigInfo;
+		
+		sigInfo->iSigCheckKey = sigInfo->iExtraData = \
+			sigInfo->iTimestamp = CRYPT_ERROR;
+		
+		/* Reset the virtual cursor, this is equivalent to the internal
+		   function in envelope/env_attr.c */
+		sigInfo->attributeCursorEntry = CRYPT_ENVINFO_SIGNATURE_RESULT;
 		}
 	*newContentListItemPtrPtr = newItem;
 
@@ -450,7 +463,17 @@ int appendContentListItem( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 	REQUIRES( sanityCheckEnvelope( envelopeInfoPtr ) );
 
-	/* Find the end of the list and add the new item */
+	/* Make sure that we can still add another item.  This should have 
+	   already been checked by the caller long before getting here but we 
+	   perform an extra check here just in case */
+	if( !moreContentItemsPossible( contentListPtr ) ) 
+		return( CRYPT_ERROR_OVERFLOW ); 
+
+	/* Find the end of the list and add the new item.  Note that 
+	   moreContentItemsPossible() checks the validity of the list and will
+	   return a FALSE indication if there's a problem, alongside there being
+	   too many items present, so we know that the list is valid for the 
+	   loop below */
 	if( contentListPtr != NULL )
 		{
 		LOOP_INDEX_PTR CONTENT_LIST *prevElementPtr;
@@ -580,6 +603,7 @@ static int processTimestamp( INOUT_PTR CONTENT_LIST *contentListPtr,
 	assert( isWritePtr( contentListPtr, sizeof( CONTENT_LIST ) ) );
 	assert( isReadPtrDynamic( timestamp, timestampLength ) );
 
+	REQUIRES( contentListPtr->type == CONTENT_SIGNATURE );
 	REQUIRES( isBufsizeRangeMin( timestampLength, MIN_CRYPT_OBJECTSIZE ) );
 
 	/* Create an envelope to contain the timestamp data.  We can't use the
@@ -642,6 +666,7 @@ static int processUnauthAttributes( INOUT_PTR CONTENT_LIST *contentListPtr,
 	assert( isReadPtrDynamic( unauthAttr, unauthAttrLength ) );
 
 	REQUIRES( isBufsizeRangeMin( unauthAttrLength, MIN_CRYPT_OBJECTSIZE ) );
+	REQUIRES( contentListPtr->type == CONTENT_SIGNATURE );
 
 	/* Make sure that the unauthenticated attributes are OK.  Normally this
 	   is done when we import the attributes but since we can't import
@@ -728,6 +753,7 @@ static int checkCmsSignatureInfo( INOUT_PTR CONTENT_LIST *contentListPtr,
 	assert( isWritePtr( contentListPtr, sizeof( CONTENT_LIST ) ) );
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
 
+	REQUIRES( contentListPtr->type == CONTENT_SIGNATURE );
 	REQUIRES( isHandleRangeValid( iHashContext ) );
 	REQUIRES( isHandleRangeValid( iSigCheckContext ) );
 	REQUIRES( isEnumRange( contentType, CRYPT_CONTENT ) );
@@ -880,6 +906,8 @@ static int initKeys( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	   content information so we can set up the decryption and exit */
 	if( contentListPtr->type != CONTENT_AUTHENC )
 		{
+		REQUIRES( contentListPtr->type == CONTENT_CRYPT );
+
 		encrInfo = &contentListPtr->clEncrInfo;
 		return( initEnvelopeEncryption( envelopeInfoPtr, iSessionKeyContext, 
 								encrInfo->cryptAlgo, encrInfo->cryptMode, 
@@ -888,13 +916,15 @@ static int initKeys( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 								encrInfo->saltOrIVsize, FALSE ) );
 		}
 
+	REQUIRES( contentListPtr->type == CONTENT_AUTHENC );
+
 	/* We're using authenticated encryption, in which case the "session key" 
 	   that we've been given is actually a generic-secret context from which 
 	   the encryption and MAC contexts and keys have to be derived */
 	authEncInfo = &contentListPtr->clAuthEncInfo;
 	memset( &queryInfo, 0, sizeof( QUERY_INFO ) );
-	REQUIRES( rangeCheck( authEncInfo->authEncParamLength, 8, 
-						  AUTHENCPARAM_MAX_SIZE ) );
+	REQUIRES( rangeCheck( authEncInfo->authEncParamLength, 
+						  AUTHENCPARAM_MIN_SIZE, AUTHENCPARAM_MAX_SIZE ) );
 	memcpy( queryInfo.authEncParamData, authEncInfo->authEncParamData,
 			authEncInfo->authEncParamLength );
 	queryInfo.authEncParamLength = authEncInfo->authEncParamLength;
@@ -1081,7 +1111,7 @@ static int importSessionKey( IN_PTR const CONTENT_LIST *contentListPtr,
 	const CONTENT_LIST *sessionKeyInfoPtr;
 	const void *objectPtr = DATAPTR_GET( contentListPtr->object );
 	MESSAGE_CREATEOBJECT_INFO createInfo;
-	int status;
+	int keySize = 0, status;
 
 	assert( isReadPtr( contentListPtr, sizeof( CONTENT_LIST ) ) );
 	assert( isWritePtr( iSessionKeyContext, sizeof( CRYPT_CONTEXT ) ) );
@@ -1151,11 +1181,14 @@ static int importSessionKey( IN_PTR const CONTENT_LIST *contentListPtr,
 				return( status );
 				}
 			}
+		keySize = encrInfo->keySize;
 		}
 	else
 		{
 		const CONTENT_AUTHENC_INFO *authEncInfo = \
 							&sessionKeyInfoPtr->clAuthEncInfo;
+
+		REQUIRES( sessionKeyInfoPtr->type == CONTENT_AUTHENC );
 
 		/* It's authenticated-encrypted data, import the generic-secret
 		   context used to create the encryption and MAC contexts */
@@ -1170,8 +1203,22 @@ static int importSessionKey( IN_PTR const CONTENT_LIST *contentListPtr,
 					  "Couldn't create %s decryption context",
 					  getAlgoName( authEncInfo->authEncAlgo ) ) );
 			}
+		keySize = authEncInfo->authEncKeysize;
 		}
 	iSessionKey = createInfo.cryptHandle;
+	if( keySize > 0 )
+		{
+		status = krnlSendMessage( createInfo.cryptHandle,
+								  IMESSAGE_SETATTRIBUTE, 
+								  ( MESSAGE_CAST ) &keySize,
+								  CRYPT_CTXINFO_KEYSIZE );
+		if( cryptStatusError( status ) )
+			{
+			krnlSendNotifier( createInfo.cryptHandle, 
+							  IMESSAGE_DECREFCOUNT );
+			return( status );
+			}
+		}
 
 	/* Import the wrapped session/generic-secret key */
 	status = iCryptImportKey( objectPtr, contentListPtr->objectSize,
@@ -1242,6 +1289,7 @@ static int addSignatureInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	assert( isWritePtr( contentListPtr, sizeof( CONTENT_LIST ) ) );
 	assert( isReadPtr( actionListPtr, sizeof( ACTION_LIST ) ) );
 
+	REQUIRES( contentListPtr->type == CONTENT_SIGNATURE );
 	REQUIRES( isHandleRangeValid( sigCheckContext ) );
 	REQUIRES( isBooleanValue( isExternalKey ) );
 	REQUIRES( actionListPtr != NULL );
@@ -1397,41 +1445,8 @@ static int addSignatureInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 			contentListPtr->payload = NULL;
 	contentListPtr->issuerAndSerialNumberSize = \
 			contentListPtr->payloadSize = 0;
-	switch( contentListPtr->type )
-		{
-		case CONTENT_CRYPT:
-			/* All information is stored in the encryption content 
-			   structure */
-			break;
-
-		case CONTENT_SIGNATURE:
-			{
-			CONTENT_SIG_INFO *contentSigInfo = &contentListPtr->clSigInfo;
-
-			contentSigInfo->extraData = \
-					contentSigInfo->extraData2 = NULL;
-			contentSigInfo->extraDataLength = \
-					contentSigInfo->extraData2Length = 0;
-			break;
-			}
-
-		case CONTENT_AUTHENC:
-			{
-			CONTENT_AUTHENC_INFO *contentAuthEncInfo = \
-											&contentListPtr->clAuthEncInfo;
-
-			contentAuthEncInfo->kdfParamStart = \
-					contentAuthEncInfo->kdfParamLength = 0;
-			contentAuthEncInfo->encParamStart = \
-					contentAuthEncInfo->encParamLength = 0;
-			contentAuthEncInfo->macParamStart = \
-					contentAuthEncInfo->macParamLength = 0;
-			break;
-			}
-
-		default:
-			retIntError_Boolean();
-		}
+	sigInfo->extraData = sigInfo->extraData2 = NULL;
+	sigInfo->extraDataLength = sigInfo->extraData2Length = 0;
 	SET_FLAG( contentListPtr->flags, CONTENT_FLAG_PROCESSED );
 	sigInfo->processingResult = cryptArgError( status ) ? \
 								CRYPT_ERROR_SIGNATURE : status;
@@ -1561,6 +1576,7 @@ static int addPasswordInfo( IN_PTR const CONTENT_LIST *contentListPtr,
 	REQUIRES( isEnumRange( formatType, CRYPT_FORMAT ) );
 	REQUIRES( formatType != CRYPT_FORMAT_PGP || iNewContext != NULL );
 			  /* PGP can't perform MACing, only encryption */
+	REQUIRES( contentListPtr->type == CONTENT_CRYPT );
 
 	/* Clear return value */
 	if( iNewContext != NULL )
@@ -1726,10 +1742,9 @@ int checkContinueDeenv( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	if( contentListPtr == NULL )
 		return( CRYPT_ERROR_NOTFOUND );
 
-	/* If it's signed or MAC'd data then we need to have processed at
-	   least one signature/MAC record */
-	if( envelopeInfoPtr->usage == ACTION_SIGN || \
-		envelopeInfoPtr->usage == ACTION_MAC )
+	/* If it's signed data then we need to have processed at least one 
+	   signature record */
+	if( envelopeInfoPtr->usage == ACTION_SIGN )
 		{
 		if( findContentListItem( contentListPtr, \
 								 CRYPT_ENVINFO_SIGNATURE ) == NULL )
@@ -1738,13 +1753,14 @@ int checkContinueDeenv( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 		return( CRYPT_OK );
 		}
 
-	/* It's encrypted data, this is a bit of a special case because even if
-	   we've skipped the keyex records we can in theory still continue if 
-	   the user directly provides a session key.  However if we've skipped
-	   keyex records rather than there just being none present then a more
-	   likely problem situation is that we need a keyex action rather than
-	   that the user has a raw session key available */
-	ENSURES( envelopeInfoPtr->usage == ACTION_CRYPT );
+	/* It's encrypted or MAC'd data, this is a bit of a special case because 
+	   even if we've skipped the keyex records we can in theory still 
+	   continue if the user directly provides a session key.  However if 
+	   we've skipped keyex records rather than there just being none present 
+	   then a more likely problem situation is that we need a keyex action 
+	   rather than that the user has a raw session key available */
+	ENSURES( envelopeInfoPtr->usage == ACTION_CRYPT || \
+			 envelopeInfoPtr->usage == ACTION_MAC );
 
 	if( findContentListItem( contentListPtr, \
 							 CRYPT_ENVINFO_PASSWORD ) == NULL && \
@@ -2019,6 +2035,8 @@ static int addDeenvelopeInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 			   up the decryption with it */
 			const CONTENT_ENCR_INFO *encrInfo = &contentListPtr->clEncrInfo;
 
+			REQUIRES( contentListPtr->type == CONTENT_CRYPT );
+
 			status = initEnvelopeEncryption( envelopeInfoPtr, cryptHandle,
 							encrInfo->cryptAlgo, encrInfo->cryptMode,
 							encrInfo->saltOrIV, encrInfo->saltOrIVsize, TRUE );
@@ -2100,7 +2118,10 @@ static int addDeenvelopeInfoString( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 					 "Added item doesn't match any envelope information "
 					 "object" ) );
 		}
-	ANALYSER_HINT( contentListPtr != NULL );
+	ENSURES( contentListPtr != NULL );
+			 /* matchInfoObject() can in theory return with 
+			    contentListPtr == NULL, but not when envInfo == 
+			    CRYPT_ENVINFO_PASSWORD */
 	ENSURES( sanityCheckContentList( contentListPtr ) );
 
 	/* If we've been given a password and we need private key information, 

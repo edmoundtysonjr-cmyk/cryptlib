@@ -282,8 +282,7 @@ static int writeEOCs( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int writeSignedDataHeader( INOUT_PTR STREAM *stream,
-								  IN_PTR const ENVELOPE_INFO *envelopeInfoPtr,
-								  IN_BOOL const BOOLEAN isSignedData )
+								  IN_PTR const ENVELOPE_INFO *envelopeInfoPtr )
 	{
 	const BYTE *contentOID = getContentOID( envelopeInfoPtr->contentType );
 	LOOP_INDEX_PTR ACTION_LIST *actionListPtr;
@@ -293,7 +292,6 @@ static int writeSignedDataHeader( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 
-	REQUIRES( isBooleanValue( isSignedData ) );
 	REQUIRES( contentOID != NULL );
 
 	/* Determine the size of the hash actions */
@@ -360,20 +358,10 @@ static int writeSignedDataHeader( INOUT_PTR STREAM *stream,
 	ENSURES( dataSize == CRYPT_UNUSED || \
 			 isBufsizeRangeMin( dataSize, MIN_CRYPT_OBJECTSIZE ) );
 
-	/* Write the SignedData/DigestedData header, version number, and SET OF
-	   DigestInfo */
-	if( isSignedData )
-		{
-		status = writeCMSheader( stream, OID_CMS_SIGNEDDATA, 
-								 sizeofOID( OID_CMS_SIGNEDDATA ), 
-								 dataSize, FALSE );
-		}
-	else
-		{
-		status = writeCMSheader( stream, OID_CMS_DIGESTEDDATA, 
-								 sizeofOID( OID_CMS_DIGESTEDDATA ), 
-								 dataSize, FALSE );
-		}
+	/* Write the SignedData header, version number, and SET OF DigestInfo */
+	status = writeCMSheader( stream, OID_CMS_SIGNEDDATA, 
+							 sizeofOID( OID_CMS_SIGNEDDATA ), 
+							 dataSize, FALSE );
 	if( cryptStatusError( status ) )
 		return( status );
 	if( envelopeInfoPtr->contentType != CRYPT_CONTENT_DATA )
@@ -685,8 +673,8 @@ static int writeAuthenticatedDataHeader( INOUT_PTR STREAM *stream,
  	if( envelopeInfoPtr->payloadSize == CRYPT_UNUSED )
 		{
 		status = writeEncryptionHeader( stream, OID_CMS_AUTHDATA, 
-										sizeofOID( OID_CMS_AUTHDATA ), 0, 1, 
-										CRYPT_UNUSED );
+										sizeofOID( OID_CMS_AUTHDATA ), 0, 
+										CRYPT_UNUSED, CRYPT_UNUSED );
 		}
 	else
 		{
@@ -799,11 +787,11 @@ static int writeAuthEncDataHeader( INOUT_PTR STREAM *stream,
 	   SET OF RecipientInfo/EncryptionKeyInfo */
 	if( envelopeInfoPtr->cryptActionSize != CRYPT_UNUSED ) 
 		{
-			REQUIRES( !checkOverflowAdd( encrContentInfoSize, \
-										 sizeofShortObject( macSize ) ) );
-			REQUIRES( !checkEncodeOverflow( envelopeInfoPtr->cryptActionSize, 1, 
-											encrContentInfoSize + \
-												sizeofShortObject( macSize ), 0 ) );
+		REQUIRES( !checkOverflowAdd( encrContentInfoSize, \
+									 sizeofShortObject( macSize ) ) );
+		REQUIRES( !checkEncodeOverflow( envelopeInfoPtr->cryptActionSize, 1, 
+										encrContentInfoSize + \
+											sizeofShortObject( macSize ), 0 ) );
 		}
 	status = writeEncryptionHeader( stream, OID_CMS_AUTHENVDATA, 
 						sizeofOID( OID_CMS_AUTHENVDATA ), 0, 
@@ -866,7 +854,7 @@ static int writeEnvelopeHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	{
 	const ACTION_LIST *actionListPtr;
 	STREAM stream;
-	int status;
+	int position DUMMY_INIT, status;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 
@@ -917,12 +905,12 @@ static int writeEnvelopeHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 			break;
 
 		case ACTION_SIGN:
-			status = writeSignedDataHeader( &stream, envelopeInfoPtr, TRUE );
+			status = writeSignedDataHeader( &stream, envelopeInfoPtr );
 			break;
 
 		case ACTION_HASH:
-			status = writeSignedDataHeader( &stream, envelopeInfoPtr, FALSE );
-			break;
+			/* We don't do DigestedData so should never get here */
+			retIntError();
 
 		case ACTION_COMPRESS:
 			status = writeCompressedDataHeader( &stream, envelopeInfoPtr );
@@ -949,10 +937,11 @@ static int writeEnvelopeHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 			retIntError();
 		}
 	if( cryptStatusOK( status ) )
-		envelopeInfoPtr->bufPos = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
+	envelopeInfoPtr->bufPos = position;
 	ENSURES( isBufsizeRangeNZ( envelopeInfoPtr->bufPos ) );
 
 	/* If we're not encrypting with key exchange actions, we're done */
@@ -1063,10 +1052,11 @@ static int writeKeyex( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 ****************************************************************************/
 
 /* Write the signing certificate chain.  This can grow arbitrarily large and 
-   in particular can become larger than the main envelope buffer if multiple 
-   signatures with long chains and a small envelope buffer are used, so we 
-   emit the certificate chain into a dynamically-allocated auxiliary buffer 
-   if there isn't enough room to emit it into the main buffer  */
+   in particular can become larger than the main envelope buffer for the
+   (admittedly highly unlikely) situation where multiple signatures with long 
+   chains and a small envelope buffer are used, so we emit the certificate 
+   chain into a dynamically-allocated auxiliary buffer if there isn't enough 
+   room to emit it into the main buffer  */
 
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1 ) ) \
 static int writeCertchainTrailer( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
@@ -1129,7 +1119,9 @@ static int writeCertchainTrailer( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 		if( cryptStatusError( status ) )
 			return( status );
 		}
-	envelopeInfoPtr->lastAction = envelopeInfoPtr->postActionList;
+	DATAPTR_SET( envelopeInfoPtr->lastAction, 
+				 DATAPTR_GET( envelopeInfoPtr->postActionList ) );
+	ENSURES( DATAPTR_ISSET( envelopeInfoPtr->lastAction ) );
 
 	/* Write the signing certificate chain if it's a CMS signature and 
 	   they're not explicitly excluded, followed by the SET OF SignerInfo 
@@ -1161,7 +1153,7 @@ static int writeCertchainTrailer( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	else
 		status = writeSet( &stream, envelopeInfoPtr->signActionSize );
 	if( cryptStatusOK( status ) )
-		certChainSize = stell( &stream );
+		status = certChainSize = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1335,11 +1327,16 @@ static int writeMAC( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	STREAM stream;
 	MESSAGE_DATA msgData;
 	BYTE hash[ CRYPT_MAX_HASHSIZE + 8 ];
+	const int noEOCs = ( envelopeInfoPtr->usage == ACTION_CRYPT ) ? 2 : 3;
 	const int eocSize = ( envelopeInfoPtr->payloadSize == CRYPT_UNUSED ) ? \
-						( 3 * sizeofEOC() ) : 0;
+						( noEOCs * sizeofEOC() ) : 0;
 	int dataLeft, length DUMMY_INIT, status;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
+
+	REQUIRES( envelopeInfoPtr->usage == ACTION_MAC || \
+			  ( envelopeInfoPtr->usage == ACTION_CRYPT && \
+				TEST_FLAG( envelopeInfoPtr->flags, ENVELOPE_FLAG_AUTHENC ) ) );
 
 	/* Make sure that there's room for the MAC data in the buffer */
 	REQUIRES( !checkOverflowSub( envelopeInfoPtr->bufSize, \
@@ -1355,7 +1352,7 @@ static int writeMAC( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	   SEQUENCE if necessary */
 	if( envelopeInfoPtr->payloadSize == CRYPT_UNUSED )
 		{
-		status = writeEOCs( envelopeInfoPtr, 3 );
+		status = writeEOCs( envelopeInfoPtr, noEOCs );
 		if( cryptStatusError( status ) )
 			return( status );
 			
@@ -1385,7 +1382,7 @@ static int writeMAC( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 			  dataLeft );
 	status = writeOctetString( &stream, hash, msgData.length, DEFAULT_TAG );
 	if( cryptStatusOK( status ) )
-		length = stell( &stream );
+		status = length = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1584,9 +1581,12 @@ static int emitPreamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 			}
 		if( cryptStatusOK( status ) )
 			{
+			const int position = stell( &stream );
+
+			REQUIRES( isBufsizeRangeNZ( position ) );
 			REQUIRES( !checkOverflowAdd( envelopeInfoPtr->bufPos,
-										 stell( &stream ) ) );
-			envelopeInfoPtr->bufPos += stell( &stream );
+										 position ) );
+			envelopeInfoPtr->bufPos += position;
 			}
 		sMemDisconnect( &stream );
 		if( cryptStatusOK( status ) && \
@@ -1794,11 +1794,19 @@ static int emitPostamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		}
 
 	/* Write the end-of-contents octets for the OCTET STRING/SEQUENCE, [0],
-	   and SEQUENCE if necessary.  If the trailer has an indefinite length
-	   then we need to add an EOC for the trailer as well */
+	   and SEQUENCE if necessary.  Alongside the obvious indefinite-length 
+	   payload this can also be required if the SET OF RecipientInfo was 
+	   written with an indefinite length, which makes the enclosing header 
+	   indefinite-length as well.
+	   
+	   If the trailer has an indefinite length then we need to add an EOC 
+	   for the trailer as well */
 	if( envelopeInfoPtr->payloadSize == CRYPT_UNUSED || \
 		TEST_FLAG( envelopeInfoPtr->dataFlags, 
-				   ENVDATA_FLAG_HASINDEFTRAILER ) )
+				   ENVDATA_FLAG_HASINDEFTRAILER ) || \
+		( ( envelopeInfoPtr->usage == ACTION_CRYPT || \
+			envelopeInfoPtr->usage == ACTION_MAC ) && \
+		  envelopeInfoPtr->cryptActionSize == CRYPT_UNUSED ) )
 		{
 		status = writeEOCs( envelopeInfoPtr,
 							3 + \
@@ -1857,19 +1865,27 @@ void initCMSEnveloping( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	status = krnlSendMessage( envelopeInfoPtr->ownerHandle, 
 							  IMESSAGE_GETATTRIBUTE, &value, 
 							  CRYPT_OPTION_ENCR_HASH );
-	if( cryptStatusError( status ) || \
-		!checkAlgoID( value, CRYPT_MODE_NONE ) )
+	if( cryptStatusError( status ) || !checkAlgoID( value, 0 ) )
+		{
+		/* The overall algorithm isn't encodable, switch to SHA-2 */
 		envelopeInfoPtr->defaultHash = CRYPT_ALGO_SHA2;
+		envelopeInfoPtr->defaultHashParam = bitsToBytes( 256 );
+		}
 	else
 		{
 		envelopeInfoPtr->defaultHash = value;	/* int vs.enum */
 		status = krnlSendMessage( envelopeInfoPtr->ownerHandle, 
 								  IMESSAGE_GETATTRIBUTE, &value, 
 								  CRYPT_OPTION_ENCR_HASHPARAM );
-		if( cryptStatusOK( status ) )
-			envelopeInfoPtr->defaultHashParam = value;
-		else
+		if( cryptStatusError( status ) || \
+			!checkAlgoID( envelopeInfoPtr->defaultHash, value ) )
+			{
+			/* The algorithm is encodable but the parameter isn't,
+			   switch to (implied SHA-2)-256 */
 			envelopeInfoPtr->defaultHashParam = bitsToBytes( 256 );
+			}
+		else
+			envelopeInfoPtr->defaultHashParam = value;
 		}
 	status = krnlSendMessage( envelopeInfoPtr->ownerHandle, 
 							  IMESSAGE_GETATTRIBUTE, &value, 

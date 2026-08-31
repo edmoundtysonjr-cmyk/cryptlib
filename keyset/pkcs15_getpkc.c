@@ -321,6 +321,12 @@ static int importSessionKey( IN_HANDLE const CRYPT_CONTEXT iSessionKey,
 	mode = queryInfo->cryptMode;	/* int vs.enum */
 	status = krnlSendMessage( iKeyWrapContext, IMESSAGE_SETATTRIBUTE, 
 							  &mode, CRYPT_CTXINFO_MODE );
+	if( cryptStatusOK( status ) && queryInfo->keySize != 0 )
+		{
+		status = krnlSendMessage( iKeyWrapContext, IMESSAGE_SETATTRIBUTE,
+								  ( MESSAGE_CAST ) &queryInfo->keySize, 
+								  CRYPT_CTXINFO_KEYSIZE );
+		}
 	if( cryptStatusOK( status ) && \
 		queryInfo->keySetupAlgo != CRYPT_ALGO_NONE )
 		{

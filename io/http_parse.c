@@ -5,8 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <ctype.h>
-#include <stdio.h>
 #if defined( INC_ALL )
   #include "crypt.h"
   #include "misc_rw.h"
@@ -135,7 +133,7 @@ static const SYSTEM_ID_INFO systemIdInfo[] = {
 *																			*
 ****************************************************************************/
 
-/* Callback function used by readTextLine() to read characters from a
+/* Callback function used by readHttpLine() to read characters from a
    stream.  When reading text data over a network we don't know how much
    more data is to come so we have to read a byte at a time looking for an
    EOL.  In addition we can't use the simple optimisation of reading two
@@ -185,7 +183,7 @@ static int getEncodedChar( IN_BUFFER( bufSize ) const char *buffer,
 	   multi-line responses containing user-controlled type : value pairs 
 	   (in other words they allow user data to be injected into the control
 	   channel) */
-	if( !isValidTextChar( ch ) || ch <= 0x1F )
+	if( !isValidTextChar( ch ) )
 		return( CRYPT_ERROR_BADDATA );
 
 	return( ch );
@@ -219,7 +217,8 @@ static int decodeRFC1866( INOUT_BUFFER( bufSize, *newBufSize ) char *buffer,
 		/* If it's an escaped character, decode it.  If it's not escaped 
 		   then we can copy it straight over, the input has already been 
 		   sanitised when it was read so there's no need to perform another 
-		   check here */
+		   check here (but then see the comment for the safety check 
+		   below) */
 		ch = byteToInt( buffer[ srcIndex++ ] );
 		if( ch == '%' )
 			{
@@ -235,6 +234,16 @@ static int decodeRFC1866( INOUT_BUFFER( bufSize, *newBufSize ) char *buffer,
 				return( status );
 			REQUIRES( !checkOverflowAdd( srcIndex, 2 ) );
 			srcIndex += 2;
+			}
+		if( !isValidTextChar( ch ) )
+			{
+			/* This should never happen because readHttpLine() enforces
+			   isValidTextChar() for characters that we're getting directly 
+			   from the buffer and getEncodedChar() enforces it for decoded 
+			   characters, this is merely an additional safety check that
+			   nothing got missed on the way here */
+			assert( DEBUG_WARN );
+			return( CRYPT_ERROR_BADDATA );
 			}
 		buffer[ destIndex++ ] = intToByte( ch );
 		}
@@ -313,7 +322,7 @@ static BOOLEAN checkToken( IN_BUFFER( stringLength ) const char *string,
 	   where the requested token is "Chunked" */
 	if( stringLength != tokenLength )
 		return( FALSE );
-	return( strCompare( string, token, tokenLength ) ? FALSE : TRUE );
+	return( strSame( string, token, tokenLength ) );
 	}
 
 /* Exit with extended error information relating to header-line parsing.  
@@ -323,7 +332,7 @@ static BOOLEAN checkToken( IN_BUFFER( stringLength ) const char *string,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int retHeaderError( INOUT_PTR STREAM *stream, 
 						   FORMAT_STRING const char *format, 
-						   IN_BUFFER( strArgLen ) char *strArg, 
+						   IN_BUFFER( strArgLen ) const char *strArg, 
 						   IN_LENGTH_SHORT const int strArgLen, 
 						   const int lineNo )
 	{
@@ -335,7 +344,7 @@ static int retHeaderError( INOUT_PTR STREAM *stream,
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( format, 4 ) );
-	assert( isWritePtrDynamic( strArg, strArgLen ) );
+	assert( isReadPtrDynamic( strArg, strArgLen ) );
 
 	REQUIRES( isShortIntegerRangeNZ( strArgLen ) );
 #ifdef USE_ERRMSGS
@@ -440,20 +449,19 @@ static int getUriSegmentLength( IN_BUFFER( dataMaxLength ) const char *data,
 		}
 	ENSURES( LOOP_BOUND_OK );
 
-	/* If there's an end-char specified (Case 1) and we didn't find it (or 
-	   the alternative end-char if there is one), it's an error.  If there's
-	   no end-char specified (Case 2), the end of the sub-segment is at the
-	   end of the data */
-	if( uriParseInfo->segmentEndChar != '\0' && i >= dataMaxLength )
-		return( CRYPT_ERROR_BADDATA );
-
 	/* Make sure that we both got enough data and that we didn't run out of
-	   data.  We return specific error codes here in order to allow the 
-	   caller to check for over-long fields */
+	   data.  We check the segment sizes first so that a too-short or too-
+	   long field is still reported appropriately rather than as a generic 
+	   bad-data error, then if there's an end-char specified (Case 1) and we 
+	   didn't find it or the alternative end-char if there is one, report a 
+	   CRYPT_ERROR_BADDATA (if there's no end-char specified (Case 2) the 
+	   end of the sub-segment is at the end of the data) */
 	if( i < uriParseInfo->segmentMinLength )
 		return( CRYPT_ERROR_UNDERFLOW );
 	if( i >= uriParseInfo->segmentMaxLength )
 		return( CRYPT_ERROR_OVERFLOW );
+	if( uriParseInfo->segmentEndChar != '\0' && i >= maxLength )
+		return( CRYPT_ERROR_BADDATA );
 
 	/* Finally, if we're expecting further data to follow the current URI 
 	   segment, make sure that it's present */
@@ -504,7 +512,22 @@ int parseUriInfo( INOUT_BUFFER( dataInLength, *dataOutLength ) char *data,
 
 	/* Decode the URI text.  Since there can be multiple nested levels of
 	   encoding we keep iteratively decoding in-place until either 
-	   decodeRFC1866() cries Uncle or we hit the sanity-check limit */
+	   decodeRFC1866() cries Uncle or we hit the sanity-check limit.  This
+	   decode-then-parse differs from RFC 3986 which says (section 2.4) 
+	   "when a URI is dereferenced, the components and subcomponents 
+	   significant to the scheme-specific dereferencing process (if any) 
+	   must be parsed and separated before the percent-encoded octets within 
+	   those components can be safely decoded as otherwise the data may be 
+	   mistaken for component delimiters", but since we're using HTTP purely 
+	   as a substrate rather than as actual HTTP we prioritise trying to 
+	   catch any attempts at using encoding tricks, with the end result 
+	   being a guaranteed-clean (via isValidTextChar()) text string.
+	   
+	   What it does mean though is that if someon puts a WAF or similar in 
+	   front of us then that and cryptlib will have a different view of the 
+	   decoded form, but again since HTTP-as-a-substrate isn't a Web 
+	   Application it seems unlikely that either anyone would use a WAF with 
+	   cryptlib or that it would apply to anything that cryptlib is doing */
 	LOOP_SMALL( i = 0, i < 5, i++ )
 		{
 		ENSURES( LOOP_INVARIANT_SMALL( i, 0, 4 ) );
@@ -726,7 +749,7 @@ static int processHeaderLine( IN_BUFFER( dataLength ) const char *data,
 	*headerType = HTTP_HEADER_NONE;
 
 	/* Look for a header line that we recognise */
-	firstChar = toUpper( data[ 0 ] );
+	firstChar = toUpper( byteToInt( data[ 0 ] ) );
 	LOOP_MED( i = 0, 
 			  i < FAILSAFE_ARRAYSIZE( httpHeaderParseInfo, \
 									  HTTP_HEADER_PARSE_INFO ) && \
@@ -739,8 +762,8 @@ static int processHeaderLine( IN_BUFFER( dataLength ) const char *data,
 
 		if( httpHeaderParseInfo[ i ].headerString[ 0 ] == firstChar && \
 			dataLength >= httpHeaderParseInfo[ i ].headerStringLen && \
-			!strCompare( data, httpHeaderParseInfo[ i ].headerString, \
-						 httpHeaderParseInfo[ i ].headerStringLen ) )
+			strSame( data, httpHeaderParseInfo[ i ].headerString, \
+					 httpHeaderParseInfo[ i ].headerStringLen ) )
 			{
 			headerParseInfoPtr = &httpHeaderParseInfo[ i ];
 			break;
@@ -826,9 +849,8 @@ int readFirstHeaderLine( INOUT_PTR STREAM *stream,
 	*isSoftError = FALSE;
 
 	/* Read the header and check for an HTTP ID "HTTP 1.x ..." */
-	status = readTextLine( stream, dataBuffer, dataMaxLength, &length, 
-						   &textDataError, readCharFunction, 
-						   READTEXT_NONE );
+	status = readHttpLine( stream, dataBuffer, dataMaxLength, &length, 
+						   &textDataError, readCharFunction );
 	if( cryptStatusError( status ) )
 		{
 		return( retTextLineError( stream, status, textDataError, 
@@ -982,17 +1004,22 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 		char *lineBufPtr;
 		int length, lineLength;
 
-		ENSURES( LOOP_INVARIANT_MED( lineCount, 0, 29 ) );
+		ENSURES( LOOP_INVARIANT_MED( lineCount, 0, \
+									 MAX_HTTP_HEADER_LINES - 1 ) );
 
 		/* Any errors that occur while reading the header line data are 
 		   fatal */
 		*isSoftError = FALSE;
 
-		status = readTextLine( stream, lineBuffer, lineBufMaxLen, 
+		status = readHttpLine( stream, lineBuffer, lineBufMaxLen, 
 							   &lineLength, &textDataError, 
-							   readCharFunction, READTEXT_MULTILINE );
+							   readCharFunction );
 		if( cryptStatusError( status ) )
 			{
+			/* An over-long header line gets its own status, 431 = Request 
+			   header fields too large, rather than the default 400 */
+			if( status == CRYPT_ERROR_OVERFLOW )
+				headerInfo->httpStatus = 431;
 			return( retTextLineError( stream, status, textDataError, 
 									  "Invalid HTTP header line %d", 
 									  lineCount + 2 ) );
@@ -1203,7 +1230,7 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 
 			case HTTP_HEADER_SERVER:
 				{
-				const int firstChar = toUpper( *lineBufPtr );
+				const int firstChar = toUpper( byteToInt( *lineBufPtr ) );
 				LOOP_INDEX_ALT i;
 
 				/* Check to see whether we recognise the peer system type */
@@ -1222,8 +1249,8 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 					systemIdInfoPtr = &systemIdInfo[ i ];
 					if( systemIdInfoPtr->idString[ 0 ] == firstChar && \
 						lineLength >= systemIdInfoPtr->idStringLen && \
-						!strCompare( lineBufPtr, systemIdInfoPtr->idString, \
-									 systemIdInfoPtr->idStringLen ) )
+						strSame( lineBufPtr, systemIdInfoPtr->idString, \
+								 systemIdInfoPtr->idStringLen ) )
 						{
 						netStream->systemType = systemIdInfoPtr->systemType;
 						break;
@@ -1267,6 +1294,7 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 					{
 					SET_FLAG( netStream->nFlags, STREAM_NFLAG_LASTMSGR );
 					}
+#ifdef USE_WEBSOCKETS
 				if( TEST_FLAG( headerInfo->flags, HTTP_FLAG_UPGRADE ) && \
 					!checkToken( lineBufPtr, lineLength, "Upgrade", 7 ) ) 
 					{
@@ -1275,6 +1303,7 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 							  "'Upgrade', line %d", lineBufPtr, lineLength, 
 							  lineCount ) );
 					}
+#endif /* USE_WEBSOCKETS */
 				seenConnection = TRUE;
 				break;
 
@@ -1311,7 +1340,7 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 				   requires an exact length match while we're only checking
 				   for a prefix string */
 				if( lineLength < 10 || \
-					strCompare( lineBufPtr, "http://", 7 ) )
+					!strSame( lineBufPtr, "http://", 7 ) )
 					{
 					return( retHeaderError( stream, 
 							  "Invalid HTTP redirect location '%s', line %d",
@@ -1340,8 +1369,10 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 				/* If the other side wants the go-ahead to continue, give it
 				   to them.  We do this automatically because we're merely
 				   using HTTP as a substrate, the real decision will be made
-				   at the higher-level protocol layer */
-				if( checkToken( lineBufPtr, lineLength, "100-Continue", 12 ) )
+				   at the higher-level protocol layer.  This is a request 
+				   header so we only do it if we're the server */
+				if( TEST_FLAG( netStream->nFlags, STREAM_NFLAG_ISSERVER ) && \
+					checkToken( lineBufPtr, lineLength, "100-Continue", 12 ) )
 					sendHTTPError( stream, 100 );
 				break;
 
@@ -1464,6 +1495,10 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 	ENSURES( LOOP_BOUND_OK );
 	if( lineCount >= MAX_HTTP_HEADER_LINES )
 		{
+		/* Too many header lines get their own status, 431 = Request header 
+		   fields too large, rather than the default 400 */
+		headerInfo->httpStatus = 431;
+
 		/* The count is zero-based so "more than x" is the correct text */
 		retExt( CRYPT_ERROR_OVERFLOW,
 				( CRYPT_ERROR_OVERFLOW, NETSTREAM_ERRINFO, 
@@ -1495,9 +1530,9 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 		BOOLEAN textDataError;
 		int lineLength;
 
-		status = readTextLine( stream, lineBuffer, lineBufMaxLen, 
+		status = readHttpLine( stream, lineBuffer, lineBufMaxLen, 
 							   &lineLength, &textDataError, 
-							   readCharFunction, READTEXT_NONE );
+							   readCharFunction );
 		if( cryptStatusError( status ) )
 			{
 			return( retTextLineError( stream, status, textDataError, 
@@ -1565,8 +1600,12 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 
 	/* If it's a GET or protocol upgrade request there's no length so we 
 	   can exit now */
+#ifdef USE_WEBSOCKETS 
 	if( TEST_FLAG( headerInfo->flags, HTTP_FLAG_GET ) || \
 		TEST_FLAG( netStream->nhFlags, STREAM_NHFLAG_WS_UPGRADE ) )
+#else
+	if( TEST_FLAG( headerInfo->flags, HTTP_FLAG_GET ) )
+#endif /* USE_WEBSOCKETS */
 		{
 		if( seenLength )
 			{
@@ -1597,6 +1636,10 @@ int readHeaderLines( INOUT_PTR STREAM *stream,
 	if( contentLength < headerInfo->minContentLength || \
 		contentLength > headerInfo->maxContentLength )
 		{
+		/* Over-long content gets its own status, 413 = Request entity too 
+		   large, rather than the default 400 */
+		if( contentLength > headerInfo->maxContentLength )
+			headerInfo->httpStatus = 413;
 		retExt( ( contentLength < headerInfo->minContentLength ) ? \
 				CRYPT_ERROR_UNDERFLOW : CRYPT_ERROR_OVERFLOW,
 				( ( contentLength < headerInfo->minContentLength ) ? \
@@ -1646,16 +1689,15 @@ int readTrailerLines( INOUT_PTR STREAM *stream,
 	memset( lineBuffer, 0, min( 16, lineBufMaxLen ) );
 
 	/* Read the blank line and chunk length */
-	status = readTextLine( stream, lineBuffer, lineBufMaxLen, &readLength, 
-						   &textDataError, readCharFunction, 
-						   READTEXT_NONE );
+	status = readHttpLine( stream, lineBuffer, lineBufMaxLen, &readLength, 
+						   &textDataError, readCharFunction );
 	if( cryptStatusOK( status ) && readLength != 0 )
 		status = CRYPT_ERROR_BADDATA;
 	if( cryptStatusOK( status ) )
 		{
-		status = readTextLine( stream, lineBuffer, lineBufMaxLen, 
+		status = readHttpLine( stream, lineBuffer, lineBufMaxLen, 
 							   &readLength, &textDataError, 
-							   readCharFunction, READTEXT_NONE );
+							   readCharFunction );
 		}
 	if( cryptStatusOK( status ) && !isShortIntegerRangeNZ( readLength ) )
 		status = CRYPT_ERROR_BADDATA;

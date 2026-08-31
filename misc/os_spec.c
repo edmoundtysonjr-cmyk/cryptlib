@@ -395,7 +395,7 @@ int strCompare( IN_STRING const char *src,
 	BYTE buffer2[ MAX_ATTRIBUTE_SIZE + 8 ];
 
 	assert( isReadPtrDynamic( src, length ) );
-	assert( isReadPtrDynamic( dest, 1 ) );
+	assert( isReadPtrDynamic( dest, 2 ) );
 
 	if( length <= 0 || length > MAX_ATTRIBUTE_SIZE || \
 		strlen( src ) > MAX_ATTRIBUTE_SIZE - 1 || \
@@ -412,7 +412,7 @@ int strCompare( IN_STRING const char *src,
 	   speeds up checking, particularly in cases where we're walking down a
 	   list of keywords looking for a match */
 	if( byteToInt( *src ) < 0x80 && byteToInt( *dest ) < 0x80 && \
-		toLower( *src ) != toLower( *dest ) )
+		toLower( byteToInt( *src ) ) != toLower( byteToInt( *dest ) ) )
 		return( 1 );	/* Not equal */
 
 	/* Convert the strings to EBCDIC and use a native compare */
@@ -578,7 +578,7 @@ int vsPrintf_s( INOUT_BUFFER_FIXED( bufSize ) char *buffer,
 				{
 				ENSURES( LOOP_INVARIANT_LARGE( i, 0, formatBufPos - 1 ) );
 
-				formatBuffer[ i ] = toUpper( formatBuffer[ i ] );
+				formatBuffer[ i ] = toUpper( byteToInt( formatBuffer[ i ] ) );
 				}
 			ENSURES( LOOP_BOUND_OK );
 			}
@@ -1171,7 +1171,7 @@ HMODULE WINAPI SafeLoadLibrary( IN_STRING LPCTSTR lpFileName )
 
 	/* If it's already an absolute path, don't try and override it */
 	if( lpFileName[ 0 ] == '/' || \
-		( fileNameLength >= 3 && isAlpha( lpFileName[ 0 ] ) && \
+		( fileNameLength >= 3 && isAlpha( byteToInt( lpFileName[ 0 ] ) ) && \
 		  lpFileName[ 1 ] == ':' && lpFileName[ 2 ] == '/' ) )
 		{
 		return( loadExistingLibrary( lpFileName ) );
@@ -1298,7 +1298,7 @@ HMODULE WINAPI SafeLoadLibrary( IN_STRING LPCTSTR lpFileName )
 	/* If it's already an absolute path, don't try and override it */
 	if( lpFileName[ 0 ] == '/' || \
 		lpFileName[ 0 ] == '\\' || \
-		( fileNameLength >= 3 && isAlpha( lpFileName[ 0 ] ) && \
+		( fileNameLength >= 3 && isAlpha( byteToInt( lpFileName[ 0 ] ) ) && \
 		  lpFileName[ 1 ] == ':' && \
 		  ( lpFileName[ 2 ] == '/' || lpFileName[ 2 ] == '\\' ) ) )
 		{
@@ -1541,12 +1541,12 @@ STDAPI DllRegisterServer( void )
 #if defined( _MSC_VER ) && !defined( NDEBUG ) && \
 	( VC_LT_2010( _MSC_VER ) || VC_GE_2019( _MSC_VER ) ) 
 
-/* Under VC++ 6 to at least VS 2008, assert() can randomly stop working so 
-   that only the abort() portion still functions, making it impossible to 
-   find out what went wrong.  Under VS 2019, assert() still functions but 
-   reports the location where the assert was triggered as some random 
-   location somewhere in cryptlib, requiring tedious stepping through each 
-   line of code to find out where the actual assertion occurred.
+/* Under VC++ 6 up until to at least VS 2008, assert() can randomly stop 
+   working so that only the abort() portion still functions, making it 
+   impossible to find out what went wrong.  Under VS 2019, assert() still 
+   functions but reports the location where the assert was triggered as some 
+   random location somewhere in cryptlib, requiring tedious stepping through 
+   each line of code to find out where the actual assertion occurred.
 
    To deal with this, misc/debug.h redefines the assert() macro to call the 
    following function, which emulates what a correctly-functioning assert()
@@ -1598,7 +1598,7 @@ void vsAssert( const char *exprString, const char *fileName,
 	if( result == IDYES )
 		DebugBreak();
 	}
-#endif /* VC++ 6.0 || VS 2019 */
+#endif /* VC++ 6.0 - 2008 || VS 2019 */
 
 /* Borland's archaic compilers don't recognise DllMain() but still use the
    OS/2-era DllEntryPoint(), so we have to alias it to DllMain() in order
@@ -1612,52 +1612,6 @@ BOOL WINAPI DllEntryPoint( HINSTANCE hinstDLL, DWORD fdwReason,
 	return( DllMain( hinstDLL, fdwReason, lpvReserved ) );
 	}
 #endif /* BC++ */
-
-#elif defined( __WIN16__ )
-
-/* WinMain() and WEP() under Win16 are intended for DLL initialisation,
-   however it isn't possible to reliably do anything terribly useful in these
-   routines.  The reason for this is that the WinMain/WEP functions are
-   called by the windows module loader, which has a very limited workspace
-   and can cause peculiar behaviour for some functions (allocating/freeing
-   memory and loading other modules from these routines is unreliable), the
-   order in which WinMain() and WEP() will be called for a set of DLL's is
-   unpredictable (sometimes WEP doesn't seem to be called at all), and they
-   can't be tracked by a standard debugger.  This is why MS have
-   xxxRegisterxxx() and xxxUnregisterxxx() functions in their DLL's.
-
-   Under Win16 on a Win32 system this isn't a problem because the module
-   loader has been rewritten to work properly, but it isn't possible to get
-   reliable performance under pure Win16, so the DLL entry/exit routines here
-   do almost nothing, with the real work being done in cryptInit()/
-   cryptEnd() */
-
-HWND hInst;
-
-int CALLBACK LibMain( HINSTANCE hInstance, WORD wDataSeg, WORD wHeapSize, 
-					  LPSTR lpszCmdLine )
-	{
-	/* Remember the proc instance for later */
-	hInst = hInstance;
-
-	return( TRUE );
-	}
-
-int CALLBACK WEP( int nSystemExit )
-	{
-	switch( nSystemExit )
-		{
-		case WEP_SYSTEM_EXIT:
-			/* System is shutting down */
-			break;
-
-		case WEP_FREE_DLL:
-			/* DLL reference count = 0, DLL-only shutdown */
-			break;
-		}
-
-	return( TRUE );
-	}
 
 /****************************************************************************
 *																			*
@@ -1920,63 +1874,6 @@ BOOL WINAPI DllMain( HANDLE hinstDLL, DWORD dwReason, LPVOID lpvReserved )
 	return( TRUE );
 	}
 #endif /* OS-specific support */
-
-/****************************************************************************
-*																			*
-*							String Function Support							*
-*																			*
-****************************************************************************/
-
-/* Match a given substring against a string in a case-insensitive manner.
-   If possible we use native calls to handle this since they deal with
-   charset-specific issues such as collating sequences, however a few OSes
-   don't provide this functionality so we have to do it ourselves.
-   
-   The length argument to strnicmp() should be const, but we make it non-
-   const for compatibility with everyone else's strnicmp() */
-
-#ifdef NO_NATIVE_STRICMP
-
-int strnicmp( const char *src, const char *dest, /* const */ int length )
-	{
-	LOOP_INDEX i;
-
-	assert( isReadPtrDynamic( src, length ) );
-
-	LOOP_MAX( i = 0, i < length, i++ )
-		{
-		const int srcCh = toUpper( *src );
-		const int destCh = toUpper( *dest );
-
-		ENSURES_EXT( LOOP_INVARIANT_MAX( i, 0, length - 1 ), -1 );
-
-		/* Need to be careful calling toupper() with side-effects */
-		src++, dest++;
-
-		if( srcCh != destCh )
-			return( srcCh - destCh );
-		if( srcCh == '\0' )
-			{
-			/* We've run out of source string without finding a mis-match, 
-			   we're done.  Note that this also check destCh, since we
-			   wouldn't have got here if they weren't the same */
-			break;
-			}
-		}
-	ENSURES_EXT( LOOP_BOUND_OK, -1 );
-
-	return( 0 );
-	}
-
-int stricmp( const char *src, const char *dest )
-	{
-	const int length = strnlen_s( src, MAX_ATTRIBUTE_SIZE );
-
-	if( length != strnlen_s( dest, MAX_ATTRIBUTE_SIZE ) )
-		return( 1 );	/* Lengths differ */
-	return( strnicmp( src, dest, length ) );
-	}
-#endif /* NO_NATIVE_STRICMP */
 
 /****************************************************************************
 *																			*
@@ -3602,9 +3499,6 @@ void *ptr_align( const void *ptr,
 			   regression tests, every call site hardcodes in the units 
 			   value so an incorrect value will be caught in testing */
 
-#if 0
-	return( ( void * ) ( ( BYTE * ) ptr + ( -( ( intptr_t )( ptr ) ) & ( units - 1 ) ) ) );
-#else
 	/* Calculate the offset required to get to the next multiple of units,
 	   then add it to the pointer, which avoids triggering UB breakage.
 	   The complex expression below calculates the address modulo the 
@@ -3619,7 +3513,6 @@ void *ptr_align( const void *ptr,
 		( ( units - ( address & ( ( uintptr_t ) units - 1 ) ) ) & \
 													( ( uintptr_t ) units - 1 ) );
 	return( ( BYTE * ) ptr + offset );
-#endif /* 0 */
 	}
 
 /* Determine the difference between two pointers, with some sanity 

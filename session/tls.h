@@ -13,7 +13,7 @@
   #include "scorebrd.h"
 #else
   #include "session/scorebrd.h"
-#endif /* _STREAM_DEFINED */
+#endif /* INC_ALL */
 
 #ifdef USE_TLS
 
@@ -83,7 +83,7 @@
 #else
   #define KEYEX_SECRET_STORAGE_SIZE	\
 		  ( CRYPT_MAX_PKCSIZE + CRYPT_MAX_TEXTSIZE )
-#endif /* USE_TLS13 */
+#endif /* USE_TLS13 && USE_MLKEM */
 
 /* TLS packet/buffer size information.  The extra packet size is somewhat 
    large because it can contains the packet header (5 bytes), IV 
@@ -185,9 +185,13 @@
 
 /* Some of the flags above denote extended TLS facilities that need to be
    preserved across session resumptions.  The following value defines the 
-   flags that need to be preserved across resumes */
+   flags that need to be preserved across resumes.  We also need to define
+   AEAD-equivalent flags, see the comments in 
+   session/tls_cli/svr.c:beginClient/ServerHandshake() */
 
-#define TLS_RESUMEDSESSION_FLAGS	( TLS_PFLAG_EMS | TLS_PFLAG_ENCTHENMAC | \
+#define TLS_RESUMED_AEAD_FLAGS		( TLS_PFLAG_ENCTHENMAC | TLS_PFLAG_GCM | \
+									  TLS_PFLAG_BERNSTEIN )
+#define TLS_RESUMEDSESSION_FLAGS	( TLS_PFLAG_EMS | TLS_RESUMED_AEAD_FLAGS | \
 									  TLS_PFLAG_TLS12LTS )
 
 /* Symbolic defines for static analysis checking */
@@ -203,7 +207,7 @@
 #define TLS_PFLAG_SUITEB			( TLS_PFLAG_SUITEB_128 | \
 									  TLS_PFLAG_SUITEB_256 )
 
-/* The TLS minimmum version number is encoded as a CRYPT_TLSOPTION_MINVER_xxx
+/* The TLS minimum version number is encoded as a CRYPT_TLSOPTION_MINVER_xxx
    value, the following mask allows the version to be extracted from the TLS
    option value */
 
@@ -1011,6 +1015,7 @@ typedef struct TH {
 	BUFFER( MAX_SESSIONID_SIZE, sessionIDlength ) \
 	BYTE sessionID[ MAX_SESSIONID_SIZE + 8 ];
 	int sessionIDlength;
+	BUFFER_FIXED( KEYID_SIZE ) \
 	BYTE hashedSNI[ KEYID_SIZE + 8 ];
 	BOOLEAN hashedSNIpresent;
 
@@ -1183,6 +1188,7 @@ typedef struct TH {
 								   requested */
 	int flags;					/* HANDSHAKE_FLAG_x flags */
 	int failAlertType;			/* Alert type to send on failure */
+	int checksum;				/* Checksum of HI contenst across a push/pop */
 
 	/* ECC-related information.  Since ECC algorithms have a huge pile of
 	   parameters we need to parse any extensions that the client sends in 
@@ -1260,7 +1266,7 @@ BOOLEAN sanityCheckTLSHandshakeInfo( IN_PTR \
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 CHECK_RETVAL_LENGTH STDC_NONNULL_ARG( ( 1 ) ) \
 int readUint24( INOUT_PTR STREAM *stream );
-STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int writeUint24( INOUT_PTR STREAM *stream, IN_LENGTH_Z const int length );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
 int readEcdhValue( INOUT_PTR STREAM *stream,
@@ -1282,7 +1288,7 @@ int writeTLSCertChain( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 2, 4 ) ) \
 int checkHostNameTLS( IN_HANDLE const CRYPT_CERTIFICATE iCryptCert,
-					  INOUT_BUFFER_FIXED( serverNameLength ) void *serverName,
+					  IN_BUFFER( serverNameLength ) const void *serverName,
 					  IN_LENGTH_DNS const int serverNameLength,
 					  OUT_PTR ERROR_INFO *errorInfo );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
@@ -1378,19 +1384,21 @@ int completeTLSHashedMAC( IN_HANDLE const CRYPT_CONTEXT md5context,
 						  IN_BUFFER( labelLength ) const char *label, 
 						  IN_RANGE( 1, 64 ) const int labelLength, 
 						  IN_BUFFER( masterSecretLen ) const BYTE *masterSecret, 
-						  IN_LENGTH_SHORT const int masterSecretLen );
+						  IN_LENGTH_SHORT_MIN( 16 ) \
+								const int masterSecretLen );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 2, 4, 5, 7 ) ) \
 int completeTLS12HashedMAC( IN_HANDLE const CRYPT_CONTEXT sha2context,
 							OUT_BUFFER( hashValuesMaxLen, *hashValuesLen ) \
 								BYTE *hashValues, 
-							IN_LENGTH_SHORT_MIN( TLS_HASHEDMAC_SIZE ) \
+							IN_LENGTH_SHORT_MIN( CRYPT_MAX_HASHSIZE ) \
 								const int hashValuesMaxLen,
 							OUT_LENGTH_BOUNDED_Z( hashValuesMaxLen ) \
 								int *hashValuesLen,
 							IN_BUFFER( labelLength ) const char *label, 
 							IN_RANGE( 1, 64 ) const int labelLength, 
 							IN_BUFFER( masterSecretLen ) const BYTE *masterSecret, 
-							IN_LENGTH_SHORT const int masterSecretLen,
+							IN_LENGTH_SHORT_MIN( 16 ) \
+								const int masterSecretLen,
 							IN_BOOL const BOOLEAN fullSizeMAC );
 
 /* Prototypes for functions in tls_ext.c */
@@ -1545,9 +1553,9 @@ int processVersionInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						OUT_OPT int *clientVersion,
 						IN_BOOL const BOOLEAN generalCheckOnly );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
-int checkPacketHeaderTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr, 
-						  INOUT_PTR STREAM *stream, 
-						  OUT_DATALENGTH_Z int *packetLength );
+int checkDataPacketHeaderTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr, 
+							  INOUT_PTR STREAM *stream, 
+							  OUT_DATALENGTH_Z int *packetLength );
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 int checkHSPacketHeader( INOUT_PTR SESSION_INFO *sessionInfoPtr, 
 						 INOUT_PTR STREAM *stream, 
@@ -1614,7 +1622,7 @@ int checkKeyexSignature( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 #ifndef CONFIG_SUITEB
 
-CHECK_RETVAL \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int getCipherSuiteInfo( OUT_PTR_PTR \
 							const CIPHERSUITE_INFO ***cipherSuiteInfoPtrPtrPtr,
 						OUT_INT_Z int *noSuiteEntries );
@@ -1704,7 +1712,7 @@ int createFinishedTLS13( OUT_BUFFER( finishedValueMaxLen, \
 							const int finishedValueMaxLen,
 						 OUT_LENGTH_BOUNDED_SHORT_Z( finishedValueMaxLen ) \
 							 int *finishedValueLen,
-						 IN_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
+						 INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 						 IN_HANDLE const CRYPT_CONTEXT iHashContext,
 						 IN_BOOL const BOOLEAN isServerFinished );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
@@ -1760,7 +1768,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int wrapPacketTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr, 
 					 INOUT_PTR STREAM *stream, 
 					 IN_LENGTH_Z const int offset,
-					 IN_RANGE( TLS_HAND_FIRST, TLS_HAND_LAST ) \
+					 IN_RANGE( TLS_MSG_FIRST, TLS_MSG_LAST ) \
 						const int packetType );
 #endif /* USE_TLS13 */
 
@@ -1769,7 +1777,7 @@ int wrapPacketTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 STDC_NONNULL_ARG( ( 1 ) ) \
 void initTLSclientProcessing( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo );
 STDC_NONNULL_ARG( ( 1 ) ) \
-void initTLSserverProcessing( TLS_HANDSHAKE_INFO *handshakeInfo );
+void initTLSserverProcessing( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo );
 
 #endif /* USE_TLS */
 

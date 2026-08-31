@@ -1,18 +1,15 @@
 /****************************************************************************
 *																			*
 *							cryptlib HTTP Routines							*
-*					  Copyright Peter Gutmann 1998-2017						*
+*					  Copyright Peter Gutmann 1998-2025						*
 *																			*
 ****************************************************************************/
 
-#include <ctype.h>
-#include <stdio.h>
+#include "crypt.h"
 #if defined( INC_ALL )
-  #include "crypt.h"
   #include "misc_rw.h"
   #include "http.h"
 #else
-  #include "crypt.h"
   #include "enc_dec/misc_rw.h"
   #include "io/http.h"
 #endif /* Compiler-specific includes */
@@ -45,11 +42,11 @@ static const HTTP_STATUS_INFO httpStatusInfo[] = {
 #else
 	{ 101, "101", "Switching Protocols", 19, CRYPT_ERROR_READ },
 #endif /* USE_WEBSOCKETS */
-	{ 110, "110", "Warning: Response is stale", 26, CRYPT_OK },
-	{ 111, "111", "Warning: Revalidation failed", 28, CRYPT_OK },
-	{ 112, "112", "Warning: Disconnected operation", 31, CRYPT_OK },
-	{ 113, "113", "Warning: Heuristic expiration", 29, CRYPT_OK },
-	{ 199, "199", "Warning: Miscellaneous warning", 30, CRYPT_OK },
+	{ 110, "110", "Warning: Response is stale", 26, CRYPT_ERROR_READ },
+	{ 111, "111", "Warning: Revalidation failed", 28, CRYPT_ERROR_READ },
+	{ 112, "112", "Warning: Disconnected operation", 31, CRYPT_ERROR_READ },
+	{ 113, "113", "Warning: Heuristic expiration", 29, CRYPT_ERROR_READ },
+	{ 199, "199", "Warning: Miscellaneous warning", 30, CRYPT_ERROR_READ },
 	{ 200, "200", "OK", 2, CRYPT_OK },
 	{ 201, "201", "Created", 7, CRYPT_ERROR_READ },
 	{ 202, "202", "Accepted", 8, CRYPT_ERROR_READ },
@@ -131,7 +128,7 @@ static const HTTP_STATUS_INFO httpStatusInfo[] = {
 	{ 551, "551", "RTSP: Option not supported", 26, CRYPT_ERROR_READ },
 	{ 0, NULL, "Unrecognised HTTP status condition", 34, CRYPT_ERROR_READ },
 		{ 0, NULL, "Unrecognised HTTP status condition", 34, CRYPT_ERROR_READ }
-	};
+	};	/* Two dummy entries for FAILSAFE_ARRAYSIZE */
 
 /****************************************************************************
 *																			*
@@ -185,8 +182,8 @@ BOOLEAN sanityCheckHttpDataInfo( const HTTP_DATA_INFO *httpDataInfo )
 		}
 	if( httpDataInfo->contentType != NULL )
 		{
-		if( httpDataInfo->contentTypeLen < 1 || \
-			httpDataInfo->contentTypeLen > CRYPT_MAX_TEXTSIZE )
+		if( !rangeCheck( httpDataInfo->contentTypeLen, \
+						 1, CRYPT_MAX_TEXTSIZE ) )
 			{
 			DEBUG_PUTS(( "sanityCheckHttpDataInfo: Content type info" ));
 			return( FALSE );
@@ -202,12 +199,10 @@ BOOLEAN sanityCheckHttpDataInfo( const HTTP_DATA_INFO *httpDataInfo )
 		}
 
 	/* Check HTTP control variables */
-	if( ( httpDataInfo->bufferResize != TRUE && \
-		  httpDataInfo->bufferResize != FALSE ) || \
-		( httpDataInfo->responseIsText != TRUE && \
-		  httpDataInfo->responseIsText != FALSE ) || \
-		httpDataInfo->reqType < STREAM_HTTPREQTYPE_NONE || \
-		httpDataInfo->reqType >= STREAM_HTTPREQTYPE_LAST )
+	if( !isBooleanValue( httpDataInfo->bufferResize ) || \
+		!isBooleanValue( httpDataInfo->responseIsText ) || \
+		!rangeCheck( httpDataInfo->reqType, STREAM_HTTPREQTYPE_NONE, \
+					 STREAM_HTTPREQTYPE_LAST - 1 ) )
 		{
 		DEBUG_PUTS(( "sanityCheckHttpDataInfo: HTTP control variables" ));
 		return( FALSE );
@@ -244,9 +239,14 @@ BOOLEAN sanityCheckHttpDataInfo( const HTTP_DATA_INFO *httpDataInfo )
 /* Initialise HTTP data info.  This is a rather complex function because it 
    has to handle reads and writes.  On read we use { buffer, bufSize } to
    read into.  On write we also use { buffer, bufSize } as our write buffer 
-   but only write dataLength bytes from that.  In addition on read we fill
-   the uriInfo with the peer's URI information, and on write we set the
-   request information (URI and other details) from the reqInfo */
+   but only write dataLength bytes from that.  This leads to a slightly
+   anomalous annotation for the buffer, it will eventually get written to
+   but for this function it's just recorded (without being modified) in the 
+   HTTP_DATA_INFO, so we make it const here.
+   
+   In addition on read we fill the uriInfo with the peer's URI information, 
+   and on write we set the request information (URI and other details) from 
+   the reqInfo */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int initHttpInfo( OUT_PTR HTTP_DATA_INFO *httpDataInfo, 
@@ -291,7 +291,8 @@ CHECK_RETVAL_PTR \
 const HTTP_STATUS_INFO *getHTTPStatusInfo( IN_INT const int httpStatus )
 	{
 	static const HTTP_STATUS_INFO defaultStatusInfo = \
-		{ 400, "400", "Bad Request", 11, CRYPT_ERROR_READ };
+		{ 400, "400", "Unrecognised HTTP status condition", 34, 
+		  CRYPT_ERROR_READ };
 	LOOP_INDEX i;
 
 	REQUIRES_N( httpStatus >= MIN_HTTP_STATUS && \
@@ -316,7 +317,13 @@ const HTTP_STATUS_INFO *getHTTPStatusInfo( IN_INT const int httpStatus )
 		return( &httpStatusInfo[ i ] );
 
 	/* We couldn't find any matching status information, return the default 
-	   status */
+	   status.  RFC 7231 section 6 says that we should treat an unrecognised
+	   xxx code as the x00 of its class, so for example 471 becomes 400, but
+	   that's for general web clients and not PKI software using HTTP 
+	   transport, so we return a 400 status code but change the 
+	   Reason-Phrase portion, which the RFC explicitly permits, "the reason 
+	   phrases listed here are only recommendations, they can be replaced by 
+	   local equivalents" */
 	return( &defaultStatusInfo );
 	}
 
@@ -336,7 +343,7 @@ int checkHTTPID( IN_BUFFER( dataLength ) const char *data,
 	REQUIRES( isShortIntegerRangeNZ( dataLength ) );
 	REQUIRES( netStream != NULL && sanityCheckNetStream( netStream ) );
 
-	if( dataLength < 8 || strCompare( data, "HTTP/1.", 7 ) )
+	if( dataLength < 8 || !strSame( data, "HTTP/1.", 7 ) )
 		return( CRYPT_ERROR_BADDATA );
 	if( data[ 7 ] == '0' )
 		SET_FLAG( netStream->nhFlags, STREAM_NHFLAG_HTTP10 );
@@ -359,7 +366,7 @@ int checkHTTPID( IN_BUFFER( dataLength ) const char *data,
    is always called with literal format strings, however some analysis tools
    will warn about possible format-string attacks */
 
-STDC_NONNULL_ARG( ( 1, 4 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 4 ) ) \
 int retTextLineError( INOUT_PTR STREAM *stream, 
 					  IN_ERROR const int status, 
 					  IN_BOOL const BOOLEAN isTextLineError, 
@@ -416,13 +423,14 @@ int sendHTTPError( INOUT_PTR STREAM *stream,
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
-	REQUIRES( httpStatus >= MIN_HTTP_STATUS && httpStatus < 600 );
+	REQUIRES( rangeCheck( httpStatus, MIN_HTTP_STATUS, MAX_HTTP_STATUS ) );
 	REQUIRES( netStream != NULL && sanityCheckNetStream( netStream ) );
 
 	/* Find the HTTP error information that corresponds to the HTTP status
 	   value */
 	httpStatusInfoPtr = getHTTPStatusInfo( httpStatus );
-	REQUIRES( httpStatusInfoPtr != NULL );
+	REQUIRES( httpStatusInfoPtr != NULL && \
+			  httpStatusInfoPtr->httpStatusString != NULL );
 
 	/* Send the error message to the peer */
 	sMemOpen( &httpStream, buffer, MIN_LINEBUF_SIZE );
@@ -442,17 +450,27 @@ int sendHTTPError( INOUT_PTR STREAM *stream,
 		   request.  This is also useful for some browsers that hang around
 		   forever waiting for content if they don't see anything following
 		   the HTTP error status */
-		swrite( &httpStream, "Content-Length: 139\r\n\r\n", 23 );
-		swrite( &httpStream,
+		swrite( &httpStream, "Content-Type: text/html\r\n", 25 );
+		swrite( &httpStream, "Content-Length: 139\r\n", 21 );
+		swrite( &httpStream, "Connection: close\r\n\r\n", 21 );
+		status = swrite( &httpStream,
 				"<html><head><title>Invalid PKI Server Request</title></head>"
 				"<body>This is a PKI messaging service, not a standard web "
 				"server.</body></html>", 139 );
 		}
-	status = swrite( &httpStream, "\r\n", 2 );
+	else
+		{
+		if( httpStatus >= 400 )
+			{
+			swrite( &httpStream, "Content-Length: 0\r\n", 19 );
+			swrite( &httpStream, "Connection: close\r\n", 19 );
+			} 
+		status = swrite( &httpStream, "\r\n", 2 );
+		}
 	if( cryptStatusOK( status ) )
-		length = stell( &httpStream );
+		status = length = stell( &httpStream );
 	sMemDisconnect( &httpStream );
-	ENSURES( cryptStatusOK( status ) );
+	ENSURES( !cryptStatusError( status ) );
 	ENSURES( isBufsizeRangeNZ( length ) );
 	return( sendHTTPData( stream, buffer, length, TRANSPORT_FLAG_FLUSH ) );
 	}

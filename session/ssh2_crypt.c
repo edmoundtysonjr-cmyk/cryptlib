@@ -235,7 +235,7 @@ static int rewriteRSASignature( const SESSION_INFO *sessionInfoPtr,
 			|<------------- sigDataMaxLength --------[...]-------->| */
 	REQUIRES( !checkOverflowSub( keySize, sigSize ) );
 	delta = keySize - sigSize;
-	ENSURES( delta > 0 && delta < 16 );
+	ENSURES( delta > 0 && delta < 16 );		/* 2^-128 chance of FP */
 	REQUIRES( !checkOverflowAdd( sigLength, delta ) );
 	if( sigLength + delta > sigDataMaxLength )
 		return( CRYPT_ERROR_OVERFLOW );
@@ -424,7 +424,7 @@ int initECDHcontextSSH( OUT_HANDLE_OPT CRYPT_CONTEXT *iCryptContext,
 
 	return( CRYPT_OK );
 	}
-#endif /* USE_ECDH */
+#endif /* USE_ECDH || USE_X25519 */
 
 /* Complete the hashing necessary to generate a cryptovariable and send it
    to a context */
@@ -493,7 +493,7 @@ static int loadCryptovariable( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
 
 #ifdef USE_SSH_CTR
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 5, 7 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4, 5, 7 ) ) \
 static int loadCTR( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					IN_PTR const HASH_FUNCTION hashFunction,
 					IN_RANGE( 20, 32 ) const int hashSize,
@@ -559,9 +559,10 @@ int initSecurityContextsSSH( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	status = krnlSendMessage( CRYPTO_OBJECT_HANDLE, 
 							  IMESSAGE_DEV_CREATEOBJECT, &createInfo, 
 							  OBJECT_TYPE_CONTEXT );
+	if( cryptStatusError( status ) )
+		return( status );
 #ifdef USE_SSH_CTR
-	if( cryptStatusOK( status ) && \
-		TEST_FLAG( sessionInfoPtr->protocolFlags, SSH_PFLAG_CTR ) )
+	if( TEST_FLAG( sessionInfoPtr->protocolFlags, SSH_PFLAG_CTR ) )
 		{
 		static const int mode = CRYPT_MODE_ECB;	/* int vs.enum */
 
@@ -718,7 +719,10 @@ int initSecurityInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							  IMESSAGE_GETATTRIBUTE, &keySize,
 							  CRYPT_CTXINFO_KEYSIZE );
 	if( cryptStatusError( status ) )
+		{
+		destroySecurityContextsSSH( sessionInfoPtr );
 		return( status );
+		}
 
 	/* Get the hash algorithm information and pre-hash the shared secret and
 	   exchange hash, which are re-used for all cryptovariables.  The
@@ -739,16 +743,21 @@ int initSecurityInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   separately.  The nonce is "A", "B", "C", ... */
 	getHashParameters( handshakeInfo->exchangeHashAlgo, 0, &hashFunction, 
 					   &hashSize, NULL );
+#ifdef USE_SSH_SSHCOM20
 	if( TEST_FLAG( sessionInfoPtr->protocolFlags, 
 				   SSH_PFLAG_NOHASHSECRET ) )
 		{
 		/* Some implementations erroneously omit the shared secret when
 		   creating the keying material.  This is suboptimal but not fatal,
-		   since the shared secret is also hashed into the exchange hash */
+		   since the shared secret is also hashed into the exchange hash,
+		   however it's also likely that this version of SSH is extinct even
+		   among OEMs who licensed and kept using 20-year-old versions of the
+		   code, so we make it a compile-time option */
 		hashFunction( initialHashInfo, NULL, 0, handshakeInfo->sessionID,
 					  handshakeInfo->sessionIDlength, HASH_STATE_START );
 		}
 	else
+#endif /* USE_SSH_SSHCOM20 */
 		{
 		STREAM stream;
 		BYTE header[ 8 + 8 ];
@@ -770,10 +779,13 @@ int initSecurityInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			status = sputc( &stream, 0 );
 			}
 		if( cryptStatusOK( status ) )
-			headerLength = stell( &stream );
+			status = headerLength = stell( &stream );
 		sMemDisconnect( &stream );
 		if( cryptStatusError( status ) )
+			{
+			destroySecurityContextsSSH( sessionInfoPtr );
 			return( status );
+			}
 		ENSURES( isShortIntegerRangeNZ( headerLength ) );
 		hashFunction( initialHashInfo, NULL, 0, header, headerLength,
 					  HASH_STATE_START );
@@ -884,7 +896,13 @@ int initSecurityInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							handshakeInfo->sessionIDlength );
 		}
 	zeroise( initialHashInfo, sizeof( HASHINFO ) );
-	return( status );
+	if( cryptStatusError( status ) )
+		{
+		destroySecurityContextsSSH( sessionInfoPtr );
+		return( status );
+		}
+
+	return( CRYPT_OK );
 	}
 
 /****************************************************************************
@@ -907,7 +925,8 @@ int hashAsString( IN_HANDLE const CRYPT_CONTEXT iHashContext,
 
 	assert( isReadPtrDynamic( data, dataLength ) );
 
-	/* If we're fuzzing then there's no crypto active */
+	/* If we're fuzzing then there's no crypto active, which includes the 
+	   hash context that the REQUIRES() is about to check */
 	FUZZ_SKIP_REMAINDER();
 
 	REQUIRES( isHandleRangeValid( iHashContext ) );
@@ -926,8 +945,12 @@ int hashAsString( IN_HANDLE const CRYPT_CONTEXT iHashContext,
 		}
 	if( cryptStatusOK( status ) )
 		{
+		const int position = stell( &stream );
+
+		REQUIRES( isIntegerRangeNZ( position ) );
+
 		status = krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH, 
-								  buffer, stell( &stream ) );
+								  buffer, position );
 		}
 	if( cryptStatusOK( status ) && !copiedToBuffer )
 		{
@@ -968,7 +991,7 @@ int hashAsMPI( IN_HANDLE const CRYPT_CONTEXT iHashContext,
 		status = sputc( &stream, 0 );
 		}
 	if( cryptStatusOK( status ) )
-		headerLength = stell( &stream );
+		status = headerLength = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1053,7 +1076,7 @@ static int macDataSSH( IN_HANDLE const CRYPT_CONTEXT iMacContext,
 		writeUint32( &stream, seqNo );
 		status = writeUint32( &stream, length );
 		if( cryptStatusOK( status ) )
-			headerLength = stell( &stream );
+			status = headerLength = stell( &stream );
 		sMemDisconnect( &stream );
 		if( cryptStatusError( status ) )
 			return( status );
@@ -1202,7 +1225,7 @@ int createMacSSH( IN_HANDLE const CRYPT_CONTEXT iMacContext,
 	BYTE mac[ CRYPT_MAX_HASHSIZE + 8 ];
 	int status;
 
-	assert( isWritePtrDynamic( data, dataLength ) );
+	assert( isWritePtrDynamic( data, dataMaxLength ) );
 
 	REQUIRES( isHandleRangeValid( iMacContext ) );
 	REQUIRES( isIntegerRange( seqNo ) );
@@ -1267,6 +1290,7 @@ int processAuthDataSigBernstein( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( packetData, packetDataLength ) );
 	
+	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
 	REQUIRES( isShortIntegerRangeNZ( packetDataLength ) );
 	REQUIRES( isBooleanValue( createSignature ) );
 		
@@ -1301,7 +1325,7 @@ int processAuthDataSigBernstein( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		sputc( &authDataStream, SSH_MSG_USERAUTH_REQUEST );
 	status = swrite( &authDataStream, packetData, packetDataLength );
 	if( cryptStatusOK( status ) )
-		authDataLength = stell( &authDataStream );
+		status = authDataLength = stell( &authDataStream );
 	sMemDisconnect( &authDataStream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1373,6 +1397,7 @@ int processAuthDataSig( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( packetData, packetDataLength ) );
 	
+	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
 	REQUIRES( isShortIntegerRangeNZ( packetDataLength ) );
 	REQUIRES( isEnumRange( pkcAlgo, CRYPT_ALGO ) );
 	REQUIRES( isBooleanValue( createSignature ) );

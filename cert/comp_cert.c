@@ -1104,7 +1104,7 @@ static int copyCertToOCSPRequest( INOUT_PTR CERT_INFO *ocspRequestInfoPtr,
 	status = writeOCSPID( &stream, certInfoPtr, 
 						  ocspRequestInfoPtr->certHash, KEYID_SIZE );
 	if( cryptStatusOK( status ) )
-		idLength = stell( &stream );
+		status = idLength = stell( &stream );
 	sMemClose( &stream );
 	if( cryptStatusError( status ) )
 		return( status );

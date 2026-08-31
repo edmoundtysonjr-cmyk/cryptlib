@@ -493,7 +493,8 @@ void safeBufferInit( INOUT_BUFFER_FIXED( bufSize ) void *buffer,
 CHECK_RETVAL_PTR \
 void *safeBufferAlloc( IN_DATALENGTH const int size );
 STDC_NONNULL_ARG( ( 1 ) ) \
-void safeBufferFree( const void *buffer );
+void safeBufferFree( IN_PTR const void *buffer,
+					 IN_DATALENGTH const int bufSize );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN safeBufferCheck( IN_BUFFER( bufSize ) const void *buffer, 
 						 IN_DATALENGTH const int bufSize );

@@ -280,9 +280,8 @@ static int readCertReqWrapper( INOUT_PTR STREAM *stream,
 							   OUT_ENUM_OPT( CRYPT_ERRTYPE ) \
 									CRYPT_ERRTYPE_TYPE *errorType )
 	{
-	const int endPos = stell( stream ) + attributeLength;
 	LOOP_INDEX attributesProcessed;
-	int status;
+	int endPos, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( attributePtrPtr, sizeof( DATAPTR_ATTRIBUTE ) ) );
@@ -292,8 +291,6 @@ static int readCertReqWrapper( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( errorType, sizeof( CRYPT_ERRTYPE_TYPE ) ) );
 
 	REQUIRES( isShortIntegerRangeNZ( attributeLength ) );
-	REQUIRES( !checkOverflowAdd( stell( stream ), attributeLength ) );
-	REQUIRES( isIntegerRangeMin( endPos, attributeLength ) );
 
 	/* Clear return values */
 	*lengthPtr = 0;
@@ -303,6 +300,13 @@ static int readCertReqWrapper( INOUT_PTR STREAM *stream,
 	/* Make sure that the length that we've been given makes sense */
 	if( !isShortIntegerRangeMin( attributeLength, MIN_ATTRIBUTE_SIZE ) )
 		return( CRYPT_ERROR_BADDATA );
+
+	/* Determine where the attribute ends */
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, attributeLength ) );
+	endPos += attributeLength;
+	REQUIRES( isIntegerRangeMin( endPos, attributeLength ) );
 
 	LOOP_MED( attributesProcessed = 0, attributesProcessed < 16, 
 			  attributesProcessed++ )
@@ -414,16 +418,17 @@ int readAttributes( INOUT_PTR STREAM *stream,
 					OUT_ENUM_OPT( CRYPT_ERRTYPE ) \
 						CRYPT_ERRTYPE_TYPE *errorType )
 	{
-	const ATTRIBUTE_TYPE attributeType = ( type == CRYPT_CERTTYPE_CMS_ATTRIBUTES || \
-										   type == CRYPT_CERTTYPE_RTCS_REQUEST || \
-										   type == CRYPT_CERTTYPE_RTCS_RESPONSE ) ? \
-										 ATTRIBUTE_CMS : ATTRIBUTE_CERTIFICATE;
+	const ATTRIBUTE_TYPE attributeType = \
+							( type == CRYPT_CERTTYPE_CMS_ATTRIBUTES || \
+							  type == CRYPT_CERTTYPE_RTCS_REQUEST || \
+							  type == CRYPT_CERTTYPE_RTCS_RESPONSE ) ? \
+							 ATTRIBUTE_CMS : ATTRIBUTE_CERTIFICATE;
 	const BOOLEAN wrapperTagSet = ( attributeType == ATTRIBUTE_CMS ) ? \
 								  TRUE : FALSE;
-#ifdef USE_CERTREQ 
-	const int attributeEndPos = stell( stream ) + attributeLength;
-#endif /* USE_CERTREQ */
 	int length, endPos, complianceLevel, attributesProcessed;
+#ifdef USE_CERTREQ 
+	int attributeEndPos;
+#endif /* USE_CERTREQ */
 	int status, LOOP_ITERATOR;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -444,14 +449,6 @@ int readAttributes( INOUT_PTR STREAM *stream,
 				 implicitly "everything that's present".
 				 See the comment below for why we check for MAX_INTLENGTH
 				 rather than MAX_INTLENGTH_SHORT */
-#ifdef USE_CERTREQ 
-	REQUIRES( ( type == CRYPT_CERTTYPE_CMS_ATTRIBUTES && \
-				isIntegerRange( attributeEndPos ) ) || \
-			  ( type != CRYPT_CERTTYPE_CMS_ATTRIBUTES && \
-				isIntegerRangeNZ( attributeEndPos ) ) );
-	REQUIRES( !checkOverflowAdd( stell( stream ), attributeLength ) );
-	ENSURES( isIntegerRangeMin( attributeEndPos, attributeLength ) );
-#endif /* USE_CERTREQ */
 
 	/* Clear return values */
 	DATAPTR_SET_PTR( attributePtrPtr, NULL );
@@ -482,6 +479,11 @@ int readAttributes( INOUT_PTR STREAM *stream,
 	/* Read the wrapper for the certificate object's attributes and 
 	   determine how far we can read */
 #ifdef USE_CERTREQ 
+	attributeEndPos = stell( stream );
+	REQUIRES( isIntegerRange( attributeEndPos ) );
+	REQUIRES( !checkOverflowAdd( attributeEndPos, attributeLength ) );
+	attributeEndPos += attributeLength;
+	ENSURES( isIntegerRangeMin( attributeEndPos, attributeLength ) );
 	if( type == CRYPT_CERTTYPE_CERTREQUEST )
 		{
 		status = readCertReqWrapper( stream, attributePtrPtr, 
@@ -514,14 +516,17 @@ int readAttributes( INOUT_PTR STREAM *stream,
 		}
 	if( !isShortIntegerRangeMin( length, MIN_ATTRIBUTE_SIZE ) )
 		return( CRYPT_ERROR_BADDATA );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
-	ENSURES( isIntegerRangeMin( endPos, length + 1 ) );
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
+	ENSURES( isIntegerRangeMin( endPos, length ) );
 
 	/* Read the collection of attributes */
 	TRACE_DEBUG(( "\nReading attributes for certificate object starting at "
 				  "offset %d.", stell( stream ) ));
-	LOOP_LARGE( attributesProcessed = 0, stell( stream ) < endPos, 
+	LOOP_LARGE( attributesProcessed = 0, 
+				( status = stell( stream ) ) < endPos, 
 				attributesProcessed++ )
 		{
 		const ATTRIBUTE_INFO *attributeInfoPtr;
@@ -532,6 +537,10 @@ int readAttributes( INOUT_PTR STREAM *stream,
 
 		ENSURES( LOOP_INVARIANT_LARGE( attributesProcessed, 0, 
 									   FAILSAFE_ITERATIONS_LARGE - 1 ) );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		/* Read the outer wrapper and determine the attribute type based on
 		   the OID */
@@ -700,11 +709,18 @@ int readAttributes( INOUT_PTR STREAM *stream,
 	   extensionRequest-encapsulated ones then we read them now */
 #ifdef USE_CERTREQ 
 	if( type == CRYPT_CERTTYPE_CERTREQUEST && \
-		stell( stream ) < attributeEndPos )
+		( status = stell( stream ) ) < attributeEndPos )
 		{
-		REQUIRES( !checkOverflowSub( attributeEndPos, stell( stream ) ) );
+		const int position = stell( stream );
+		
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
+
+		REQUIRES( isIntegerRangeNZ( position ) );
+		REQUIRES( !checkOverflowSub( attributeEndPos, position ) );
 		status = readCertReqWrapper( stream, attributePtrPtr, &length, 
-									 attributeEndPos - stell( stream ), 
+									 attributeEndPos - position, 
 									 errorInfo, errorLocus, errorType );
 		if( cryptStatusError( status ) && status != OK_SPECIAL )
 			{

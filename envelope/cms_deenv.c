@@ -15,24 +15,24 @@
   #include "envelope/envelope.h"
 #endif /* Compiler-specific includes */
 
+/* The maximum number of data items in a CMS header or trailer, or at 
+   least the maximum number of iterations in the state machine loop in
+   processPreamble() and processPostamble() */
+
+#define MAX_DATA_ITEMS		( MAX_ENV_ITEMS	+ 8 )
+
 #ifdef USE_CMS
 
-/* The maximum number of data items that we can process in the header or 
-   trailer.  This isn't an absolute limit but more a sanity check in invalid
-   headers/trailers.
-   
-   Since there may be oddball situations where this limit needs to be 
-   exceeded, we allow it to be overridden with a configuration option */
+/* OID information used to read enveloped data.  SignedData has versions 
+   { 1, 3, 4, 5 } but the last two are weirdo types (RFC 5652 section 5.1)
+   that quite probably don't actually exist and that in any case we don't 
+   know what to do with (version 5 in particular is OCSP responses stuffed
+   into the CRLs field for CAdES signatures as per RFC 5940), and similarly 
+   AuthenticatedData has { 0, 1, 3 } of which the last two are more weirdo 
+   types (RFC 5652 section 9.1) that may not exist and that we can't 
+   handle */
 
-#ifdef CONFIG_MAX_DATA_ITEMS
-  #define MAX_DATA_ITEMS	CONFIG_MAX_DATA_ITEMS
-#else
-  #define MAX_DATA_ITEMS	32
-#endif /* CONFIG_MAX_DATA_ITEMS */
-
-/* OID information used to read enveloped data */
-
-static const CMS_CONTENT_INFO oidInfoSignedData = { 0, 3 };
+static const CMS_CONTENT_INFO oidInfoSignedData = { 1, 3 };
 static const CMS_CONTENT_INFO oidInfoEnvelopedData = { 0, 4 };
 static const CMS_CONTENT_INFO oidInfoEncryptedData = { 0, 2 };
 static const CMS_CONTENT_INFO oidInfoCompressedData = { 0, 0 };
@@ -143,6 +143,7 @@ static int initExternalContentInfo( CONTENT_LIST *contentListItem,
 		CONTENT_AUTHENC_INFO *authEncInfo = &contentListItem->clAuthEncInfo;
 
 		authEncInfo->authEncAlgo = queryInfo->cryptAlgo;
+		authEncInfo->authEncKeysize = queryInfo->keySize;
 		REQUIRES( rangeCheck( queryInfo->authEncParamLength, 8, 
 							  AUTHENCPARAM_MAX_SIZE ) );
 		memcpy( authEncInfo->authEncParamData, queryInfo->authEncParamData,
@@ -176,9 +177,13 @@ static int initExternalContentInfo( CONTENT_LIST *contentListItem,
 	   parameters */
 	encrInfo->cryptAlgo = queryInfo->cryptAlgo;
 	encrInfo->cryptMode = queryInfo->cryptMode;
+	encrInfo->keySize = queryInfo->keySize;
 	if( queryInfo->ivLength > 0 )
 		{
-		REQUIRES( rangeCheck( queryInfo->ivLength, 1, CRYPT_MAX_IVSIZE ) );
+		REQUIRES( rangeCheck( queryInfo->ivLength, 1, CRYPT_MAX_HASHSIZE ) );
+							  /* saltOrIV is CRYPT_MAX_HASHSIZE, not 
+							     CRYPT_MAX_IVSIZE since it can also contain 
+							     a salt */
 		memcpy( encrInfo->saltOrIV, queryInfo->iv, queryInfo->ivLength );
 		encrInfo->saltOrIVsize = queryInfo->ivLength;
 		}
@@ -707,9 +712,16 @@ static int processHashHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 										  CRYPT_CTXINFO_BLOCKSIZE );
 				}
 			}
-		if( cryptStatusOK( status ) && \
-			actionHashAlgo == hashAlgo && \
-			actionHashParam == hashParam )
+		if( cryptStatusError( status ) )
+			{
+			/* In theory this could also be an ENSURES() since we've just 
+			   created the objects via processHashHeader(), but that was 
+			   outside this function so technically we don't know that and
+			   are treating them as generic external parameters */
+			krnlSendNotifier( iHashContext, IMESSAGE_DECREFCOUNT );
+			return( status );
+			}
+		if( actionHashAlgo == hashAlgo && actionHashParam == hashParam )
 			{
 			/* There's a duplicate action present, destroy the one that 
 			   we've just created.  If it was added explicitly by the caller 
@@ -728,9 +740,8 @@ static int processHashHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 	/* We didn't find any duplicates, append the new hash/MAC action to the 
 	   action list and remember that hashing/MACing is now active */
-	status = addAction( envelopeInfoPtr, 
-						( envelopeInfoPtr->usage == ACTION_MAC ) ? \
-							ACTION_MAC : ACTION_HASH, iHashContext );
+	status = addAction( envelopeInfoPtr, isHash ? ACTION_HASH : ACTION_MAC, 
+						iHashContext );
 	if( cryptStatusError( status ) )
 		{
 		krnlSendNotifier( iHashContext, IMESSAGE_DECREFCOUNT );
@@ -752,27 +763,42 @@ static int processHashHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 *																			*
 ****************************************************************************/
 
-/* Process EOCs that separate the payload from the trailer */
+/* Process EOCs that separate the payload from the trailer.  
+   envelope/decode:processSegment() has already consumed the EOC at the end
+   of the last segment of the payload so what's left is the encapsulation 
+   above that */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int processPayloadEOCs( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr, 
 							   INOUT_PTR STREAM *stream )
 	{
+	const int noEOCs = ( envelopeInfoPtr->usage == ACTION_CRYPT ) ? 1 : 2;
+	LOOP_INDEX i;
 	int status;
-
+	
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
+
+	REQUIRES( envelopeInfoPtr->usage != ACTION_CRYPT || \
+			  TEST_FLAG( envelopeInfoPtr->flags, ENVELOPE_FLAG_AUTHENC ) );
+			  /* AuthEnv = 1 EOC, SignedData or AuthData = 2 EOCs */
 
 	/* If the payload has an indefinite-length encoding, make sure that the
 	   required EOCs are present */
 	if( envelopeInfoPtr->payloadSize == CRYPT_UNUSED )
 		{
-		if( ( status = checkEOC( stream ) ) != TRUE || \
-			( status = checkEOC( stream ) ) != TRUE )
+		LOOP_SMALL( i = 0, i < noEOCs, i++ )
 			{
-			return( cryptStatusError( status ) ? \
-					status : CRYPT_ERROR_BADDATA );
+			ENSURES( LOOP_INVARIANT_SMALL( i, 0, noEOCs - 1 ) );
+
+			status = checkEOC( stream );
+			if( status != TRUE )
+				{
+				return( cryptStatusError( status ) ? \
+						status : CRYPT_ERROR_BADDATA );
+				}
 			}
+		ENSURES( LOOP_BOUND_OK );
 
 		return( CRYPT_OK );
 		}
@@ -864,6 +890,7 @@ static int processSignedTrailer( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	assert( isWritePtr( state, sizeof( DEENV_STATE ) ) );
 
 	REQUIRES( isBooleanValue( isFlush ) );
+	REQUIRES( envelopeInfoPtr->usage == ACTION_SIGN );
 
 	/* Read the SignedData EOC's if necessary */
 	status = processPayloadEOCs( envelopeInfoPtr, stream );
@@ -917,8 +944,11 @@ static int processMacTrailer( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	assert( isWritePtr( failedMAC, sizeof( BOOLEAN ) ) );
 
 	REQUIRES( isBooleanValue( isFlush ) );
-
-	/* Clear return value */
+	REQUIRES( envelopeInfoPtr->usage == ACTION_MAC || \
+			  ( envelopeInfoPtr->usage == ACTION_CRYPT && \
+				TEST_FLAG( envelopeInfoPtr->flags, ENVELOPE_FLAG_AUTHENC ) ) );
+				
+  	/* Clear return value */
 	*failedMAC = FALSE;
 
 	/* Read the AuthenticatedData EOCs if necessary */
@@ -1002,11 +1032,12 @@ static int processEOCTrailer( IN_PTR const ENVELOPE_INFO *envelopeInfoPtr,
 
 		case ACTION_CRYPT:
 			/* Authenticated encryption is a special case since there's a 
-			   MAC value present after the data, which means that we've 
-			   already consumed two of the four EOCs present at the end of 
-			   encrypted data in getting to the MAC value */
+			   MAC value present after the data, so the EOCs for the 
+			   EncryptedContentInfo encapsulation have already been consumed 
+			   in getting to the MAC value, leaving those for the 
+			   AuthEnvelopedData, [0] and ContentInfo */
 			if( TEST_FLAG( envelopeInfoPtr->flags, ENVELOPE_FLAG_AUTHENC ) )
-				noEOCs = 2;
+				noEOCs = 3;
 			else
 				noEOCs = 4;
 			break;
@@ -1097,6 +1128,13 @@ static int processPreamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	
 	REQUIRES( sanityCheckEnvCMSDenv( envelopeInfoPtr ) );
 
+	/* We can end up with no data left in the envelope buffer if we've 
+	   previously processed data that didn't get us out of the preamble and 
+	   the caller performs a flush, so we explicitly check for an underflow 
+	   here */
+	if( envelopeInfoPtr->bufPos <= 0 )
+		return( CRYPT_ERROR_UNDERFLOW );
+
 	sMemConnect( &stream, envelopeInfoPtr->buffer, envelopeInfoPtr->bufPos );
 
 	/* If we haven't started doing anything yet try and read the outer
@@ -1118,10 +1156,7 @@ static int processPreamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 		}
 
 	/* Keep consuming information until we either run out of input or reach 
-	   the data payload.  The limit of MAX_DATA_ITEMS header items would 
-	   never occur in any normal usage but in theory it's possible to 
-	   generate S/MIME messages with large numbers of recipients for mailing 
-	   lists so we set the limit at MAX_DATA_ITEMS */
+	   the data payload */
 	static_assert( MAX_DATA_ITEMS < FAILSAFE_ITERATIONS_MED, \
 				   "MAX_DATA_ITEMS" );
 	LOOP_MED( noHeaderItems = 0, 
@@ -1410,6 +1445,7 @@ static int processPreamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 				   only message then this is a detached signature with the 
 				   content supplied anderswhere */
 				if( envelopeInfoPtr->payloadSize == 0 && \
+					envelopeInfoPtr->usage == ACTION_SIGN && \
 					!TEST_FLAG( envelopeInfoPtr->flags, 
 								ENVELOPE_FLAG_ATTRONLY ) )
 					{
@@ -1501,7 +1537,8 @@ static int processPreamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 		}
 	ENSURES( LOOP_BOUND_OK );
 	sMemDisconnect( &stream );
-	if( noHeaderItems >= MAX_DATA_ITEMS )
+	if( state != DEENVSTATE_DONE && cryptStatusOK( status ) && \
+		noHeaderItems >= MAX_DATA_ITEMS )
 		{
 		/* Technically this would be an overflow but that's a recoverable
 		   error so we make it a BADDATA, which is really what it is */
@@ -1775,7 +1812,8 @@ static int processPostamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 			   data left to continue.  Checking at this point means that we 
 			   can provide special-case soft-error handling before we try 
 			   and read the signature data in addContentListItem() */
-			if( sMemDataLeft( &stream ) < envelopeInfoPtr->hdrSetLength && \
+			if( envelopeInfoPtr->hdrSetLength != CRYPT_UNUSED && \
+				sMemDataLeft( &stream ) < envelopeInfoPtr->hdrSetLength && \
 				checkSoftError( CRYPT_ERROR_UNDERFLOW, isFlush ) )
 				{
 				status = OK_SPECIAL;
@@ -1858,7 +1896,8 @@ static int processPostamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		}
 	ENSURES( LOOP_BOUND_OK );
 	sMemDisconnect( &stream );
-	if( noTrailerItems >= MAX_DATA_ITEMS )
+	if( state != DEENVSTATE_DONE && cryptStatusOK( status ) && \
+		noTrailerItems >= MAX_DATA_ITEMS )
 		{
 		/* We can only go once through the loop on a MAC check so we 
 		   shouldn't get here with a failed MAC */
@@ -1919,6 +1958,7 @@ static int processPostamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	   what to do with them, make sure that we can actually continue beyond 
 	   this point */
 	if( state == DEENVSTATE_DONE && \
+		envelopeInfoPtr->usage == ACTION_SIGN && \
 		TEST_FLAG( envelopeInfoPtr->flags, ENVELOPE_FLAG_ATTRSKIPPED ) )
 		{
 		status = checkContinueDeenv( envelopeInfoPtr );

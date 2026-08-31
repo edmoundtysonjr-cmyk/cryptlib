@@ -57,9 +57,9 @@ static int hashKeyData( IN_HANDLE const CRYPT_CONTEXT iHashContext,
 	sputc( &stream, 0x99 );		/* Pubkey CTB, 16-bit length */
 	status = writeUint16( &stream, keyDataLength );
 	if( cryptStatusOK( status ) )
-		headerLength = stell( &stream );
+		status = headerLength = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( cryptStatusOK( status ) );
+	ENSURES( !cryptStatusError( status ) );
 	ENSURES( isShortIntegerRangeNZ( headerLength ) );
 
 	/* Hash the dummy header and the key data payload */
@@ -94,9 +94,9 @@ static int hashUserID( IN_HANDLE const CRYPT_CONTEXT iHashContext,
 	sputc( &stream, 0xB4 );		/* UserID CTB, 32-bit length */
 	status = writeUint32( &stream, userIDlength );
 	if( cryptStatusOK( status ) )
-		headerLength = stell( &stream );
+		status = headerLength = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( cryptStatusOK( status ) );
+	ENSURES( !cryptStatusError( status ) );
 	ENSURES( isShortIntegerRangeNZ( headerLength ) );
 
 	/* Hash the dummy header and the attributes and userID packet payload */
@@ -241,8 +241,11 @@ static int getUserID( IN_HANDLE const CRYPT_CONTEXT cryptHandle,
 	status = swrite( &stream, ">", 1 );
 	if( cryptStatusOK( status ) )
 		{
-		REQUIRES( !checkOverflowAdd( *userIDlength, stell( &stream ) ) );
-		*userIDlength += stell( &stream );
+		const int position = stell( &stream );
+
+		REQUIRES( isIntegerRangeNZ( position ) );
+		REQUIRES( !checkOverflowAdd( *userIDlength, position ) );
+		*userIDlength += position;
 		}
 	sMemDisconnect( &stream );
 	ENSURES( cryptStatusOK( status ) );
@@ -382,10 +385,10 @@ static int createSignedAttributes( OUT_BUFFER( attributeMaxLength, \
 	status = sputc( &stream, 1 );
 
 	if( cryptStatusOK( status ) )
-		*attributeLength = stell( &stream );
+		status = *attributeLength = stell( &stream );
 	sMemDisconnect( &stream );
 
-	return( status );
+	return( cryptStatusError( status ) ? status : CRYPT_OK );
 	}
 
 /* Create a subpacket signature to bind the subpacket to the main key 
@@ -661,7 +664,7 @@ int pgpWritePubkey( INOUT_PTR PGP_INFO *pgpInfoPtr,
 			}
 		}
 	if( cryptStatusOK( status ) )
-		keyDataLength = stell( &stream );
+		status = keyDataLength = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		{

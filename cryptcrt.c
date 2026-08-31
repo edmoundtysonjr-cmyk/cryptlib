@@ -991,7 +991,7 @@ static int certificateMessageFunction( INOUT_PTR TYPECAST( CERT_INFO * ) \
 			LOOP_INDEX i;
 			const int chainEnd = certInfoPtr->cCertCert->chainEnd;
 
-			ENSURES( chainEnd >= 0 && chainEnd < MAX_CHAINLENGTH );
+			ENSURES( chainEnd >= 0 && chainEnd <= MAX_CHAINLENGTH );
 			LOOP_EXT( i = 0, i < chainEnd, i++, MAX_CHAINLENGTH )
 				{
 				ENSURES( LOOP_INVARIANT_EXT( i, 0, chainEnd - 1,

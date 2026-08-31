@@ -315,7 +315,8 @@ static int processCertWrapper( INOUT_PTR STREAM *stream,
 		{ OID_CMS_DATA, CRYPT_OK, NULL },
 		{ NULL, 0 }, { NULL, 0 }
 		};
-	int length, setLength, innerLength, innerOffset DUMMY_INIT, status;
+	int length, setLength, innerLength, innerOffset DUMMY_INIT;
+	int position, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( objectOffset, sizeof( int ) ) );
@@ -404,12 +405,12 @@ static int processCertWrapper( INOUT_PTR STREAM *stream,
 	/* Adjust for the [0] { ... } wrapper we've just read that, returning 
 	   the location and length of the collection of certificates without the 
 	   encapsulation */
-	*objectOffset = stell( stream );
-	ENSURES( isShortIntegerRangeNZ( *objectOffset ) );
-	REQUIRES( !checkOverflowSub( *objectOffset, innerOffset ) );
-	REQUIRES( !checkOverflowSub( innerLength, 
-								 *objectOffset - innerOffset ) );
-	innerLength -= *objectOffset - innerOffset;
+	position = stell( stream );
+	ENSURES( isShortIntegerRangeNZ( position ) );
+	REQUIRES( !checkOverflowSub( position, innerOffset ) );
+	*objectOffset = position;
+	REQUIRES( !checkOverflowSub( innerLength, position - innerOffset ) );
+	innerLength -= position - innerOffset;
 	if( !isIntegerRangeMin( innerLength, MIN_CERTSIZE ) )
 		return( CRYPT_ERROR_BADDATA );
 	*objectLength = innerLength;

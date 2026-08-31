@@ -796,13 +796,13 @@ int exportPrivateKeyData( OUT_BUFFER_OPT( privKeyDataMaxLength, \
 	status = writePrivateKeyFunction( &stream, contextInfoPtr, formatType, 
 									  accessKey, accessKeyLen );
 	if( cryptStatusOK( status ) )
-		*privKeyDataLength = stell( &stream );
+		status = *privKeyDataLength = stell( &stream );
 	if( privKeyData == NULL )
 		sMemClose( &stream );
 	else
 		sMemDisconnect( &stream );
 	releaseObject( iCryptContext, ACCESS_CHECK_KEYACCESS, NULL );
-	return( status );
+	return( cryptStatusError( status ) ? status : CRYPT_OK );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \

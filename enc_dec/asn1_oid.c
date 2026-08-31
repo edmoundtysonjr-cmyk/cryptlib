@@ -342,24 +342,26 @@ static const ALGOID_INFO algoIDinfoTbl[] = {
 	  MKDESC( "Another desCFB (0 2 262 1 10 1 2 2 5)" ) },
   #endif /* USE_CFB */
 #endif /* USE_DES */
+#ifdef USE_3DES
 	{ CRYPT_ALGO_3DES, CRYPT_MODE_CBC, 0, ALGOID_CLASS_CRYPT,
 	  MKOID( "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x03\x07" )
 	  MKDESC( "des-EDE3-CBC (1 2 840 113549 3 7)" ) },
+	{ CRYPT_ALGO_3DES, CRYPT_MODE_CBC, 0, ALGOID_CLASS_CRYPT,
+	  MKOID( "\x06\x09\x02\x82\x06\x01\x0A\x01\x02\x03\x02" )
+	  MKDESC( "Another des3CBC (0 2 262 1 10 1 2 3 2)" ) },
   #ifdef USE_CFB
 	{ CRYPT_ALGO_3DES, CRYPT_MODE_CFB, 0, ALGOID_CLASS_CRYPT,
 	  MKOID( "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x03\x09" )
 	  MKDESC( "des-EDE3-CFB (1 2 840 113549 3 9)" ) },
   #endif /* USE_CFB */
-	{ CRYPT_ALGO_3DES, CRYPT_MODE_CBC, 0, ALGOID_CLASS_CRYPT,
-	  MKOID( "\x06\x09\x02\x82\x06\x01\x0A\x01\x02\x03\x02" )
-	  MKDESC( "Another des3CBC (0 2 262 1 10 1 2 3 2)" ) },
+#endif /* USE_3DES */
 #ifdef USE_RC2
-	{ CRYPT_ALGO_RC2, CRYPT_MODE_CBC, 0, ALGOID_CLASS_CRYPT,
-	  MKOID( "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x03\x02" )
-	  MKDESC( "rc2CBC (1 2 840 113549 3 2)" ) },
 	{ CRYPT_ALGO_RC2, CRYPT_MODE_ECB, 0, ALGOID_CLASS_CRYPT,
 	  MKOID( "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x03\x03" )
 	  MKDESC( "rc2ECB (1 2 840 113549 3 3)" ) },
+	{ CRYPT_ALGO_RC2, CRYPT_MODE_CBC, 0, ALGOID_CLASS_CRYPT,
+	  MKOID( "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x03\x02" )
+	  MKDESC( "rc2CBC (1 2 840 113549 3 2)" ) },
 #endif /* USE_RC2 */
 #ifdef USE_RC4
 	{ CRYPT_ALGO_RC4, CRYPT_MODE_CFB, 0, ALGOID_CLASS_CRYPT,
@@ -416,6 +418,9 @@ static int getAlgoIDinfo( const ALGOID_INFO **algoIDinfoPtrPtr,
 	MESSAGE_CATALOGQUERY_INFO catalogQueryInfo;
 	int status;
 #endif /* CRYPTO_OBJECT_HANDLE != SYSTEM_OBJECT_HANDLE */
+
+	assert( isReadPtr( algoIDinfoPtrPtr, sizeof( ALGOID_INFO * ) ) );
+	assert( isWritePtr( algoIDinfoNoEntries, sizeof( int ) ) );
 
 	/* Clear return values */
 	*algoIDinfoPtrPtr = NULL;
@@ -479,7 +484,7 @@ const BYTE *algorithmToOID( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 			}
 		}
 	ENSURES_N( LOOP_BOUND_OK );
-	ENSURES_N( i < algoIDinfoSize );			/* Ensures oid != NULL */
+	ENSURES_N( i < algoIDinfoSize );
 
 	/* If there are no further parameters present then we're done */
 	if( algoIDparams == NULL )
@@ -550,7 +555,7 @@ const BYTE *algorithmToOID( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 				}
 			}
 		ENSURES_N( LOOP_BOUND_OK );
-		ENSURES_N( i < algoIDinfoSize );		/* Ensures oid != NULL */
+		ENSURES_N( i < algoIDinfoSize );
 		if( algoIDparams->cryptKeySize != 0 )
 			{
 			oid = NULL;
@@ -567,7 +572,7 @@ const BYTE *algorithmToOID( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 					}
 				}
 			ENSURES_N( LOOP_BOUND_OK );
-			ENSURES_N( i < algoIDinfoSize );	/* Ensures oid != NULL */
+			ENSURES_N( i < algoIDinfoSize );
 			}
 		}
 
@@ -588,7 +593,7 @@ const BYTE *algorithmToOID( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 				}
 			}
 		ENSURES_N( LOOP_BOUND_OK );
-		ENSURES_N( i < algoIDinfoSize );		/* Ensures oid != NULL */
+		ENSURES_N( i < algoIDinfoSize );
 		}
 
 	/* If it's a signature algorithm, find the set of entries for the hash 
@@ -610,7 +615,31 @@ const BYTE *algorithmToOID( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 				}
 			}
 		ENSURES_N( LOOP_BOUND_OK );
-		ENSURES_N( i < algoIDinfoSize );		/* Ensures oid != NULL */
+		ENSURES_N( i < algoIDinfoSize );
+		}
+
+	/* If it's a special algorithm, find the set of entries for the mode key 
+	   size */
+	if( isSpecialAlgo( cryptAlgo ) )
+		{
+		if( algoIDparams->cryptKeySize != 0 )
+			{
+			oid = NULL;
+			LOOP_LARGE_CHECKINC( i < algoIDinfoSize && \
+										algoIDinfo[ i ].algorithm == cryptAlgo,
+								 i++ )
+				{
+				ENSURES_N( LOOP_INVARIANT_LARGE_XXX( i, 0, algoIDinfoSize - 1 ) );
+
+				if( algoIDinfo[ i ].parameter == algoIDparams->cryptKeySize )
+					{
+					oid = algoIDinfo[ i ].oid;
+					break;
+					}
+				}
+			ENSURES_N( LOOP_BOUND_OK );
+			ENSURES_N( i < algoIDinfoSize );
+			}
 		}
 
 	if( oid != NULL )
@@ -645,8 +674,7 @@ int oidToAlgorithm( IN_BUFFER( oidLength ) const BYTE *oid,
 	/* Look for a matching OID.  For quick-reject matching we check the last 
 	   byte of the OID (large groups of OIDs have common prefixes due to 
 	   being in the same arc), this rejects the majority of mismatches 
-	   without requiring a full comparison, however it also means that we
-	   can't use matchOID() for the matching */
+	   without requiring a full comparison */
 	status = getAlgoIDinfo( &algoIDinfo, &algoIDinfoSize );
 	if( cryptStatusError( status ) )
 		return( status );

@@ -468,7 +468,7 @@ static int sendClientRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	const TSP_INFO *tspInfo = sessionInfoPtr->sessionTSP;
 	STREAM stream;
 	void *msgImprintPtr;
-	int status;
+	int position DUMMY_INIT, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( protocolInfo, sizeof( TSP_PROTOCOL_INFO ) ) );
@@ -520,11 +520,12 @@ static int sendClientRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			protocolInfo->msgImprintSize );
 	status = writeBoolean( &stream, TRUE, DEFAULT_TAG );
 	if( cryptStatusOK( status ) )
-		sessionInfoPtr->receiveBufEnd = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
-	ENSURES( isShortIntegerRangeNZ( sessionInfoPtr->receiveBufEnd ) );
+	ENSURES( isShortIntegerRangeNZ( position ) );
+	sessionInfoPtr->receiveBufEnd = position;
 	DEBUG_DUMP_FILE( "tsa_req", sessionInfoPtr->receiveBuffer,
 					 sessionInfoPtr->receiveBufEnd );
 
@@ -543,7 +544,7 @@ static int readServerResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	{
 	STREAM stream;
 	CFI_CHECK_TYPE CFI_CHECK_VALUE = CFI_CHECK_INIT;
-	int status;
+	int position, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( protocolInfo, sizeof( TSP_PROTOCOL_INFO ) ) );
@@ -594,8 +595,9 @@ static int readServerResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	/* Remember where the encoded timestamp payload starts in the buffer so
 	   that we can return it to the caller */
-	sessionInfoPtr->receiveBufPos = stell( &stream );
-	REQUIRES( isIntegerRangeNZ( sessionInfoPtr->receiveBufPos ) );
+	position = stell( &stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	sessionInfoPtr->receiveBufPos = position;
 
 	/* Make sure that we got back a timestamp of the value that we sent.  
 	   This check means that it works with and without nonces (in theory 
@@ -792,7 +794,7 @@ static int sendServerResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						 protocolInfo->nonceSize );
 		}
 	if( cryptStatusOK( status ) )
-		tstLength = stell( &stream );
+		status = tstLength = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		{

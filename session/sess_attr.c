@@ -261,7 +261,7 @@ static int addUrl( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	/* We can only use autodetection with PKI services */
 	if( urlInfo.hostLen == 12 && \
-		!strCompare( urlInfo.host, "[Autodetect]", urlInfo.hostLen ) && \
+		strSame( urlInfo.host, "[Autodetect]", urlInfo.hostLen ) && \
 		!protocolInfo->isReqResp )
 		{
 		retExt( CRYPT_ARGERROR_STR1,
@@ -1015,7 +1015,15 @@ int setSessionAttribute( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			return( CRYPT_OK );
 
 		case CRYPT_ATTRIBUTE_BUFFERSIZE:
-			REQUIRES( !TEST_FLAG( sessionInfoPtr->flags, SESSION_FLAG_ISOPEN ) );
+			/* We can't change the buffer size once it's been allocated.  This
+			   check is independent of the session state, for example we can 
+			   still have the buffer allocated without SESSION_FLAG_ISOPEN 
+			   being set if the open fails halfway through */
+			if( sessionInfoPtr->receiveBuffer != NULL )
+				{
+				return( exitErrorInited( sessionInfoPtr, 
+										 CRYPT_ATTRIBUTE_BUFFERSIZE ) );
+				}
 
 			sessionInfoPtr->receiveBufSize = value;
 			return( CRYPT_OK );

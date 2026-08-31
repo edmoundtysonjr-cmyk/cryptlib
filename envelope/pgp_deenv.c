@@ -15,18 +15,11 @@
 
 #ifdef USE_PGP
 
-/* The maximum number of data items that we can process in the header or 
-   trailer.  This isn't an absolute limit but more a sanity check in invalid
-   headers/trailers.
-   
-   Since there may be oddball situations where this limit needs to be 
-   exceeded, we allow it to be overridden with a configuration option */
+/* The maximum number of data items in a PGP header or trailer, or at 
+   least the maximum number of iterations in the state machine loop in
+   processPreamble() and processPostamble() */
 
-#ifdef CONFIG_MAX_DATA_ITEMS
-  #define MAX_DATA_ITEMS	CONFIG_MAX_DATA_ITEMS
-#else
-  #define MAX_DATA_ITEMS	16
-#endif /* CONFIG_MAX_DATA_ITEMS */
+#define MAX_DATA_ITEMS		MAX_ENV_ITEMS
 
 /****************************************************************************
 *																			*
@@ -378,6 +371,7 @@ static int addContentListItem( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		   start and then another packet with more data at the end, so we
 		   can't guarantee the presence of object data unless it's the 
 		   second of the two */
+		REQUIRES( DATAPTR_ISVALID( contentListItem->object ) );
 		REQUIRES( objectPtr != NULL || \
 				  ( queryInfo.iAndSStart == 0 && \
 					queryInfo.attributeStart == 0 && \
@@ -941,11 +935,14 @@ static int processEncapsDataHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		return( CRYPT_ERROR_UNDERFLOW );
 
 	/* Read the encapsulated-data header information and see what we've 
-	   got */
+	   got.  This time the minimum length is 7 bytes because the length
+	   field doesn't include the CTB or length itself, so we need at
+	   least 1 + 1 + 4 + 1 = 7 bytes for a 1-byte length, 0-length filename,
+	   4-byte timestamp, and 1 byte of content */
 	sMemConnect( &headerStream, buffer, length );
 	status = getPacketInfo( &headerStream, envelopeInfoPtr, 
 							&encapsPacketType, &encapsPacketLength, 
-							&encapsLengthType, 8, FALSE );
+							&encapsLengthType, 7, FALSE );
 	if( cryptStatusError( status ) )
 		{
 		sMemDisconnect( &headerStream );
@@ -1012,11 +1009,11 @@ static int processEncapsDataHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 				status = CRYPT_ERROR_BADDATA;
 			else
 				{
-				envelopeInfoPtr->oobDataLeft = stell( &headerStream ) + \
-											   filenameLen + 4;
+				const int position = stell( &headerStream );
 
-				REQUIRES( !checkOverflowAdd3( stell( &headerStream ),
-											  filenameLen, 4 ) );
+				REQUIRES( isShortIntegerRangeNZ( position ) );
+				REQUIRES( !checkOverflowAdd3( position, filenameLen, 4 ) );
+				envelopeInfoPtr->oobDataLeft = position + filenameLen + 4;
 				ENSURES( isIntegerRangeMin( envelopeInfoPtr->oobDataLeft, 
 											filenameLen + 4 ) );
 				}
@@ -1140,7 +1137,8 @@ static int processPacketHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	if( lengthType == PGP_LENGTH_INDEFINITE )
 		{
 		/* Only packets containing data payloads can have indefinite 
-		   lengths */
+		   lengths.  Note that this rejects new-format indefinite-length
+		   compressed data packets, which we don't handle yet */
 		if( packetType != PGP_PACKET_DATA && \
 			packetType != PGP_PACKET_ENCR_MDC && \
 			packetType != PGP_PACKET_ENCR )
@@ -1437,14 +1435,16 @@ static int processEncryptedPacket( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	CRYPT_CONTEXT iMdcContext = CRYPT_UNUSED;
 	const ACTION_LIST *actionListPtr;
 	BYTE ivInfoBuffer[ CRYPT_MAX_IVSIZE + 2 + 8 ];
+	const int startPos = stell( stream );
 	int ivSize, status;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	
 	REQUIRES( isEnumRange( state, PGP_DEENVSTATE ) );
-	REQUIRES( DATAPTR_ISVALID( envelopeInfoPtr->actionList ) );
+	REQUIRES( isBufsizeRange( startPos ) );
 
+	REQUIRES( DATAPTR_ISVALID( envelopeInfoPtr->actionList ) );
 	actionListPtr = DATAPTR_GET( envelopeInfoPtr->actionList );
 	ENSURES( actionListPtr == NULL || \
 			 sanityCheckActionList( actionListPtr ) );
@@ -1531,9 +1531,13 @@ static int processEncryptedPacket( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	   processed */
 	if( envelopeInfoPtr->payloadSize != CRYPT_UNUSED )
 		{
+		const int position = stell( stream );
+
+		REQUIRES( isBufsizeRangeNZ( position ) );
+		REQUIRES( !checkOverflowSub( position, startPos ) );
 		REQUIRES( !checkOverflowSub( envelopeInfoPtr->payloadSize, 
-									 stell( stream ) ) );
-		envelopeInfoPtr->payloadSize -= stell( stream );
+									 position - startPos ) );
+		envelopeInfoPtr->payloadSize -= position - startPos;
 		}
 
 	return( CRYPT_OK );
@@ -1967,14 +1971,28 @@ static int processPreamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 						const int zStreamMsgLen = \
 								strnlen_s( envelopeInfoPtr->zStream.msg,
 										   128 - 33 );
+						int errorStringLen;
 
-						REQUIRES( boundsCheck( 33, zStreamMsgLen, 128 ) ); 
-						memcpy( errorString, "Invalid zlib compressed "
-											 "content: ", 33 );
-						memcpy( errorString + 33, envelopeInfoPtr->zStream.msg,
-								zStreamMsgLen );
+						if( zStreamMsgLen > 0 )
+							{
+							REQUIRES( boundsCheck( 33, zStreamMsgLen, 128 ) ); 
+							memcpy( errorString, "Invalid zlib compressed "
+												 "content: ", 33 );
+							memcpy( errorString + 33, 
+									envelopeInfoPtr->zStream.msg,
+									zStreamMsgLen );
+							REQUIRES( !checkOverflowAdd( 33, zStreamMsgLen ) );
+							errorStringLen = 33 + zStreamMsgLen;
+							}
+						else
+							{
+							REQUIRES( boundsCheckZ( 0, 31, 128 ) ); 
+							memcpy( errorString, "Invalid zlib compressed "
+												 "content", 31 );
+							errorStringLen = 31;
+							}
 						setErrorString( ENVELOPE_ERRINFO, errorString, 
-										33 + zStreamMsgLen );
+										errorStringLen );
 						break;
 						}
 #endif /* USE_COMPRESSION */
@@ -1991,7 +2009,7 @@ static int processPreamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 		}
 	ENSURES( LOOP_BOUND_OK );
 	sMemDisconnect( &stream );
-	if( packetsSeen >= MAX_DATA_ITEMS )
+	if( state != PGP_DEENVSTATE_DONE && packetsSeen >= MAX_DATA_ITEMS )
 		{
 		/* Technically this would be an overflow but that's a recoverable
 		   error so we make it a BADDATA, which is really what it is */

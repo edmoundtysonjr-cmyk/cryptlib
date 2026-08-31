@@ -261,8 +261,10 @@ static int readObjectAttributes( INOUT_PTR STREAM *stream,
 	status = readSet( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 
 	/* Read the collection of attributes */

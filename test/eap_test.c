@@ -516,6 +516,10 @@ static int testEAPSubprotocol( const PROTOCOL_TYPE protocolType,
 
 int testEAP( void )
 	{
+	testEAPSubprotocol( PROTOCOL_EAPTTLS, AUTH_CHAP, TEST_NORMAL, FALSE );
+	testEAPSubprotocol( PROTOCOL_EAPTTLS, AUTH_CHAP, TEST_NORMAL, FALSE );
+	testEAPSubprotocol( PROTOCOL_EAPTTLS, AUTH_CHAP, TEST_NORMAL, FALSE );
+
 #if 0	/* RADIUS ping */
 	testEAPSubprotocol( PROTOCOL_RADIUSPING, AUTH_PAP, TEST_NORMAL, FALSE );
 #endif 

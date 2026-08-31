@@ -11,10 +11,6 @@
   #include "envelope/envelope.h"
 #endif /* Compiler-specific includes */
 
-/* The maximum number of actions that we can add to an action list */
-
-#define MAX_ACTIONS		( FAILSAFE_ITERATIONS_MED - 1 )
-
 #ifdef USE_ENVELOPES
 
 /****************************************************************************
@@ -250,16 +246,25 @@ BOOLEAN moreActionsPossible( IN_PTR_OPT const ACTION_LIST *actionListPtr )
 	assert( actionListPtr == NULL || \
 			isReadPtr( actionListPtr, sizeof( ACTION_LIST ) ) );
 
+	static_assert( MAX_ENV_ITEMS < FAILSAFE_ITERATIONS_MED,
+				   "MAX_ENV_ITEMS more than loop limit "
+				   "FAILSAFE_ITERATIONS_MED" );
+
 	LOOP_MED( actionCount = 0,
-			  actionListPtr != NULL && actionCount < MAX_ACTIONS,
-			  ( actionListPtr = DATAPTR_GET( actionListPtr->next ), \
-			    actionCount++ ) )
+			  actionListPtr != NULL && actionCount < MAX_ENV_ITEMS,
+			  actionCount++ )
 		{
-		ENSURES_B( LOOP_INVARIANT_MED( actionCount, 0, MAX_ACTIONS - 1 ) );
+		ENSURES_B( LOOP_INVARIANT_MED( actionCount, 0, MAX_ENV_ITEMS - 1 ) );
+
+		/* This both fetches the next item and checks that the list is 
+		   valid.  On a corrupted list we return FALSE, so nothing more will
+		   be done with it */
+		REQUIRES_B( DATAPTR_ISVALID( actionListPtr->next ) );
+		actionListPtr = DATAPTR_GET( actionListPtr->next );
 		}
 	ENSURES_B( LOOP_BOUND_OK );
 
-	return( ( actionCount < MAX_ACTIONS ) ? TRUE : FALSE );
+	return( ( actionCount < MAX_ENV_ITEMS ) ? TRUE : FALSE );
 	}
 
 /* Add a new action to the end of an action group in an action list */
@@ -314,6 +319,12 @@ static int createNewAction( OUT_OPT_PTR_COND ACTION_LIST **newActionPtrPtr,
 		default:
 			retIntError();
 		}
+
+	/* Make sure that we can still add another action.  This should have 
+	   already been checked by the caller long before getting here but we 
+	   perform an extra check just in case */
+	if( !moreActionsPossible( actionListPtr ) )
+		return( CRYPT_ERROR_OVERFLOW );
 
 	/* Create the new action list item */
 	if( ( newItem = getMemPool( envelopeInfoPtr->memPoolState, \
@@ -433,7 +444,7 @@ static void deleteActionListItem( INOUT_PTR void *memPoolStatePtr,
 	freeMemPool( memPoolStatePtr, actionListItem );
 	}
 
-STDC_NONNULL_ARG( ( 1, 2 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int deleteAction( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,	
 						 INOUT_PTR ACTION_LIST *actionListItem )
 	{
@@ -474,7 +485,7 @@ static void deleteActionList( INOUT_PTR void *memPoolStatePtr,
 	int LOOP_ITERATOR;
 
 	assert( isWritePtr( memPoolStatePtr, sizeof( MEMPOOL_STATE ) ) );
-	assert( isReadPtr( actionListPtr, sizeof( ACTION_LIST ) ) );
+	assert( isWritePtr( actionListPtr, sizeof( ACTION_LIST ) ) );
 
 	LOOP_MED_WHILE( actionListPtr != NULL )
 		{
@@ -524,7 +535,7 @@ void deleteActionLists( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 /* Delete any orphaned actions, for example automatically-added hash actions
    that were overridden by user-supplied alternate actions */
 
-STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int deleteUnusedActions( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	{
 	LOOP_INDEX_PTR ACTION_LIST *actionListPtr;
@@ -768,26 +779,49 @@ int checkActionIndirect( IN_PTR const ACTION_LIST *actionListStart,
    consistent with the usage (and each other).  We perform the latter type 
    of check, which is somewhat simpler.  The requirements that we enforce 
    are:
+			|	Pre		|	In					|	Post	|
+	--------+-----------+-----------------------+-----------+-----
+	  SIG	|	  -		|	Hash				|	 Sig	| CMS
+			|	  -		|	Hash				|	  -		| CMS, PGP, de-env,
+			|			|						|			|  pre-signature
+			|	  -		|  1x Hash				|  1x Sig	| PGP
+	--------+-----------+-----------------------+-----------+-----
+	  MAC	| Keyex,PKC	|  1x MAC				|	  -		| CMS
+			|	  -		|  1x MAC				|	  -		| CMS, de-env
+			|	  -		|	  -					|	  -		| PGP
+	--------+-----------+-----------------------+-----------+-----
+	  COPR	|	  -		|	  -					|	  -		| CMS, PGP
+	--------+-----------+-----------------------+-----------+-----
+	  ENCR	| Keyex,PKC	|  1x Crypt				|	  -		| CMS
+			|	PKC,-	|  1x Crypt				|	  -		| PGP
+	--------+-----------+-----------------------+-----------+-----
+	 AUTHENC| Keyex,PKC	| Gen.secret,Crypt,MAC	|	  -		| CMS, env
+			|	  -		| Crypt,MAC				|	  -		| CMS, de-env
+			|	PKC,-	| Crypt,Hash			|	  -		| PGP (MDC)
 
-			|	Pre		|	In		|	Post	|
-	--------+-----------+-----------+-----------+-----
-	  SIG	|	  -		|	Hash	|	 Sig	| CMS
-			|	  -		| 1x Hash	|  1x Sig	| PGP
-	--------+-----------+-----------+-----------+-----
-	  MAC	| Keyex,PKC	|  1x MAC	|	  -		| CMS
-			|	  -		|	  -		|	  -		| PGP
-	--------+-----------+-----------+-----------+-----
-	  COPR	|	  -		|	  -		|	  -		| CMS
-			|	  -		|	  -		|	  -		| PGP
-	--------+-----------+-----------+-----------+-----
-	  ENCR	| Keyex,PKC	|	Crypt	|	  -		| CMS
-			|	 PKC	| 1x Crypt	|	  -		| PGP
-
-   In the case of ENCR the pre-actions can be absent if we're using raw 
-   session-key encryption */
+   In the case of ENCR the pre-actions can be absent if we're using raw
+   session-key encryption.  In the case of PGP the encryption action can be
+   created either by a PKC or have the session key created directly from a 
+   password, so the pre-action is optional and the PGP encryption row is
+   checked by two different paths depending on whether there's a PKC pre-
+   action or not.
+   
+   Note that pre- and post-actions are only created when enveloping so any 
+   row with pre-actions present is an enveloping one, which is why the 
+   AUTHENC de-enveloping row has none.  For that case the generic-secret 
+   context is used to derive the encryption and MAC contexts and then 
+   destroyed.
+   
+   Note also that for the PGP case we don't apply the check as per
+   envelope/res_env.c:checkPgpUsage() to ensure that only one of { PKC, 
+   session-key } is present because we're being called at a later point 
+   where the session key may have been directly generated in response to 
+   the PKC action being present (envelope/pgp_env.c:preEnvelopeEncrypt() 
+   calling createSessionKey()) rather than derived from a password, and 
+   therefore legitimately present */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN checkActions( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
+BOOLEAN checkActions( IN_PTR const ENVELOPE_INFO *envelopeInfoPtr )
 	{
 	const ACTION_LIST *preActionListPtr = \
 					DATAPTR_GET( envelopeInfoPtr->preActionList );
@@ -798,7 +832,7 @@ BOOLEAN checkActions( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	const ACTION_LIST *actionListPtrNext;
 	LOOP_INDEX_PTR const ACTION_LIST *actionListCursor;
 
-	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
+	assert( isReadPtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 	assert( preActionListPtr == NULL || \
 			isReadPtr( preActionListPtr, sizeof( ACTION_LIST ) ) );
 	assert( actionListPtr == NULL || \
@@ -824,7 +858,7 @@ BOOLEAN checkActions( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 
 		return( TRUE );
 		}
-	REQUIRES_B( DATAPTR_ISVALID( actionListPtr->next ) );
+	REQUIRES_B( sanityCheckActionList( actionListPtr ) );
 	actionListPtrNext = DATAPTR_GET( actionListPtr->next );
 	REQUIRES_B( actionListPtrNext == NULL || \
 				sanityCheckActionList( actionListPtrNext ) );
@@ -878,6 +912,11 @@ BOOLEAN checkActions( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 		   hash action for encryption with MDC */
 		if( envelopeInfoPtr->type == CRYPT_FORMAT_PGP )
 			{
+			/* PGP can't MAC, so the overall envelope usage has to be 
+			   encryption */
+			if( envelopeInfoPtr->usage != ACTION_CRYPT )
+				return( FALSE );
+
 			if( actionListPtr->action != ACTION_CRYPT )
 				return( FALSE );
 			if( actionListPtrNext != NULL )
@@ -927,31 +966,43 @@ BOOLEAN checkActions( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 		ENSURES_B( LOOP_BOUND_OK );
 
 		/* Then we make sure that what's present follows the requirements 
-		   given above */
+		   given above and is consistent with the envelope usage.  Since 
+		   pre-actions are only created when enveloping, this is always the 
+		   enveloping case */
 		if( genericSecretActionCount > 0 )
 			{
-			/* AuthEnc envelope, we need a sequence of { generic-secret, 
-			   encryption, MAC } */
+			/* AuthEnc envelope, we need a sequence of { generic-secret,
+			   encryption, MAC } and the envelope has to be marked as using
+			   authenticated encryption */
 			if( genericSecretActionCount != 1 || \
 				cryptActionCount != 1 || macActionCount != 1 )
+				return( FALSE );
+			if( envelopeInfoPtr->usage != ACTION_CRYPT || \
+				!TEST_FLAG( envelopeInfoPtr->flags, ENVELOPE_FLAG_AUTHENC ) )
 				return( FALSE );
 			}
 		else
 			{
+			ENSURES_B( genericSecretActionCount == 0 );
+
 			if( cryptActionCount > 0 )
 				{
-				/* Encrypted envelope, we need a single encryption action */
-				if( cryptActionCount > 1 || \
-					genericSecretActionCount != 0 || macActionCount != 0 )
+				/* Encrypted envelope, we need a single encryption action 
+				   and no MAC action, since a MAC action alongside 
+				   encryption means authenticated encryption, which is 
+				   handled above */
+				if( cryptActionCount != 1 || macActionCount != 0 )
+					return( FALSE );
+				if( envelopeInfoPtr->usage != ACTION_CRYPT || \
+					TEST_FLAG( envelopeInfoPtr->flags, ENVELOPE_FLAG_AUTHENC ) )
 					return( FALSE );
 				}
 			else
 				{
-				/* MACed envelope, we need one or more MAC actions (the check
-				   for genericSecretActionCount is redundant since we already
-				   know that it's 0, but it's included here to document the
-				   required condition) */
-				if( genericSecretActionCount != 0 || cryptActionCount != 0 )
+				/* MACd envelope, we need a single MAC action */
+				if( macActionCount != 1 )
+					return( FALSE );
+				if( envelopeInfoPtr->usage != ACTION_MAC )
 					return( FALSE );
 				}
 			}
@@ -1066,28 +1117,6 @@ BOOLEAN checkActions( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 
 		/* There can only be one encryption action present */
 		if( actionListPtrNext != NULL )
-			return( FALSE );
-
-		return( TRUE );
-		}
-
-	/* If we're processing PGP-encrypted data with an MDC at the end of the 
-	   encrypted data then it's possible to have an encryption envelope with
-	   a hash action (which must be followed by an encryption action) */
-	if( envelopeInfoPtr->type == CRYPT_FORMAT_PGP && \
-		actionListPtr->action == ACTION_HASH && \
-		actionListPtrNext != NULL && \
-		actionListPtrNext->action == ACTION_CRYPT )
-		{
-		/* Make sure that the envelope has the appropriate usage for these 
-		   actions */
-		if( envelopeInfoPtr->usage != ACTION_CRYPT )
-			return( FALSE );
-
-		/* Make sure that the encryption action is the only other action */
-		REQUIRES_B( actionListPtrNext->action == ACTION_CRYPT && \
-					DATAPTR_ISVALID( actionListPtrNext->next ) );
-		if( DATAPTR_ISSET( actionListPtrNext->next ) )
 			return( FALSE );
 
 		return( TRUE );

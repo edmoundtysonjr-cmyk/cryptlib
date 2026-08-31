@@ -1772,6 +1772,7 @@ static int envelopeBoundaryTest( const BOOLEAN usePassword,
 	   vary depending on the hash algorithm used */
 	if( usePassword )
 		{
+#if 0	/* 12/8/26 EOC moved due to switch from Enc to AuthEnc */
 		int hashAlgo;
 
 		status = cryptGetAttribute( CRYPT_UNUSED, CRYPT_OPTION_KEYING_ALGO, 
@@ -1779,6 +1780,9 @@ static int envelopeBoundaryTest( const BOOLEAN usePassword,
 		if( cryptStatusError( status ) )
 			return( FALSE );
 		eocPos = ( hashAlgo == CRYPT_ALGO_SHA1 ) ? 182 : 216;
+#else
+		eocPos = 283;
+#endif /* 0 */
 		}
 
 	/* Create an envelope and envelope some data using indefinite-length
@@ -3491,8 +3495,9 @@ int testEnvelopeSignIndef( void )
 		return( FALSE );
 
 	/* De-envelope the data, breaking the data quantity at every byte
-	   position */
-	for( bufPos = 1; bufPos < count; bufPos++ )
+	   position starting with the minimum amount that we can add, 8
+	   bytes (see cryptenv.c:deenvelopePush()) */
+	for( bufPos = 8; bufPos < count; bufPos++ )
 		{
 		CRYPT_ENVELOPE cryptEnvelope;
 		int byteCount;

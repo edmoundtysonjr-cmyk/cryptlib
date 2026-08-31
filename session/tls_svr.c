@@ -21,18 +21,14 @@
 
 /* Determine whether the server needs to request client certificates/client
    authentication.  This is normally determined by whether an access-control
-   keyset is available, but for the Suite B tests in which any test 
-   certificate is regarded as being acceptable it can be overridden with a
-   self-test flag */
+   keyset is available but can also be activated if the caller has 
+   explicitly specified it.  Note that this is only for TLS classic, TLS 1.3
+   doesn't allow this any more because the handshake is over before the 
+   client certificate is made available */
 
-#ifdef CONFIG_SUITEB_TESTS 
-#define clientCertAuthRequired( sessionInfoPtr ) \
-		( sessionInfoPtr->cryptKeyset != CRYPT_ERROR || suiteBTestClientCert )
-#else
 #define clientCertAuthRequired( sessionInfoPtr ) \
 		( sessionInfoPtr->cryptKeyset != CRYPT_ERROR || \
 		  TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_MANUAL_CERTCHECK ) )
-#endif /* CONFIG_SUITEB_TESTS */
 
 /****************************************************************************
 *																			*
@@ -191,7 +187,7 @@ static int writeCertRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
 	REQUIRES( sanityCheckSessionTLS( sessionInfoPtr ) );
-	REQUIRES( isBooleanValue( rsaAvailable ) );
+	REQUIRES( rsaAvailable || dsaAvailable || ecdsaAvailable );
 
 	/* Write the certificate type.  An error status is sticky so we only
 	   need to capture the one from the last write that was used */
@@ -366,7 +362,7 @@ static int processSessionResume( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		byte		coprLen
 		byte[]		copr
 		uint16	extListLen
-			byte	extType
+			uint16	extType
 			uint16	extLen
 			byte[]	extData 
 
@@ -402,8 +398,10 @@ static void checkSNI( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									1 + ( UINT16_SIZE * 2 ) + 1 + 1 );
 	if( cryptStatusError( status ) )
 		return;
-	REQUIRES_V( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES_V( isIntegerRangeNZ( endPos ) );
+	REQUIRES_V( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES_V( isIntegerRangeMin( endPos, length ) );
 	status = processVersionInfo( sessionInfoPtr, stream, NULL, TRUE );
 	if( cryptStatusError( status ) )
@@ -421,9 +419,8 @@ static void checkSNI( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		return;
 
 	/* If there are no extensions present then we're done */
-	ENSURES_V( !checkOverflowSub( endPos, 
-								  UINT16_SIZE + 1 + UINT16_SIZE ) );
-	if( stell( stream ) > endPos - ( UINT16_SIZE + 1 + UINT16_SIZE ) )
+	ENSURES_V( !checkOverflowSub( endPos, UINT16_SIZE * 3 ) );
+	if( stell( stream ) > endPos - ( UINT16_SIZE * 3 ) )
 		return;
 
 	/* We've got extensions, read each one looking for an SNI:
@@ -431,17 +428,27 @@ static void checkSNI( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		uint16		extListLen
 			uint16	extType
 			uint16	extLen
-			byte[]	extData */
+			byte[]	extData
+			
+	   See the comment at the start about the minimal checking that we're
+	   doing here, we're only scanning the extensions for an SNI, the full 
+	   checking and error reporting are done in 
+	   session/tls_{ext.c,ext_rw}.c */
 	status = readUint16( stream );
 	if( cryptStatusError( status ) )
 		return;
 	LOOP_MED( noExtensions = 0,
-			  noExtensions < 32 && stell( stream ) < endPos,
+			  noExtensions < 32 && \
+				( status = stell( stream ) ) < endPos,
 			  noExtensions++ )
 		{
 		int type;
 
 		ENSURES_V( LOOP_INVARIANT_MED( noExtensions, 0, 32 - 1 ) );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return;
 
 		/* Read the extension and, if it's not an SNI, skip it */
 		type = readUint16( stream );
@@ -1089,6 +1096,19 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	FUZZ_SET( handshakeInfo->completedHSstate, HANDSHAKE_STATE_BEGIN );
 	FUZZ_SKIP_REMAINDER();
 
+	/* TLS 1.2 LTS implicitly enables various other crypto options, now that
+	   we've got past the initial negotiations, enable those too */
+	if( TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_TLS12LTS ) )
+		{
+		SET_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_EMS );
+		if( !TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_GCM ) )
+			{
+			SET_FLAG( sessionInfoPtr->protocolFlags, 
+					  TLS_PFLAG_ENCTHENMAC );
+			}
+		}
+	CFI_CHECK_UPDATE( "TLS12LTS" );
+
 	/* Handle session resumption if we're using standard TLS.  Under TLS 1.3
 	   session resumption is handled completely differently and the session 
 	   ID is just a dummy value */
@@ -1110,11 +1130,12 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		else
 			{
 			const int originalFlags = \
-				scoreboardEntryInfo.metaData & TLS_RESUMEDSESSION_FLAGS;
+					scoreboardEntryInfo.metaData & TLS_RESUMEDSESSION_FLAGS;
 			const int resumedFlags = \
-				GET_FLAGS( sessionInfoPtr->protocolFlags, 
-						   TLS_RESUMEDSESSION_FLAGS );
-			
+					GET_FLAGS( sessionInfoPtr->protocolFlags, 
+							   TLS_RESUMEDSESSION_FLAGS );
+			BOOLEAN flagsOK = TRUE;
+
 			/* We're resuming a previous session, if extended TLS facilities 
 			   were in use (EtM, EMS, LTS) then make sure that the resumed 
 			   session uses at least those same facilities.  This check 
@@ -1131,8 +1152,25 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   like "Client Side Caching for TLS" (section 3.1, "Cacheable 
 			   handshake parameters") don't mention the protocol version as 
 			   a parameter of interest.  If a client were to drop from TLS
-			   1.2 to 1.1 it would be downgrading itself, so we allow it */
-			if( ( resumedFlags & originalFlags ) != originalFlags )
+			   1.2 to 1.1 it would be downgrading itself, so we allow it.
+		   
+			   These checks are complicated by the fact that some options 
+			   are different but have the same security level, see the 
+			   comments below. 
+
+			   Firstly, if the original session used EMS then the resumed 
+			   one must too */
+			if( ( originalFlags & TLS_PFLAG_EMS ) && \
+				!( resumedFlags & TLS_PFLAG_EMS ) )
+				flagsOK = FALSE;
+			
+			/* If the original session used any kind of AEAD (which includes
+			   EtM) then the resumed one must too */
+			if( ( originalFlags & TLS_RESUMED_AEAD_FLAGS ) && \
+				!( resumedFlags & TLS_RESUMED_AEAD_FLAGS ) )
+				flagsOK = FALSE;
+
+			if( !flagsOK )
 				{
 				retExt( CRYPT_ERROR_INVALID,
 						( CRYPT_ERROR_INVALID, SESSION_ERRINFO, 
@@ -1187,6 +1225,7 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   we've already given the client a second chance when reading the
 		   new Client Hello, and no further ones are allowed */
 		handshakeInfo->flags |= HANDSHAKE_FLAG_RETRIEDCLIENTHELLO;
+		status = CRYPT_OK;
 		}
 	else
 #endif /* USE_TLS13 */
@@ -1372,26 +1411,14 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			return( status );
 		handshakeInfo->originalClientHelloLength = clientHelloLength;
 		handshakeInfo->originalServerHelloLength = serverHelloLength;
-		ENSURES( CFI_CHECK_SEQUENCE_4( "processHelloTLS", "resumedSession", 
-									   "initDHcontextTLS", "serverHello" ) );
+		ENSURES( CFI_CHECK_SEQUENCE_5( "processHelloTLS", "TLS12LTS",
+									   "resumedSession", "initDHcontextTLS", 
+									   "serverHello" ) );
 		handshakeInfo->completedHSstate = HANDSHAKE_STATE_BEGIN;
 
 		return( CRYPT_OK );
 		}
 #endif /* USE_TLS13 */
-
-	/* TLS 1.2 LTS implicitly enables various other crypto options, now that
-	   we've got past the initial negotiations, enable those too */
-	if( TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_TLS12LTS ) )
-		{
-		SET_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_EMS );
-		if( !TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_GCM ) )
-			{
-			SET_FLAG( sessionInfoPtr->protocolFlags, 
-					  TLS_PFLAG_ENCTHENMAC );
-			}
-		}
-	CFI_CHECK_UPDATE( "TLS12LTS" );
 
 	/* If it's a resumed session then the Server Hello is followed 
 	   immediately by the Change Cipherspec, which is sent by the shared 
@@ -1417,9 +1444,9 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						 handshakeInfo->sessionIDlength );
 		DEBUG_PRINT_END();
 
-		ENSURES( CFI_CHECK_SEQUENCE_6( "processHelloTLS", "resumedSession", 
-									   "initDHcontextTLS", "serverHello", 
-									   "TLS12LTS", "resumedSessionDone" ) );
+		ENSURES( CFI_CHECK_SEQUENCE_6( "processHelloTLS", "TLS12LTS",
+									   "resumedSession", "initDHcontextTLS", 
+									   "serverHello", "resumedSessionDone" ) );
 		handshakeInfo->completedHSstate = HANDSHAKE_STATE_BEGIN;
 
 		return( OK_SPECIAL );
@@ -1526,9 +1553,9 @@ static int beginServerHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		return( status );
 	CFI_CHECK_UPDATE( "sendPacketTLS" );
 
-	ENSURES( CFI_CHECK_SEQUENCE_11( "processHelloTLS", "resumedSession", 
-									"initDHcontextTLS", "serverHello", 
-									"TLS12LTS", "nonResumedSession", 
+	ENSURES( CFI_CHECK_SEQUENCE_11( "processHelloTLS", "TLS12LTS",
+									"resumedSession", "initDHcontextTLS", 
+									"serverHello", "nonResumedSession", 
 									"writeTLSCertChain", "createServerKeyex", 
 									"writeCertRequest", "completeHSPacketStream", 
 									"sendPacketTLS" ) );
@@ -1602,7 +1629,10 @@ static int exchangeServerKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{
 		status = createSessionHash( sessionInfoPtr, handshakeInfo );
 		if( cryptStatusError( status ) )
+			{
+			sMemDisconnect( stream );
 			return( status );
+			}
 		}
 	CFI_CHECK_UPDATE( "createSessionHash" );
 
@@ -1628,8 +1658,8 @@ static int exchangeServerKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			{
 			status = checkCertVerify( sessionInfoPtr, handshakeInfo, stream, 
 									  length );
-			destroySessionHash( handshakeInfo );
 			}
+		destroySessionHash( handshakeInfo );
 		if( cryptStatusError( status ) )
 			{
 			sMemDisconnect( stream );
@@ -1653,7 +1683,7 @@ static int exchangeServerKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 ****************************************************************************/
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-void initTLSserverProcessing( TLS_HANDSHAKE_INFO *handshakeInfo )
+void initTLSserverProcessing( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo )
 	{
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 

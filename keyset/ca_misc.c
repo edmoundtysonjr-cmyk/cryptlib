@@ -357,7 +357,7 @@ int updateCertErrorLog( INOUT_PTR DBMS_INFO *dbmsInfo,
 	if( dataLength > 0 )
 		status = swrite( &stream, data, dataLength );
 	if( cryptStatusOK( status ) )
-		errorDataLength = stell( &stream );
+		status = errorDataLength = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		{
@@ -368,10 +368,10 @@ int updateCertErrorLog( INOUT_PTR DBMS_INFO *dbmsInfo,
 									   "Error writing error information", 31,
 									   BER_STRING_UTF8 );
 		if( cryptStatusOK( status ) )
-			errorDataLength = stell( &stream );
+			status = errorDataLength = stell( &stream );
 		sMemDisconnect( &stream );
 		}
-	ENSURES( cryptStatusOK( status ) );
+	ENSURES( !cryptStatusError( status ) );
 	ENSURES( isShortIntegerRangeNZ( errorDataLength ) );
 
 	/* Update the certificate store log with the error information as the 

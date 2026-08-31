@@ -130,10 +130,10 @@ static int writePgpSigPacketHeader( OUT_BUFFER_OPT( dataMaxLen, *dataLen ) \
 		writeUint16( &headerStream, iAndSlength );
 		status = swrite( &headerStream, "issuerAndSerialNumber", 21 );
 		if( cryptStatusOK( status ) )
-			iAndSHeaderLength = stell( &headerStream );
+			status = iAndSHeaderLength = stell( &headerStream );
 		sMemDisconnect( &headerStream );
 
-		ENSURES( cryptStatusOK( status ) );
+		ENSURES( !cryptStatusError( status ) );
 		ENSURES( isShortIntegerRangeNZ( iAndSHeaderLength ) );
 		}
 
@@ -207,10 +207,10 @@ static int writePgpSigPacketHeader( OUT_BUFFER_OPT( dataMaxLen, *dataLen ) \
 		uint16		unauthAttrLength = 0 */
 	status = writeUint16( &stream, 0 );
 	if( cryptStatusOK( status ) )
-		*dataLen = stell( &stream );
+		status = *dataLen = stell( &stream );
 	sMemDisconnect( &stream );
 
-	return( status );
+	return( cryptStatusError( status ) ? status : CRYPT_OK );
 	}
 
 /****************************************************************************
@@ -396,20 +396,20 @@ int createSignaturePGP( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 	sputc( &stream, 0xFF );
 	status = writeUint32( &stream, extraDataLength - UINT16_SIZE );
 	if( cryptStatusOK( status ) )  /* Checked earlier */
-		extraTrailerLength = stell( &stream );
+		status = extraTrailerLength = stell( &stream );
 	sMemDisconnect( &stream );
-	if( cryptStatusOK( status ) )
+	if( !cryptStatusError( status ) )
 		{
 		status = krnlSendMessage( sigDataInfo->hashContext, 
 								  IMESSAGE_CTX_HASH, 
 								  extraTrailer, extraTrailerLength );
 		}
-	if( cryptStatusOK( status ) )
+	if( !cryptStatusError( status ) )
 		{
 		status = krnlSendMessage( sigDataInfo->hashContext, 
 								  IMESSAGE_CTX_HASH, "", 0 );
 		}
-	if( cryptStatusOK( status ) )
+	if( !cryptStatusError( status ) )
 		{
 		setMessageData( &msgData, hash, CRYPT_MAX_HASHSIZE );
 		status = krnlSendMessage( sigDataInfo->hashContext, 
@@ -478,7 +478,7 @@ int createSignaturePGP( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 		status = swrite( &stream, signatureData, signatureDataLength );
 		}
 	if( cryptStatusOK( status ) )
-		*signatureLength = stell( &stream );
+		status = *signatureLength = stell( &stream );
 	sMemDisconnect( &stream );
 	zeroise( hash, CRYPT_MAX_HASHSIZE );
 	zeroise( signatureData, CRYPT_MAX_PKCSIZE + 128 );
@@ -579,16 +579,16 @@ int checkSignaturePGP( IN_BUFFER( signatureLength ) const void *signature,
 		sputc( &stream, 0xFF );
 		status = writeUint32( &stream, queryInfo.attributeLength );
 		if( cryptStatusOK( status ) )
-			length = stell( &stream );
+			status = length = stell( &stream );
 		sMemDisconnect( &stream );
-		if( cryptStatusOK( status ) )
+		if( !cryptStatusError( status ) )
 			{
 			ENSURES( isShortIntegerRangeNZ( length ) );
 			status = krnlSendMessage( sigDataInfo->hashContext, 
 									  IMESSAGE_CTX_HASH, buffer, length );
 			}
 		}
-	if( cryptStatusOK( status ) )
+	if( !cryptStatusError( status ) )
 		{
 		status = krnlSendMessage( sigDataInfo->hashContext, 
 								  IMESSAGE_CTX_HASH, "", 0 );

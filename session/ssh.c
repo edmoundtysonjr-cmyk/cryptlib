@@ -32,6 +32,12 @@
 	#pragma message( "  Warning: This enables support for the insecure EtM OpenSSH extension." )
 	#pragma message( "  " )
   #endif /* USE_SSH_OPENSSH */
+  #ifdef USE_SSH_SSHCOM20
+	#pragma message( "  Building with ssh.com 2.0 hash bug support enabled." )
+	#pragma message( "  Warning: This enables support for the ssh.com 2.0.0/2.0.10 shared " )
+	#pragma message( "           secret hash bug." )
+	#pragma message( "  " )
+  #endif /* USE_SSH_SSHCOM20 */
 #endif /* Notify extended SSH facilities */
 
 /****************************************************************************
@@ -98,7 +104,9 @@ BOOLEAN sanityCheckSSHHandshakeInfo( IN_PTR \
 		!( handshakeInfo->exchangeHashAlgo == CRYPT_ALGO_NONE || \
 		   isHashAlgo( handshakeInfo->exchangeHashAlgo ) ) || \
 		!( handshakeInfo->iExchangeHashContext == CRYPT_ERROR || \
-		   isHandleRangeValid( handshakeInfo->iExchangeHashContext ) ) )
+		   isHandleRangeValid( handshakeInfo->iExchangeHashContext ) ) || \
+		!( handshakeInfo->iExchangeHashAltContext == CRYPT_ERROR || \
+		   isHandleRangeValid( handshakeInfo->iExchangeHashAltContext ) ) )
 		{
 		DEBUG_PUTS(( "sanityCheckSSHHandshakeInfo: Exchange hash information" ));
 		return( FALSE );
@@ -160,6 +168,8 @@ BOOLEAN sanityCheckSSHHandshakeInfo( IN_PTR \
 
 	/* Check miscellaneous information */
 	if( !isBooleanValue( handshakeInfo->sendExtInfo ) || \
+		!isEnumRangeOpt( handshakeInfo->completedHSstate, \
+						 HANDSHAKE_STATE ) || \
 		!( ( handshakeInfo->algoStringPubkeyTbl == NULL && \
 			 handshakeInfo->algoStringPubkeyTblNoEntries == 0 ) || \
 		   ( handshakeInfo->algoStringPubkeyTbl != NULL && \
@@ -307,16 +317,19 @@ static void destroyHandshakeInfo( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo )
 		{
 		krnlSendNotifier( handshakeInfo->iExchangeHashContext,
 						  IMESSAGE_DECREFCOUNT );
+		handshakeInfo->iExchangeHashContext = CRYPT_ERROR;
 		}
 	if( handshakeInfo->iExchangeHashAltContext != CRYPT_ERROR )
 		{
 		krnlSendNotifier( handshakeInfo->iExchangeHashAltContext,
 						  IMESSAGE_DECREFCOUNT );
+		handshakeInfo->iExchangeHashAltContext = CRYPT_ERROR;
 		}
 	if( handshakeInfo->iServerCryptContext != CRYPT_ERROR )
 		{
 		krnlSendNotifier( handshakeInfo->iServerCryptContext,
 						  IMESSAGE_DECREFCOUNT );
+		handshakeInfo->iServerCryptContext = CRYPT_ERROR;
 		}
 
 	/* Clear the handshake state information, then reset it to explicit non-
@@ -352,21 +365,18 @@ static int initCrypto( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo )
 	if( cryptStatusError( status ) )
 		return( status );
 	handshakeInfo->iExchangeHashContext = createInfo.cryptHandle;
-	if( algoAvailable( CRYPT_ALGO_SHA2 ) )
+	setMessageCreateObjectInfo( &createInfo, CRYPT_ALGO_SHA2 );
+	status = krnlSendMessage( CRYPTO_OBJECT_HANDLE, 
+							  IMESSAGE_DEV_CREATEOBJECT, &createInfo, 
+							  OBJECT_TYPE_CONTEXT );
+	if( cryptStatusError( status ) )
 		{
-		setMessageCreateObjectInfo( &createInfo, CRYPT_ALGO_SHA2 );
-		status = krnlSendMessage( CRYPTO_OBJECT_HANDLE, 
-								  IMESSAGE_DEV_CREATEOBJECT, &createInfo, 
-								  OBJECT_TYPE_CONTEXT );
-		if( cryptStatusError( status ) )
-			{
-			krnlSendNotifier( handshakeInfo->iExchangeHashContext, 
-							  IMESSAGE_DECREFCOUNT );
-			handshakeInfo->iExchangeHashContext = CRYPT_ERROR;
-			return( status );
-			}
-		handshakeInfo->iExchangeHashAltContext = createInfo.cryptHandle;
+		krnlSendNotifier( handshakeInfo->iExchangeHashContext, 
+						  IMESSAGE_DECREFCOUNT );
+		handshakeInfo->iExchangeHashContext = CRYPT_ERROR;
+		return( status );
 		}
+	handshakeInfo->iExchangeHashAltContext = createInfo.cryptHandle;
 
 	return( CRYPT_OK );
 	}
@@ -454,10 +464,22 @@ static int completeStartup( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	/* If we're the server and we're completing a handshake that was 
 	   interrupted while we got confirmation of the client auth, skip the 
 	   initial handshake stages and go straight to the handshake completion 
-	   stage */
-	if( isServer( sessionInfoPtr ) && \
-		TEST_FLAG( sessionInfoPtr->flags, SESSION_FLAG_PARTIALOPEN ) )
+	   stage.  
+	   
+	   Specifically, the interruption will have happened during the client 
+	   authentication stage, with the client sending us a password and us
+	   going back to the caller to have it confirmed.  This is after all of 
+	   the handshake crypto has taken place, so we're just passing in a 
+	   dummy handshakeInfo structure with completeHandshake() going straight
+	   to the accept/decline-password stage */
+	if( TEST_FLAG( sessionInfoPtr->flags, SESSION_FLAG_PARTIALOPEN ) )
+		{
+		/* A partial open can only be done by the side performing the 
+		   authentication, which is the server */
+		REQUIRES( isServer( sessionInfoPtr ) );
+		
 		return( completeHandshake( sessionInfoPtr, &handshakeInfo ) );
+		}
 
 	/* If we're the server, we have to speak first to get things started.  
 	   Note that standard cryptlib practice for sessions is to wait for 
@@ -492,7 +514,14 @@ static int completeStartup( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	if( cryptStatusError( status ) )
 		{
 		/* Since the session hasn't begun yet we exit without any additional 
-		   processing */
+		   processing, however if pre-auth was enabled we should at least
+		   dither the timing a bit.  On the one hand this probably isn't a 
+		   big deal since it's just lightweight pre-auth computed in a
+		   pretty much constant-time manner, but when enabled it's also the
+		   thing that's holding off probing and the simulated exponential-
+		   backoff wait will make this a lot harder */
+		if( isServer( sessionInfoPtr ) && handshakeInfo.challengeLength > 0 )
+			delayRandom();	/* Dither error timing info */	
 		destroyHandshakeInfo( &handshakeInfo );
 		return( status );
 		}
@@ -583,27 +612,9 @@ static int getAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			  type == CRYPT_SESSINFO_SSH_CHANNEL_TYPE || \
 			  type == CRYPT_SESSINFO_SSH_CHANNEL_ARG1 || \
 			  type == CRYPT_SESSINFO_SSH_CHANNEL_ARG2 || \
-			  type == CRYPT_SESSINFO_SSH_CHANNEL_ACTIVE || \
-			  type == CRYPT_SESSINFO_SSH_PREAUTH );
-#else
-	REQUIRES( type == CRYPT_SESSINFO_SSH_PREAUTH );
+			  type == CRYPT_SESSINFO_SSH_CHANNEL_ACTIVE );
 #endif /* USE_SSH_EXTENDED */
 
-	if( type == CRYPT_SESSINFO_SSH_PREAUTH )
-		{
-		const SESSION_ATTRIBUTE_LIST *attributeListPtr;
-
-		attributeListPtr = findSessionInfo( sessionInfoPtr, 
-											CRYPT_SESSINFO_SSH_PREAUTH );
-		if( attributeListPtr == NULL )
-			{
-			setObjectErrorInfo( sessionInfoPtr, CRYPT_SESSINFO_SSH_PREAUTH, 
-								CRYPT_ERRTYPE_ATTR_ABSENT );
-			return( CRYPT_ERROR_NOTFOUND );
-			}
-		return( attributeCopy( msgData, attributeListPtr->value,
-							   attributeListPtr->valueLength ) );
-		}
 #ifdef USE_SSH_EXTENDED
 	if( type == CRYPT_SESSINFO_SSH_CHANNEL || \
 		type == CRYPT_SESSINFO_SSH_CHANNEL_ACTIVE )
@@ -684,8 +695,8 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			{
 			retExt( CRYPT_ERROR_NOTINITED, 
 					( CRYPT_ERROR_NOTINITED, SESSION_ERRINFO, 
-					  "Channels can only be created once the session has "
-					  "been activated" ) );
+					  "New channels can only be created once the session "
+					  "has been activated" ) );
 			}
 
 		return( createChannel( sessionInfoPtr ) );
@@ -721,7 +732,7 @@ static int checkAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								   IN_PTR const void *data,
 								   IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE type )
 	{
-	const CRYPT_CONTEXT cryptContext = *( ( CRYPT_CONTEXT * ) data );
+	CRYPT_CONTEXT cryptContext;
 	MESSAGE_DATA msgData;
 	HASH_FUNCTION_ATOMIC hashFunctionAtomic;
 	STREAM stream;
@@ -744,6 +755,7 @@ static int checkAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   their own custom 256-bit curve, or conversely load a known NIST curve 
 	   as a series of discrete key parameters, for now we just assume that a 
 	   curve of the given size is the correct one */
+	cryptContext = *( ( CRYPT_CONTEXT * ) data );
 	status = krnlSendMessage( cryptContext, IMESSAGE_GETATTRIBUTE, 
 							  &pkcAlgo, CRYPT_CTXINFO_ALGO );
 	if( cryptStatusError( status ) )
@@ -790,7 +802,8 @@ static int checkAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
       
 	   and not the "key blob" which is just the parameters without the 
 	   algorithm name, so we have to skip the length value before we hash 
-	   the remaining data */
+	   the remaining data.  The value is generated internally by cryptlib so 
+	   has a fixed format */
 	setMessageData( &msgData, buffer, 128 + ( CRYPT_MAX_PKCSIZE * 4 ) );
 	status = krnlSendMessage( cryptContext, IMESSAGE_GETATTRIBUTE_S,
 							  &msgData, CRYPT_IATTRIBUTE_KEY_SSH );

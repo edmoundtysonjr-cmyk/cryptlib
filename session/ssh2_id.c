@@ -231,11 +231,13 @@ static int checkPreAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	else
 		{
 		BYTE buffer[ SSH_PREAUTH_MAX_SIZE + 8 ];
-		int length;
+		int dummy;
 
-		status = base64decode( buffer, SSH_PREAUTH_MAX_SIZE, &length, 
+		/* This is purely a validity check, the results are discarded */
+		status = base64decode( buffer, SSH_PREAUTH_MAX_SIZE, &dummy, 
 							   preAuthValue, SSH_PREAUTH_NONCE_ENCODEDSIZE, 
 							   CRYPT_CERTFORMAT_NONE );
+		zeroise( buffer, SSH_PREAUTH_MAX_SIZE );
 		}
 	if( cryptStatusOK( status ) && \
 		preAuthLength > SSH_PREAUTH_NONCE_ENCODEDSIZE )
@@ -252,7 +254,8 @@ static int checkPreAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   that it follows the form ',X=...' to match the general pattern
 		   'C=abcdefg,X=....,Y=.....' */
 		if( !isShortIntegerRangeMin( remainderLength, 4 ) || \
-			remainderValue[ 0 ] != ',' || !isAlpha( remainderValue[ 1 ] ) || \
+			remainderValue[ 0 ] != ',' || \
+			!isAlpha( byteToInt( remainderValue[ 1 ] ) ) || \
 			remainderValue[ 2 ] != '=' )
 			status = CRYPT_ERROR_BADDATA;
 		else
@@ -293,12 +296,14 @@ static int checkPreAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	/* Remember the challenge or response.  The server records the value as
 	   receivedResponse for later comparison with the locally computed
-	   response value.
+	   response value via checkPreauthResponse().
 	   
 	   The following precondition is part-tautology but is present to 
 	   document the requirements for the memory move (D, G) */
-	REQUIRES( preAuthLength == SSH_PREAUTH_NONCE_ENCODEDSIZE && \
-			  SSH_PREAUTH_NONCE_ENCODEDSIZE <= SSH_PREAUTH_MAX_SIZE );
+	static_assert( SSH_PREAUTH_NONCE_ENCODEDSIZE <= SSH_PREAUTH_MAX_SIZE,
+				   "Encoded preauth nonce is larger than "
+				   "SSH_PREAUTH_MAX_SIZE" );
+	REQUIRES( preAuthLength == SSH_PREAUTH_NONCE_ENCODEDSIZE );
 	if( isServer( sessionInfoPtr ) )
 		{
 		memcpy( handshakeInfo->receivedResponse, preAuthValue, 
@@ -331,7 +336,10 @@ static int checkPreAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	AzureSSH: Sends SSH_MSG_EXT_INFO messages containing zero extensions, 
 		and quite probably has numerous other bugs since it's an SSH that 
-		Microsoft created themselves.
+		Microsoft created themselves.  However this only ever existed in a
+		1.0.0 version and appears to be extinct, replaced by OpenSSH for
+		Windows, so we don't bother accommodating it, at least in part 
+		because we can't test the workarounds against it.
 
 	BitVise WinSSHD:
 		This one is hard to identify because it's built on top of their SSH 
@@ -398,6 +406,11 @@ static int checkPreAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		"1.99" even though it can't actually do SSHv1, which means that 
 		it'll fail if it ever tries to connect to an SSHv1 peer.
 		
+		At some point CuteFTP was taken over by Globalscape (who formerly
+		just distributed it) and, based on SSH IDs, switcched to Bitvise 
+		sshlib, which means that this line is probably extinct, however we 
+		keep the comment in case an old copy is encountered at some point.
+		
 	dropbear:
 		Randomly sends its version as either 20xx.yy ("dropbear_2016.74", 
 		"dropbear_2022.83") or 0.xx ("dropbear_0.46", "dropbear_0.52"), to 
@@ -450,7 +463,7 @@ static int checkPreAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		Sends zero-length SSH_MSG_IGNORE messages for version 0.59.
 
 	RSSBus:
-		Placeholder, ID "IP*Works!".
+		Placeholder for future reference, vendor ID portion "IP*Works!".
 
 	ssh.com:
 		This implementation puts the version number first so if we find
@@ -502,6 +515,10 @@ static int checkPreAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		error packets) onto the connection if something unexpected occurs, 
 		for uncertain versions probably in the 2.x range.
 
+	Tectia:
+		Requires a dummy initial user auth with method = "none" in order to
+		initiate the authentication process for versions in the 5.x range.
+	
 	Van Dyke:
 		Omits hashing the exchange hash length when creating the hash to be 
 		signed for client auth for version 3.0 (SecureCRT = SSH) and 1.7 
@@ -559,9 +576,9 @@ static int checkPreAuth( INOUT_PTR SESSION_INFO *sessionInfoPtr,
    our way to handle them.
 	   
    A more comprehensive list of SSH server IDs is at
-   https://github.com/rapid7/recog/blob/main/xml/ssh_banners.xml and
-   https://github.com/0x4D31/hassh-utils/blob/master/hasshdb, with a list of
-   (some of) the bugs in implementations at
+   https://github.com/rapid7/recog/blob/main/xml/ssh_banners.xml (as XML) and
+   https://github.com/0x4D31/hassh-utils/blob/master/hasshdb (as text), with 
+   a partial, rather old list of some of the bugs in implementations at
    https://tartarus.org/~simon/putty-snapshots/htmldoc/Chapter4.html#config-ssh-bugs */
 
 static const VENDOR_INFO vendorInfoTbl[] = {
@@ -582,7 +599,7 @@ static const VENDOR_INFO vendorInfoTbl[] = {
 	{ "Cisco-", 6, DESCRIPTION( "Cisco" )
 	  SSH_VENDOR_CISCO },
 	{ "CISCO_WLC", 9, DESCRIPTION( "Cisco" )
-	  SSH_VENDOR_CISCO },
+	  SSH_VENDOR_CISCO, SSH_VENDORFLAG_NO_VERSION },
 	{ "CrushFTPSSHD", 12, DESCRIPTION( "CrushFTP" )
 	  SSH_VENDOR_CRUSHFTP, SSH_VENDORFLAG_NO_VERSION },
 	{ "J2SSH_Maverick", 14, DESCRIPTION( "CrushFTP" )
@@ -605,6 +622,8 @@ static const VENDOR_INFO vendorInfoTbl[] = {
 	  SSH_VENDOR_MOCANA },
 	{ "Data ONTAP SSH ", 15, DESCRIPTION( "NetApp" )
 	  SSH_VENDOR_NETAPP },
+	{ "OpenSSH_for_Windows_", 20, DESCRIPTION( "Windows OpenSSH" )
+	  SSH_VENDOR_OPENSSH },			/* Must precede shorter OpenSSH str.*/
 	{ "OpenSSH_", 8, DESCRIPTION( "OpenSSH" )
 	  SSH_VENDOR_OPENSSH },
 	{ "mod_sftp", 8, DESCRIPTION( "mod_sftp" )
@@ -668,16 +687,30 @@ static int parseIdString( OUT_PTR VERSION_INFO *versionInfo,
 	   sends us garbage like github's 7-hex-digit strings then we don't want 
 	   to misinterpret that as a version string and report a parsing error.  
 	   To filter out these sorts of things we check for the presence of the
-	   '.' and ' ' delimiters towards the start of the string and don't try
-	   and process it if we can't find them */
-	if( isDigit( string[ 0 ] ) && \
+	   '.' and ' ' delimiters (the latter sometimes being a '_') towards the 
+	   start of the string and don't try and process it if we can't find 
+	   them */
+	if( isDigit( byteToInt( string[ 0 ] ) ) && \
 		strFindCh( string, min( 10, stringLength ), '.' ) > 0 && \
-		strFindCh( string, min( 10, stringLength ), ' ' ) > 0 )
+		( strFindCh( string, min( 10, stringLength ), ' ' ) > 0 || \
+		  strFindCh( string, min( 10, stringLength ), '_' ) > 0 ) )
 		{
+		int delim1pos, delim2pos;
+		
 		/* Get the version substring.  We need at least "x.y" (plus the 
 		   implicit space delimiter) before the vendor name */
 		versionStringPtr = string;
-		versionStringLength = strFindCh( string, stringLength, ' ' );
+		delim1pos = strFindCh( string, stringLength, ' ' );
+		delim2pos = strFindCh( string, stringLength, '_' );
+		if( delim1pos < 0 )
+			versionStringLength = delim2pos;
+		else
+			{
+			if( delim2pos < 0 )
+				versionStringLength = delim1pos;
+			else
+				versionStringLength = min( delim1pos, delim2pos );
+			}
 		if( versionStringLength < 3 )
 			return( CRYPT_ERROR_BADDATA );
 		
@@ -768,9 +801,9 @@ static int parseIdString( OUT_PTR VERSION_INFO *versionInfo,
 	if( length <= 0 )
 		return( CRYPT_ERROR_BADDATA );
 	versionInfo->majorVersion = value;
-	versionStringPtr += length;
 	REQUIRES( !checkOverflowSub( versionStringLength, length ) );
 	versionStringLength -= length;
+	versionStringPtr += length;
 	if( versionStringLength < 2 )
 		return( CRYPT_OK );
 	ENSURES( versionStringLength >= 2 );
@@ -782,9 +815,9 @@ static int parseIdString( OUT_PTR VERSION_INFO *versionInfo,
 		if( length <= 0 )
 			return( CRYPT_ERROR_BADDATA );
 		versionInfo->minorVersion = value;
-		versionStringPtr += length;
 		REQUIRES( !checkOverflowSub( versionStringLength, length ) );
 		versionStringLength -= length;
+		versionStringPtr += length;
 		} 
 	if( versionStringLength < 2 )
 		return( CRYPT_OK );
@@ -807,7 +840,7 @@ static int parseIdString( OUT_PTR VERSION_INFO *versionInfo,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int processIDinfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
-						  const VERSION_INFO *versionInfo )
+						  IN_PTR const VERSION_INFO *versionInfo )
 	{
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isReadPtr( versionInfo, sizeof( VERSION_INFO ) ) );
@@ -824,14 +857,16 @@ static int processIDinfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			return( CRYPT_OK );
 
 		case SSH_VENDOR_BITVISE:
-			if( versionInfo->majorVersion == 1 )
+			if( versionInfo->majorVersion >= 4 )
 				{
 				SET_FLAG( sessionInfoPtr->protocolFlags, 
 						  SSH_PFLAG_ASYMMCOPR );
 				DEBUG_PUTS(( "Enabling workaround for FlowSSH compression "
 							 "algorithm bug." ));
 				}
-			if( versionInfo->majorVersion >= 6 )
+			if( ( versionInfo->majorVersion == 5 && \
+				  versionInfo->minorVersion >= 3 ) || \
+				versionInfo->majorVersion >= 6 )
 				{
 				SET_FLAG( sessionInfoPtr->protocolFlags, SSH_PFLAG_NOMTI );
 				DEBUG_PUTS(( "Enabling workaround for FlowSSH no-MTI "
@@ -915,7 +950,8 @@ static int processIDinfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				}
 			if( ( versionInfo->majorVersion == 3 && \
 				  versionInfo->minorVersion >= 8 ) ||
-				( versionInfo->majorVersion >= 4 ) )
+				( versionInfo->majorVersion >= 4 && \
+				  versionInfo->majorVersion <= 10 ) )
 				{
 				SET_FLAG( sessionInfoPtr->protocolFlags, SSH_PFLAG_PAMPW );
 				DEBUG_PUTS(( "Enabling workaround for OpenSSH PAM "
@@ -991,6 +1027,7 @@ static int processIDinfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			if( versionInfo->majorVersion != 2 )
 				return( CRYPT_OK );
 			/* All checks beyond this point are for a major version of 2 */
+#ifdef USE_SSH_SSHCOM20
 			if( ( versionInfo->minorVersion == 0 && \
 				  versionInfo->stepping == 0 ) || \
 				( versionInfo->minorVersion == 0 && \
@@ -1001,6 +1038,7 @@ static int processIDinfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				DEBUG_PUTS(( "Enabling workaround for ssh.com secret-hash "
 							 "bug." ));
 				}
+#endif /* USE_SSH_SSHCOM20 */
 			if( versionInfo->minorVersion == 0 || \
 				versionInfo->minorVersion == 1 )
 				{
@@ -1065,7 +1103,7 @@ static int processIDinfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				SET_FLAG( sessionInfoPtr->protocolFlags, 
 						  SSH_PFLAG_DUMMYUSERAUTH );
 				DEBUG_PUTS(( "Enabling workaround for SSH Tectia "
-							 "length-hash bug." ));
+							 "dummy user-auth bug." ));
 				}
 			return( CRYPT_OK );
 
@@ -1077,6 +1115,7 @@ static int processIDinfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			if( versionInfo->majorVersion == 1 && \
 				versionInfo->minorVersion == 7 )
 				{
+				/* SecureFX 1.7 */
 				SET_FLAG( sessionInfoPtr->protocolFlags, 
 						  SSH_PFLAG_NOHASHLENGTH );
 				DEBUG_PUTS(( "Enabling workaround for Van Dyke length-hash "
@@ -1085,6 +1124,7 @@ static int processIDinfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			if( versionInfo->majorVersion == 3 && \
 				versionInfo->minorVersion == 0 )
 				{
+				/* SecureCRT 3.0 */
 				SET_FLAG( sessionInfoPtr->protocolFlags, 
 						  SSH_PFLAG_NOHASHLENGTH );
 				DEBUG_PUTS(( "Enabling workaround for Van Dyke length-hash "
@@ -1093,13 +1133,20 @@ static int processIDinfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			return( CRYPT_OK );
 
 		case SSH_VENDOR_VXWORKS:
-			SET_FLAG( sessionInfoPtr->protocolFlags, SSH_PFLAG_OLDGEX );
+			/* So far no-one has reported encountering the host key format 
+			   bug with cryptlib so we report that a workaround exists for
+			   reference but don't try changing things until we've got some
+			   hard data for it */
 			DEBUG_PUTS(( "The peer identifies itself with a version string "
 						 "that corresponds to multiple incompatible "
 						 "versions,\n  some of which have serious bugs.  "
 						 "This session may not work properly." ));
-			DEBUG_PUTS(( "Enabling workaround for possible VxWorks old-GEX "
-						 "bug." ));
+			if( versionInfo->majorVersion == 6 )
+				{			
+				SET_FLAG( sessionInfoPtr->protocolFlags, SSH_PFLAG_OLDGEX );
+				DEBUG_PUTS(( "Enabling workaround for possible VxWorks "
+							 "old-GEX bug." ));
+				}
 			DEBUG_PUTS(( "Enabling workaround for possible VxWorks host key "
 						 "format bug." ));
 			return( CRYPT_OK );
@@ -1169,8 +1216,6 @@ int readSSHID( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   with this capability */
 	LOOP_MED( linesRead = 0, linesRead < 20, linesRead++ )
 		{
-		BOOLEAN isTextDataError;
-
 		ENSURES( LOOP_INVARIANT_MED( linesRead, 0, 19 ) );
 
 		/* Get a line of input, which sanitises the data read into non-
@@ -1179,8 +1224,8 @@ int readSSHID( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   diagnostics in the event of an error */
 		status = readTextLine( &sessionInfoPtr->stream, 
 							   sessionInfoPtr->receiveBuffer, 
-							   SSH_ID_MAX_SIZE, &length, &isTextDataError, 
-							   NULL, READTEXT_RAW );
+							   SSH_ID_MAX_SIZE, &length, NULL, 
+							   READTEXT_RAW, TRUE );
 		if( cryptStatusError( status ) )
 			{
 #ifdef USE_ERRMSGS
@@ -1224,10 +1269,13 @@ int readSSHID( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 //	const char *testString = "SSH-2.0-OpenSSH_10.0"; length = 20;
 //	const char *testString = "SSH-2.0-3.0.0 SSH Secure Shell"; length = 30;
 //	const char *testString = "SSH-2.0-a59182e"; length = 15;	/* github */
-	const char *testString = "SSH-2.0-00779af"; length = 15;	/* github */
+//	const char *testString = "SSH-2.0-00779af"; length = 15;	/* github */
 //	const char *testString = "SSH-2.0-You are connected Nissan Cleo Non-PROD Environment via SSHFTP connection."; length = 81;
 //	const char *testString = "SSH-2.0-GitLab-SSHD"; length = 19;
 //	const char *testString = "SSH-2.0-Maverick_SSHD"; length = 21;
+//	const char *testString = "SSH-2.0-OpenSSH_for_Windows_8.1"; length = 31;
+//	const char *testString = "SSH-2.0-1.82_sshlib GlobalSCAPE"; length = 31;
+//	const char *testString = "SSH-2.0-CISCO_WLC"; length = 17;
 //	const char *testString = "SSH-2.0-cryptlib C=123456789-A"; length = 30;
 //	const char *testString = "SSH-2.0-cryptlib C=1234567890A"; length = 30;
 //	const char *testString = "SSH-2.0-cryptlib C=1234567890A,X-"; length = 33;
@@ -1315,7 +1363,7 @@ int readSSHID( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   itself using the string "1.0" and nothing else, which is also a 
 	   prefix of other vendors' ID strings, but this version should be 
 	   extinct by now after Globalscape, the vendor, switched to using 
-	   Bitvise sshlib.
+	   Bitvise sshlib (see the comment for CuteFTP bugs).
 		   
 	   There also exist some very broken implementations that send the
 	   garbage values described in the third class in the comment at the 
@@ -1378,11 +1426,17 @@ int writeSSHID( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	{
 	const SESSION_ATTRIBUTE_LIST *attributeListPtr;
 	STREAM stream;
-	int status;
+	int position DUMMY_INIT, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
 
+	static_assert( MIN_BUFFER_SIZE >= CRYPT_MAX_TEXTSIZE,
+				   "Minimum buffer size < CRYPT_MAX_TEXTSIZE" );
+	static_assert( SSH_ID_STRING_SIZE + 3 + \
+						SSH_PREAUTH_MAX_SIZE + 2 <= CRYPT_MAX_TEXTSIZE, 
+				   "SSH ID string with preauth value" );
+			   
 	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
 	REQUIRES( sanityCheckSSHHandshakeInfo( handshakeInfo ) );
 
@@ -1453,9 +1507,10 @@ int writeSSHID( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			}
 		}
 	if( cryptStatusOK( status ) )
-		sessionInfoPtr->sendBufPos = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( cryptStatusOK( status ) );
+	ENSURES( !cryptStatusError( status ) );
+	sessionInfoPtr->sendBufPos = position;
 
 	/* Send the ID string to the client before we continue with the
 	   handshake.  While the ID string that's sent has a CRLF at the end,

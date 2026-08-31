@@ -292,8 +292,8 @@ int readPkcs15Keyset( INOUT_PTR STREAM *stream,
 
 	/* Scan all of the objects in the keyset */
 	LOOP_MED_INITCHECK( status = CRYPT_OK, 
-						cryptStatusOK( status ) && \
-							stell( stream ) < endPos )
+						!cryptStatusError( status ) && \
+							( status = stell( stream ) ) < endPos )
 		{
 		static const MAP_TABLE tagToTypeTbl[] = {
 			{ CTAG_PO_PRIVKEY, PKCS15_OBJECT_PRIVKEY },
@@ -311,6 +311,10 @@ int readPkcs15Keyset( INOUT_PTR STREAM *stream,
 		int innerEndPos, LOOP_ITERATOR_ALT;
 
 		ENSURES( LOOP_INVARIANT_MED_GENERIC() );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		/* Map the object tag to a PKCS #15 object type */
 		status = tag = peekTag( stream );
@@ -363,7 +367,7 @@ int readPkcs15Keyset( INOUT_PTR STREAM *stream,
 		REQUIRES( isIntegerRangeNZ( innerEndPos ) );
 
 		/* Scan all objects of this type */
-		LOOP_LARGE_WHILE_ALT( stell( stream ) < innerEndPos )
+		LOOP_LARGE_WHILE_ALT( ( status = stell( stream ) ) < innerEndPos )
 			{
 			PKCS15_INFO pkcs15objectInfo, *pkcs15infoPtr = NULL;
 			PKCS15_OBJECT_TYPE effectiveType = type;
@@ -371,6 +375,10 @@ int readPkcs15Keyset( INOUT_PTR STREAM *stream,
 			int objectLength;
 
 			ENSURES( LOOP_INVARIANT_LARGE_ALT_GENERIC() );
+
+			/* Catch the residual error code from stell() */
+			if( cryptStatusError( status ) )
+				return( status );
 
 			/* Read the object */
 			status = readObject( stream, &pkcs15objectInfo, &object,

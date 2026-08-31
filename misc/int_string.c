@@ -61,19 +61,58 @@ int strFindStr( IN_BUFFER( strLen ) const char *str,
 
 	/* Get the first character of the search string for a quick-reject 
 	   match */
-	findCh = toUpper( findStr[ 0 ] );
+	findCh = toUpper( byteToInt( findStr[ 0 ] ) );
 	REQUIRES_EXT( findCh >= 0 && findCh <= 0x7F, -1 );
 
 	LOOP_MAX( i = 0, i <= strLen - findStrLen, i++ )
 		{
 		ENSURES_EXT( LOOP_INVARIANT_MAX( i, 0, strLen - findStrLen ), -1 );
 
-		if( toUpper( str[ i ] ) == findCh && \
-			!strCompare( str + i, findStr, findStrLen ) )
+		if( toUpper( byteToInt( str[ i ] ) ) == findCh && \
+			strSame( str + i, findStr, findStrLen ) )
 			return( i );
 		}
 	ENSURES_EXT( LOOP_BOUND_OK, -1 );
 
+	return( -1 );
+	}
+
+CHECK_RETVAL_STRINGOP STDC_NONNULL_ARG( ( 1, 3 ) ) \
+int strFilter( IN_BUFFER( strLen ) const char *str,
+			   IN_LENGTH_SHORT const int strLen,
+			   IN_BUFFER( filterStrLen ) const char *filterStr,
+			   IN_LENGTH_SHORT const int filterStrLen )
+	{
+	LOOP_INDEX i;
+
+	assert( isReadPtrDynamic( str, strLen ) );
+	assert( isReadPtrDynamic( filterStr, filterStrLen ) );
+
+	REQUIRES_EXT( rangeCheck( strLen, 1, 512 ), 0 );
+	REQUIRES_EXT( rangeCheck( filterStrLen, 1, 32 ), 0 );
+
+	/* Search through str looking for the presence of any character in
+	   filterStr.  This is an n^2 algorithm but both strings are short,
+	   filterStr in particular being only a handful of characters */
+	LOOP_LARGE( i = 0, i < strLen, i++ )
+		{
+		LOOP_INDEX_ALT j;
+
+		ENSURES_EXT( LOOP_INVARIANT_LARGE( i, 0, strLen - 1 ), 0 );
+
+		LOOP_MED_ALT( j = 0, j < filterStrLen, j++ )
+			{
+			ENSURES_EXT( LOOP_INVARIANT_MED_ALT( j, 0, \
+												 filterStrLen - 1 ), 0 );
+
+			if( str[ i ] == filterStr[ j ] )
+				return( i );
+			}
+		ENSURES_EXT( LOOP_BOUND_OK_ALT, 0 );
+		}
+	ENSURES_EXT( LOOP_BOUND_OK, 0 );
+
+	/* No excluded character present */
 	return( -1 );
 	}
 
@@ -334,7 +373,7 @@ int strParseNumeric( IN_BUFFER( strMaxLen ) const char *str,
 	   be dealing with more than that many digits in a string */
 	LOOP_SMALL( numericStrLen = 0, 
 				numericStrLen < strMaxLen && numericStrLen < 6 && \
-					isDigit( str[ numericStrLen ] ),
+					isDigit( byteToInt( str[ numericStrLen ] ) ),
 				numericStrLen++ )
 		{
 		ENSURES( LOOP_INVARIANT_SMALL( numericStrLen, 0, strMaxLen - 1 ) );
@@ -395,7 +434,7 @@ int strGetHex( IN_BUFFER( strLen ) const char *str,
 
 		ENSURES( LOOP_INVARIANT_SMALL( digitIndex, 0, strLen - 1 ) );
 	
-		ch = toLower( str[ digitIndex ] );
+		ch = toLower( byteToInt( str[ digitIndex ] ) );
 		if( !isXDigit( ch ) || checkOverflowShift( value, 4 ) )
 			return( CRYPT_ERROR_BADDATA );
 		value = ( value << 4 ) | \
@@ -530,6 +569,188 @@ char *sanitiseString( INOUT_BUFFER_FIXED( strMaxLen ) void *string,
 	   returned as a standard text string */
 	return( ( char * ) strPtr );
 	}
+
+/****************************************************************************
+*																			*
+*							Character Functions								*
+*																			*
+****************************************************************************/
+
+/* Replacements for the booby-trapped isxxx() and toxxx() macros/functions, 
+   see the long comment in misc/os_spec.h for details */
+
+CHECK_RETVAL_BOOL \
+BOOLEAN isAlpha( IN_BYTE const int ch )
+	{
+	/* Make sure that we've been passed valid input.  This should never
+	   occur since we get called after byteToInt() so we warn in debug
+	   mode */
+	if( !rangeCheck( ch, 0, 0xFF ) )
+		{
+		assert( DEBUG_WARN );
+		return( FALSE );
+		}
+
+	return( ( ch >= 'A' && ch <= 'Z' ) || \
+			( ch >= 'a' && ch <= 'z' ) ? TRUE : FALSE );
+	}
+
+CHECK_RETVAL_BOOL \
+BOOLEAN isAlNum( IN_BYTE const int ch )
+	{
+	/* Make sure that we've been passed valid input.  This should never
+	   occur since we get called after byteToInt() so we warn in debug
+	   mode */
+	if( !rangeCheck( ch, 0, 0xFF ) )
+		{
+		assert( DEBUG_WARN );
+		return( FALSE );
+		}
+
+	return( ( ch >= 'A' && ch <= 'Z' ) || \
+			( ch >= 'a' && ch <= 'z' ) || \
+			( ch >= '0' && ch <= '9' ) ? TRUE : FALSE );
+	}
+
+CHECK_RETVAL_BOOL \
+BOOLEAN isPrint( IN_BYTE const int ch )
+	{
+	/* Make sure that we've been passed valid input.  This should never
+	   occur since we get called after byteToInt() so we warn in debug
+	   mode */
+	if( !rangeCheck( ch, 0, 0xFF ) )
+		{
+		assert( DEBUG_WARN );
+		return( FALSE );
+		}
+
+	return( ( ch >= 0x20 && ch <= 0x7E ) ? TRUE : FALSE );
+	}
+
+CHECK_RETVAL_BOOL \
+BOOLEAN isDigit( IN_BYTE const int ch )
+	{
+	/* Make sure that we've been passed valid input.  This should never
+	   occur since we get called after byteToInt() so we warn in debug
+	   mode */
+	if( !rangeCheck( ch, 0, 0xFF ) )
+		{
+		assert( DEBUG_WARN );
+		return( FALSE );
+		}
+
+	return( ( ch >= '0' && ch <= '9' ) ? TRUE : FALSE );
+	}
+
+CHECK_RETVAL_BOOL \
+BOOLEAN isXDigit( IN_BYTE const int ch )
+	{
+	/* Make sure that we've been passed valid input.  This should never
+	   occur since we get called after byteToInt() so we warn in debug
+	   mode */
+	if( !rangeCheck( ch, 0, 0xFF ) )
+		{
+		assert( DEBUG_WARN );
+		return( FALSE );
+		}
+
+	return( ( ch >= '0' && ch <= '9' ) || \
+			( ch >= 'A' && ch <= 'F' ) || \
+			( ch >= 'a' && ch <= 'f' ) ? TRUE : FALSE );
+	}
+
+CHECK_RETVAL_RANGE_NOERROR( 0, 0xFF ) \
+int toLower( IN_BYTE const int ch )
+	{
+	if( !rangeCheck( ch, 0, 0xFF ) )
+		{
+		assert( DEBUG_WARN );
+		return( byteToInt( ch ) );
+		}
+
+	return( ( ch >= 'A' && ch <= 'Z' ) ? ( ch | 0x20 ) : ch );
+	}
+
+CHECK_RETVAL_RANGE_NOERROR( 0, 0xFF ) \
+int toUpper( IN_BYTE const int ch )
+	{
+	if( !rangeCheck( ch, 0, 0xFF ) )
+		{
+		assert( DEBUG_WARN );
+		return( byteToInt( ch ) );
+		}
+
+	return( ( ch >= 'a' && ch <= 'z' ) ? ( ch & ~0x20 ) : ch );
+	}
+
+/****************************************************************************
+*																			*
+*							String Function Support							*
+*																			*
+****************************************************************************/
+
+/* Match a given substring against a string in a case-insensitive manner,
+   see the long comment in misc/os_spec.h for details.  When calling these 
+   functions to compare against a literal string, the literal is the second 
+   value, e.g. strSame( string, "[Autodetect]", 12 ) */
+
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+BOOLEAN strSame( IN_STRING_LEN( length ) const char *src, 
+				 IN_STRING_LEN( length ) const char *dest, 
+				 IN_LENGTH_ATTRIBUTE const int length )
+	{
+	LOOP_INDEX i;
+
+	assert( isReadPtrDynamic( src, length ) );
+	assert( isReadPtrDynamic( dest, 2 ) );
+
+	if( !rangeCheck( length, 1, MAX_ATTRIBUTE_SIZE ) )
+		{
+		/* Invalid length.  With a sufficiently malformed string, which we
+		   shouldn't be seeing since we're using mostly constant or fixed-
+		   length strings, we can still over-read, but it's better than over-
+		   writing */
+		assert( DEBUG_WARN );
+		return( FALSE );
+		}
+
+	LOOP_MAX( i = 0, i < length, i++ )
+		{
+		const int srcCh = toUpper( byteToInt( src[ i ] ) );
+		const int destCh = toUpper( byteToInt( dest[ i ] ) );
+
+		ENSURES_B( LOOP_INVARIANT_MAX( i, 0, length - 1 ) );
+
+		if( srcCh != destCh )
+			return( FALSE );
+		if( srcCh == '\0' )
+			{
+			/* We've run out of source string without finding a mis-match, 
+			   we're done.  Note that this also checks destCh, since we
+			   wouldn't have got here if they weren't the same */
+			break;
+			}
+		}
+	ENSURES_B( LOOP_BOUND_OK );
+
+	return( TRUE );
+	}
+
+#ifdef USE_DNSSRV
+
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+BOOLEAN strSameZ( IN_STRING const char *src, IN_STRING const char *dest )
+	{
+	const int length = strnlen_s( src, MAX_ATTRIBUTE_SIZE );
+
+	assert( isReadPtr( src, 1 ) );
+	assert( isReadPtr( dest, 1 ) );
+
+	if( length != strnlen_s( dest, MAX_ATTRIBUTE_SIZE ) )
+		return( FALSE );	/* Lengths differ */
+	return( strSame( src, dest, length ) );
+	}
+#endif /* USE_DNSSRV */
 
 /****************************************************************************
 *																			*
@@ -865,6 +1086,47 @@ BOOLEAN testIntString( void )
 	memcpy( buffer, "abcdefghij", 10 );
 	stringPtr = sanitiseString( buffer, 11, 10 );
 	if( memcmp( stringPtr, "abcdefghij", 11 ) )
+		return( FALSE );
+
+	/* Test isxxx()/toxxx().  0xC0 = 8859-1 A-grave, 0xE0 = 8859-1 a-grave. 
+	   We can't test completely out-of-range values because they'll 
+	   assert() in debug mode */
+	if( !isAlpha( 'A' ) || !isAlpha( 'a' ) || \
+		isAlpha( '(' ) || isAlpha( '[' ) || isAlpha( '{' ) || \
+		isAlpha( 0xC0 ) || isAlpha( 0xE0 ) )
+		return( FALSE );
+	if( !isAlNum( 'A' ) || !isAlNum( 'a' ) || !isAlNum( '0' ) || \
+		isAlNum( '(' ) || isAlNum( '[' ) || isAlNum( '{' ) || \
+		isAlNum( 0xC0 ) || isAlNum( 0xE0 ) )
+		return( FALSE );
+	if( !isPrint( ' ' ) || !isPrint( '+' ) || !isPrint( '~' ) || \
+		isPrint( '\t' ) || isPrint( '\0' ) || isPrint( 0x7F ) || \
+		isPrint( 0xC0 ) || isPrint( 0xE0 ) )
+		return( FALSE );
+	if( !isDigit( '0' ) || !isDigit( '9' ) || \
+		isDigit( '/' ) || isDigit( ':' ) || isDigit( 'k' ) )
+		return( FALSE );
+	if( !isXDigit( '0' ) || !isXDigit( '9' ) || !isXDigit( 'a' ) || \
+		!isXDigit( 'A' ) || !isXDigit( 'F' ) || \
+		isXDigit( '/' ) || isXDigit( ':' ) || isXDigit( '@' ) || \
+		isXDigit( 'G' ) || isXDigit( 'g' ) )
+		return( FALSE );
+	if( toLower( 'A' ) != 'a' || toLower( 'Z' ) != 'z' || \
+		toLower( '0' ) != '0' || toLower( 0xC0 ) != 0xC0 || \
+		toLower( 0xE0 ) != 0xE0 )
+		return( FALSE );
+	if( toUpper( 'a' ) != 'A' || toUpper( 'z' ) != 'Z' || \
+		toUpper( '0' ) != '0' || toUpper( 0xC0 ) != 0xC0 || \
+		toUpper( 0xE0 ) != 0xE0 )
+		return( FALSE );
+
+	/* Test strSame() */
+	if( !strSame( "abcdefgh", "abcdefgh", 8 ) || \
+		!strSame( "ABCdefgh", "abcdefgh", 8 ) || \
+		!strSame( "abcdefgh", "abc", 3 ) || \
+		!strSame( "ABCdefgh", "abc", 3 ) || \
+		!strSame( "abc", "abc", 8 ) || \
+		strSame( "abc", "abd", 3 ) || strSame( "ab", "abc", 3 ) )
 		return( FALSE );
 
 	return( TRUE );

@@ -152,7 +152,26 @@ static int processDataEnd( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 		   perform these checks in a timing-independent manner because we're 
 		   using them to reject completely malformed data (out-of-bounds 
 		   array references), but hopefully the few cycles difference won't 
-		   be measurable in the overall scheme of things */
+		   be measurable in the overall scheme of things.
+		   
+		   There are two places where we're called from network-facing code
+		   and that's in SCEP and CMP.  Both of these use EnvelopedData 
+		   rather than AuthEnc data so we can't take advantage of its MtE
+		   construction to check the MAC value first.  However there are 
+		   three countermeasures there, one implicit and two explicit.  The 
+		   implicit one is that we're getting here via kernel messages that
+		   add a lot of jitter to any timing, the first explicit one is that 
+		   both SCEP and CMP (and other session protocols as well) insert 
+		   random delays in the presence of crypto failures like this one 
+		   which more than cover a few cycles difference in a padding 
+		   compare, and the second explicit one is that SCEP wraps the 
+		   encrypted data in a signed data message so the attack would have
+		   to be carried out by the client that already knows the contents 
+		   of the message and that CMP only ever uses encryption for non-
+		   signature-capable PKCs which are virtually nonexistent (cryptlib
+		   artificially creates one if RSA keys are being used in the PnPPKI
+		   code via ACLs, but in that case the encryption-only key is
+		   authenticated using the signature key from the preceding round) */
 		if( envelopeInfoPtr->bufPos < 1 )
 			return( errorStatus );
 		padSize = envelopeInfoPtr->buffer[ envelopeInfoPtr->bufPos - 1 ];
@@ -464,7 +483,7 @@ static int getNextSegment( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 						   OUT_LENGTH_SHORT_Z int *bytesConsumed )
 	{
 	STREAM stream;
-	int segmentLength, status;
+	int segmentLength, position DUMMY_INIT, status;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 	assert( isReadPtrDynamic( buffer, length ) );
@@ -501,7 +520,7 @@ static int getNextSegment( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		}
 #endif /* USE_CMS */
 	if( cryptStatusOK( status ) )
-		*bytesConsumed = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		{
@@ -513,8 +532,8 @@ static int getNextSegment( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 		return( status );
 		}
-	ENSURES( isBufsizeRangeNZ( *bytesConsumed ) && \
-			 *bytesConsumed <= length );
+	ENSURES( isShortIntegerRangeNZ( position ) && position <= length );
+	*bytesConsumed = position;
 
 	/* We got the length, return the information to the caller */
 	envelopeInfoPtr->segmentSize = segmentLength;
@@ -731,7 +750,7 @@ static int copyEncryptedDataBlocks( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 									IN_LENGTH const int length,
 									OUT_DATALENGTH_Z int *bytesCopied )
 	{
-	BYTE *bufPtr = envelopeInfoPtr->buffer + envelopeInfoPtr->bufPos;
+	BYTE *bufPtr;
 	int bytesFromBB = 0, quantizedBytesToCopy, bytesToBB, status;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
@@ -749,6 +768,10 @@ static int copyEncryptedDataBlocks( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 	/* Clear return value */
 	*bytesCopied = 0;
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	bufPtr = envelopeInfoPtr->buffer + envelopeInfoPtr->bufPos;
 
 	/* If the new data will fit entirely into the block buffer, copy it in
 	   now and return */
@@ -855,11 +878,32 @@ static int copyEncryptedDataBlocks( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	envelopeInfoPtr->segmentSize -= length;
 	ENSURES( isIntegerRange( envelopeInfoPtr->segmentSize ) );
 
+	/* Work out how much of the data doesn't fit into a whole number of 
+	   blocks and so can't be transferred to the main buffer yet */
+	REQUIRES( !checkOverflowSub( length, quantizedBytesToCopy ) );
+	bytesToBB = length - quantizedBytesToCopy;
+	REQUIRES( bytesToBB >= 0 && bytesToBB < envelopeInfoPtr->blockSize );
+
 	/* If the payload has a definite length and we've reached its end, set
 	   the EOC flag to make sure that we don't go any further */
 	if( envelopeInfoPtr->payloadSize != CRYPT_UNUSED && \
 		envelopeInfoPtr->segmentSize <= 0 )
 		{
+		/* Since the payload is block-encrypted its overall length has to be 
+		   a whole number of blocks, so there can't be a partial block left 
+		   over at the end.  If there is then the declared payload length was 
+		   invalid, which we have to catch here because we're about to exit 
+		   without copying the remainder into the block buffer.  As with the 
+		   padding check in processDataEnd() we report this as a signature 
+		   error if we're using authenticated encryption, since it would 
+		   otherwise mask the MAC failure that follows */
+		if( bytesToBB != 0 )
+			{
+			return( TEST_FLAG( envelopeInfoPtr->dataFlags, 
+							   ENVDATA_FLAG_AUTHENCACTIONSACTIVE ) ? \
+					CRYPT_ERROR_SIGNATURE : CRYPT_ERROR_BADDATA );
+			}
+
 		status = processDataEnd( envelopeInfoPtr );
 		if( cryptStatusError( status ) )
 			return( status );
@@ -872,12 +916,11 @@ static int copyEncryptedDataBlocks( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 	/* Copy any remainder (the difference between the amount to copy and the
 	   blocksize-quantized amount) into the block buffer */
-	REQUIRES( !checkOverflowSub( length, quantizedBytesToCopy ) );
-	bytesToBB = length - quantizedBytesToCopy;
-	REQUIRES( bytesToBB >= 0 && bytesToBB <= envelopeInfoPtr->blockSize );
 	if( bytesToBB > 0 )
 		{
-		REQUIRES( boundsCheck( quantizedBytesToCopy, bytesToBB, length ) );
+		REQUIRES( boundsCheckZ( 0, bytesToBB, CRYPT_MAX_IVSIZE ) );
+				  /* We're copying to the start of the blockBuffer so the 
+				     offset is always 0 */
 		memcpy( envelopeInfoPtr->blockBuffer, buffer + quantizedBytesToCopy,
 				bytesToBB );
 		}
@@ -917,7 +960,7 @@ static int copyData( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 					 IN_DATALENGTH const int length,
 					 OUT_DATALENGTH_Z int *bytesCopied )
 	{
-	BYTE *bufPtr = envelopeInfoPtr->buffer + envelopeInfoPtr->bufPos;
+	BYTE *bufPtr;
 	int bytesToCopy = length, bytesLeft, status;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
@@ -929,6 +972,10 @@ static int copyData( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 	/* Clear return value */
 	*bytesCopied = 0;
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	bufPtr = envelopeInfoPtr->buffer + envelopeInfoPtr->bufPos;
 
 	/* Figure out how much we can copy across.  First we calculate the
 	   minimum of the amount of data passed in and the amount remaining in
@@ -1224,7 +1271,7 @@ static int copyToDeenvelope( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 			currentLength -= bytesConsumed;
 			}
 		ENSURES( LOOP_BOUND_OK_ALT );
-		if( subSegmentCount >= 5 )
+		if( segAction == SEG_ACTION_CONTINUE && subSegmentCount >= 5 )
 			{
 			/* We've processed 5 consecutive sub-segments in a row then 
 			   there's something wrong with the input data */
@@ -1263,7 +1310,7 @@ static int copyToDeenvelope( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 				  ( envelopeInfoPtr->segmentSize == CRYPT_UNUSED ) ) );
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( segmentCount >= maxSegments )
+	if( currentLength > 0 && segmentCount >= maxSegments )
 		{
 		/* We've processed a huge number of segments, there's something 
 		   wrong with the input */
@@ -1293,8 +1340,7 @@ static int copyOobData( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 						OUT_DATALENGTH_Z int *length,
 						IN_BOOL const BOOLEAN retainInBuffer )
 	{
-	const int oobBytesToCopy = min( maxLength, envelopeInfoPtr->oobBufSize );
-	const int oobRemainder = envelopeInfoPtr->oobBufSize - oobBytesToCopy;
+	int oobBytesToCopy, oobRemainder;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 	assert( isWritePtrDynamic( buffer, maxLength ) );
@@ -1303,11 +1349,16 @@ static int copyOobData( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	REQUIRES( sanityCheckEnvDecode( envelopeInfoPtr ) );
 	REQUIRES( isBufsizeRangeNZ( maxLength ) );
 	REQUIRES( isBooleanValue( retainInBuffer ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	oobBytesToCopy = min( maxLength, envelopeInfoPtr->oobBufSize );
 	REQUIRES( oobBytesToCopy > 0 && \
 			  oobBytesToCopy <= envelopeInfoPtr->oobBufSize && \
 			  oobBytesToCopy <= OOB_BUFFER_SIZE );
 	REQUIRES( !checkOverflowSub( envelopeInfoPtr->oobBufSize, 
 								 oobBytesToCopy ) );
+	oobRemainder = envelopeInfoPtr->oobBufSize - oobBytesToCopy;
 	REQUIRES( oobRemainder >= 0 && \
 			  oobRemainder <= envelopeInfoPtr->oobBufSize );
 
@@ -1444,7 +1495,19 @@ static int copyFromDeenvelope( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		   
 		   To at least partially deal with this, we report an in-to-out 
 		   ratio of over 10,000 to 1 as an error, it's unlikely that this is 
-		   legitimate data */
+		   legitimate data.  Zip uses uLong for its values rather than ints
+		   so we can't use checkOverflowDiv() but have to perform the 
+		   equivalent check explicitly, simplified by the fact that we know
+		   that the values can never be < 0.
+		   
+		   Even with this check it's just a best-effort since an attacker
+		   could still create a limited Zip bomb by leaving the compression
+		   ratio under the 10,000 to 1 threshold, or by priming the input
+		   with a large block of incompressible data followed by the Zip
+		   bomb so that they then get a large amount of output before the
+		   10,000 to 1 ratio is exceeded, and similar tricks.  We can't 
+		   defend against all of these cases, as above it's up to the caller
+		   to decide when they're seeing too much output */
 		zStream->next_in = envelopeInfoPtr->buffer;
 		zStream->avail_in = bytesIn;
 		zStream->next_out = buffer;
@@ -1461,8 +1524,8 @@ static int copyFromDeenvelope( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 					( status == Z_BUF_ERROR ) ? CRYPT_ERROR_UNDERFLOW : \
 					CRYPT_ERROR_FAILED );
 			}
-		if( checkOverflowMul( zStream->total_in, 10000 ) || \
-			( zStream->total_in * 10000 ) < zStream->total_out )
+		if( zStream->total_in > 0 && \
+			zStream->total_out / zStream->total_in > 10000 )
 			{
 			DEBUG_DIAG(( "Compression ratio of over 10000:1 detected, "
 						 "possible Zip bomb" ));
@@ -1479,6 +1542,7 @@ static int copyFromDeenvelope( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		   original one, which was set to bytesToCopy */
 		REQUIRES( !checkOverflowSub( bytesIn, zStream->avail_in ) );
 		bytesCopied = bytesIn - zStream->avail_in;
+		REQUIRES( !checkOverflowSub( bytesToCopy, zStream->avail_out ) );
 		bytesToCopy -= zStream->avail_out;
 		ENSURES( isBufsizeRange( bytesCopied ) && \
 				 isBufsizeRange( bytesToCopy ) );

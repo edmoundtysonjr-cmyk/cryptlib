@@ -19,6 +19,13 @@
 
 #ifdef USE_TLS13
 
+/* ML-KEM is only present as the X25519MLKEM768 hybrid so both algorithms
+   need to be defined */
+
+#if defined( USE_MLKEM ) && !defined( USE_X25519 )
+  #error USE_MLKEM requires USE_X25519 for the X25519MLKEM768 hybrid
+#endif /* USE_MLKEM && !USE_X25519 */
+
 /****************************************************************************
 *																			*
 *								Utility Functions							*
@@ -122,6 +129,11 @@ static int initTLS13Keyex( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 	assert( isReadPtr( groupInfoPtr, sizeof( TLS_GROUP_INFO ) ) );
 
+	REQUIRES( sanityCheckTLSHandshakeInfo( handshakeInfo ) );
+			  /* Needed because the caller has modified handshakeInfo 
+			     between its own sanityCheckTLSHandshakeInfo() and calling
+			     us */
+
 	/* Create the keyex contexts as required */
 	status = createKeyexContextTLS( &handshakeInfo->keyexContext, 
 									groupInfoPtr->algorithm );
@@ -136,7 +148,7 @@ static int initTLS13Keyex( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 	if( cryptStatusError( status ) )
 		return( status );
 
-	/* Initialised the keyex contexts */
+	/* Initialise the keyex contexts */
 	switch( groupInfoPtr->algorithm )
 		{
 		case CRYPT_ALGO_DH:
@@ -174,6 +186,11 @@ static int initTLS13Keyex( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 				{
 				MESSAGE_DATA msgData;
 				
+				REQUIRES( handshakeInfo->tls13KeyexValueLen >= \
+										UINT16_SIZE + MLKEM_PUBKEY_SIZE + \
+										X25519_PUBKEY_SIZE );
+						  /* Established by readKeyexTLS13() */
+			  
 				/* For X25519MLKEM768 the overall keyex value is:
 				
 					uint16			keyexLength = 1216
@@ -227,6 +244,9 @@ static int handleNonmatchedKeyex( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				( CRYPT_ERROR_NOTAVAIL, SESSION_ERRINFO, 
 				  "Server doesn't support any of our offered keyex types" ) );
 		}
+
+	/* From this point on we're the server */
+	ENSURES( isServer( sessionInfoPtr ) );
 
 	/* Google Chrome doesn't send any MTI keyexes in its first client hello, 
 	   which forces a retry on every connect.  If this isn't already a 
@@ -511,11 +531,13 @@ int readKeyexTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	isX25519Available = algoAvailable( CRYPT_ALGO_25519 ) ? TRUE : FALSE;
 	if( !isServer( sessionInfoPtr ) )
 		{
-#if 0	/* See comment in session/tls_keyex.c:writeSupportedGroups() */
 		/* Get the DH keysize and ECDH curve type */
+#if 0	/* See comment in session/tls_keyex.c:writeSupportedGroups() */
 		status = krnlSendMessage( handshakeInfo->keyexContext,
 								  IMESSAGE_GETATTRIBUTE, &clientDHkeySize,
 								  CRYPT_CTXINFO_KEYSIZE );
+		if( cryptStatusError( status ) )
+			return( status );
 #endif /* 0 */
 		if( handshakeInfo->keyexEcdhContext == CRYPT_ERROR )
 			isECDHAvailable = FALSE;
@@ -537,8 +559,6 @@ int readKeyexTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 #else
 		isX25519Available = FALSE;
 #endif /* USE_X25519 */
-		if( cryptStatusError( status ) )
-			return( status );
 		}
 
 	/* If we're the server, the client will send us a list of keyex values 
@@ -568,11 +588,13 @@ int readKeyexTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		uint16	namedGroup
 		uint16	keyexLength
 		byte[]	keyexData */
-	REQUIRES( !checkOverflowAdd( stell( stream ), keyexListLen ) );
-	endPos = stell( stream ) + keyexListLen;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, keyexListLen ) );
+	endPos += keyexListLen;
 	ENSURES( isIntegerRangeMin( endPos, keyexListLen ) );
 	LOOP_SMALL( noKeyexValues = 0, 
-				stell( stream ) < endPos - 16 && \
+				( status = stell( stream ) ) < endPos - 16 && \
 					noKeyexValues < MAX_KEYEX_VALUES, 
 				noKeyexValues++ )
 		{
@@ -580,7 +602,12 @@ int readKeyexTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		int keyexCheckStatus, namedGroup;
 		LOOP_INDEX_ALT newGroupIndex;
 
-		ENSURES( LOOP_INVARIANT_SMALL( noKeyexValues, 0, 7 ) );
+		ENSURES( LOOP_INVARIANT_SMALL( noKeyexValues, 0, \
+									   MAX_KEYEX_VALUES - 1 ) );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		/* Read the group ID and keyex data length, remembering where the 
 		   keyex data (including the length value) starts */
@@ -674,7 +701,8 @@ int readKeyexTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					break;
 					}
 				break;
-			
+		
+#ifdef USE_X25519	
 			case CRYPT_ALGO_25519:
 				if( !isX25519Available )
 					{
@@ -690,6 +718,7 @@ int readKeyexTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					break;
 					}
 				break;
+#endif /* USE_X25519 */
 			}
 		if( cryptStatusError( keyexCheckStatus ) )
 			{
@@ -820,8 +849,11 @@ int readKeyexTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		groupIndex = newGroupIndex;
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( noKeyexValues >= MAX_KEYEX_VALUES )
+	if( noKeyexValues >= MAX_KEYEX_VALUES && \
+		stell( stream ) < endPos - 16 )
 		{
+		/* We still have data left to process but have exceeded the maximum 
+		   keyex value count */
 		*extErrorInfoSet = TRUE;
 		retExt( CRYPT_ERROR_OVERFLOW,
 				( CRYPT_ERROR_OVERFLOW, SESSION_ERRINFO, 
@@ -933,6 +965,8 @@ int writeKeyexTLS13( INOUT_PTR STREAM *stream,
 		const TLS_GROUP_INFO *groupInfoPtr = \
 						handshakeInfo->keyexGroupInfo;
 
+		REQUIRES( groupInfoPtr != NULL );
+
 #if defined( USE_MLKEM ) 
 		if( groupInfoPtr->tlsGroupID == TLS_GROUP_X25519MLKEM768 )
 			{
@@ -991,6 +1025,9 @@ int writeKeyexTLS13( INOUT_PTR STREAM *stream,
 #ifdef USE_MLKEM
 	if( handshakeInfo->keyexAltContext != CRYPT_ERROR )
 		{
+		ENSURES( handshakeInfo->keyex25519Context != CRYPT_ERROR );
+				 /* ML-KEM is only present as a hybrid with 25519 */
+
 		/* The ML-KEM keyex is the ML-KEM public key followed by another 
 		   copy of the 25519 keyex value */
 		mlkemKeyShareSize = UINT16_SIZE + UINT16_SIZE + \

@@ -31,10 +31,14 @@
 #define VC_GE_2002( x )			1
 #define CHECK_RETVAL 
 #define CHECK_RETVAL_BOOL 
+#define CHECK_RETVAL_RANGE_NOERROR( x, y ) 
 #define STDC_NONNULL_ARG( x )
 #define IN_BUFFER( x )
 #define IN_LENGTH 
+#define IN_LENGTH_ATTRIBUTE 
 #define IN_BOOL 
+#define IN_BYTE 
+#define IN_STRING_LEN( x )
 #define IN_RANGE( x, y )
 #ifndef __STDC_LIB_EXT1__
   #define __STDC_LIB_EXT1__

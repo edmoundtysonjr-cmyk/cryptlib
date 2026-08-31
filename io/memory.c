@@ -66,6 +66,11 @@ static BOOLEAN sanityCheckStreamMem( const STREAM *stream )
 				^				^
 				|				|
 			 bufPos			 bufEnd */
+	if( stream->buffer == NULL )
+		{
+		DEBUG_PUTS(( "sanityCheckStreamMem: Null stream buffer" ));
+		return( FALSE );
+		}
 	if( stream->bufPos < 0 || stream->bufPos > stream->bufEnd || \
 		stream->bufEnd < 0 || stream->bufEnd > stream->bufSize || \
 		!isBufsizeRangeNZ( stream->bufSize ) )
@@ -115,30 +120,41 @@ static int initMemoryStream( OUT_PTR STREAM *stream,
 	return( CRYPT_OK );
 	}
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-static int checkMemoryStreamParams( INOUT_PTR STREAM *stream, 
-									IN_PTR const void *buffer,
+STDC_NONNULL_ARG( ( 1 ) ) \
+static void createInvalidMemoryStream( INOUT_PTR STREAM *stream )
+	{
+	assert( isWritePtr( stream, sizeof( STREAM ) ) );
+
+	/* Memory stream-open/connect functions aren't checked since they're 
+	   just pointing a stream at a buffer.  If there's some sort of an error 
+	   then to make sure the stream can't be used we set it to an invalid 
+	   state, a null stream (not readable) that's read-only (not writeable) 
+	   and in an error state, so that any attempt to use it will fail.  We
+	   use CRYPT_ERROR_BADDATA rather than the more obvious 
+	   CRYPT_ERROR_INTERNAL because it's a more useful error message for
+	   the caller, if we do ever get here there's a good chance that it was 
+	   because of trying to process invalid data */
+	( void ) initMemoryStream( stream, TRUE );
+	INIT_FLAGS( stream->flags, STREAM_FLAG_READONLY );
+	stream->status = CRYPT_ERROR_BADDATA;
+	}
+
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+static int checkMemoryStreamParams( IN_PTR const void *buffer,
 										/* May be uninitialised for sMemOpen()
 										   so we can't use IN_BUFFER */ 
 									IN_LENGTH_Z const int length )
 	{
 	/* We don't use a REQUIRES() predicate here for the reasons given in the 
 	   comments above */
-	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isBufsizeRangeNZ( length ) );
 	assert( isReadPtrDynamic( buffer, length ) );
 
-	/* If there's a problem with the parameters, return an error code but
-	   also make it a (non-readable, non-writeable) null stream with the 
-	   error state set via retIntError_Stream() so that it can be safely 
-	   used */
+	/* Make sure that the stream parameters are valid without using 
+	   REQUIRES() */
 	if( !isBufsizeRangeNZ( length ) || \
 		!isReadPtrDynamic( buffer, length ) )
-		{
-		stream->type = STREAM_TYPE_NULL;
-		INIT_FLAGS( stream->flags, STREAM_FLAG_READONLY );
-		retIntError_Stream( stream );
-		}
+		retIntError();
 	
 	return( CRYPT_OK );
 	}
@@ -206,8 +222,12 @@ void sMemOpen( OUT_PTR STREAM *stream,
 	/* Initialise the memory stream */
 	status = initMemoryStream( stream, FALSE );
 	ENSURES_V( cryptStatusOK( status ) );
-	status = checkMemoryStreamParams( stream, buffer, length );
-	ENSURES_V( cryptStatusOK( status ) );
+	status = checkMemoryStreamParams( buffer, length );
+	if( cryptStatusError( status ) )
+		{
+		createInvalidMemoryStream( stream );
+		retIntError_Void();
+		}
 	stream->buffer = buffer;
 	stream->bufSize = length;
 
@@ -258,10 +278,8 @@ void sMemOpenOpt( OUT_PTR STREAM *stream,
 		   that's declared as taking a non-zero length, this will be caught
 		   later in checkMemoryStreamParams() but it's a contract violation 
 		   so we have to add special-case handling for it here */
-		assert( DEBUG_WARN );
-		sMemNullOpen( stream );
-		INIT_FLAGS( stream->flags, STREAM_FLAG_READONLY );
-		return;
+		createInvalidMemoryStream( stream );
+		retIntError_Void();
 		}
 	sMemOpen( stream, buffer, length );
 	}
@@ -272,10 +290,16 @@ int sMemClose( INOUT_PTR STREAM *stream )
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
 	REQUIRES( sanityCheckStreamMem( stream ) );
+			  /* Note that this will skip the zeroise of the stream buffer
+			     if the state is invalid, this is by design since it's
+			     likely that the buffer information is invalid and leaving
+			     data in memory is far less problematic than an arbitrary
+			     memory write, particularly since the caller sanitises any
+			     buffers anyway */
 	REQUIRES( !TEST_FLAG( stream->flags, STREAM_FLAG_READONLY ) );
 #ifndef CONFIG_CONSERVE_MEMORY_EXTRA
 	REQUIRES( !TEST_FLAG( stream->flags, STREAM_MFLAG_PSEUDO ) );
-#endif /* CONFIG_CONSERVE_MEMORY_EXTRA */
+#endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 	return( shutdownMemoryStream( stream, TRUE ) );
 	}
@@ -302,8 +326,12 @@ void sMemConnect( OUT_PTR STREAM *stream,
 	   compiler complaints */
 	status = initMemoryStream( stream, FALSE );
 	ENSURES_V( cryptStatusOK( status ) );
-	status = checkMemoryStreamParams( stream, buffer, length );
-	ENSURES_V( cryptStatusOK( status ) );
+	status = checkMemoryStreamParams( buffer, length );
+	if( cryptStatusError( status ) )
+		{
+		createInvalidMemoryStream( stream );
+		retIntError_Void();
+		}
 	stream->buffer = ( void * ) buffer;
 	stream->bufSize = length;
 
@@ -316,9 +344,9 @@ void sMemConnect( OUT_PTR STREAM *stream,
 
 #ifndef CONFIG_CONSERVE_MEMORY_EXTRA
 
-/* This function is usually used for fuzzing as an updateable read-only
-   memory stream, but also in misc/int_api.c:testIntAPI() to test the
-   text read-line function */
+/* This function is used for fuzzing as an updateable read-only memory 
+   stream, but is also in misc/int_api.c:testIntAPI() to test the text read-
+   line function.  It's never used for any actual operations on live data */
 
 STDC_NONNULL_ARG( ( 1, 2 ) ) \
 void sMemPseudoConnect( OUT_PTR STREAM *stream, 
@@ -331,13 +359,14 @@ void sMemPseudoConnect( OUT_PTR STREAM *stream,
 
 	/* Open the stream as a standard memory stream */
 	sMemConnect( stream, buffer, length );
+	REQUIRES_V( sGetStatus( stream ) == CRYPT_OK );
 
 	/* We've now got a standard memory stream, modify it to make it pseudo-
 	   writeable, in the sense that written data is discarded (this also
 	   removes the read-only flag from the standard memory stream) */
 	INIT_FLAGS( stream->flags, STREAM_MFLAG_PSEUDO );
 	}
-#endif /* CONFIG_CONSERVE_MEMORY_EXTRA */
+#endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int sMemDisconnect( INOUT_PTR STREAM *stream )
@@ -358,9 +387,8 @@ int sMemDisconnect( INOUT_PTR STREAM *stream )
 /* Memory stream direct-access functions, used when the contents of a memory
    stream need to be encrypted/decrypted/signed/MACd.  The basic 
    sMemGetDataBlock() returns a data block of a given size from the current
-   stream position, sMemGetDataBlockAbs() returns a data block from the 
-   given stream position, and sMemGetDataBlockRemaining() returns a data 
-   block containing all remaining data available in the stream */
+   stream position while sMemGetDataBlockAbs() returns a data block from the 
+   given stream position */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int getMemoryBlock( INOUT_PTR STREAM *stream, 
@@ -402,46 +430,6 @@ static int getMemoryBlock( INOUT_PTR STREAM *stream,
 	return( CRYPT_OK );
 	}
 
-CHECK_RETVAL_RANGE( 0, MAX_BUFFER_SIZE ) STDC_NONNULL_ARG( ( 1 ) ) \
-static int sMemDataLeftErr( IN_PTR const STREAM *stream )
-	{
-	assert( isReadPtr( stream, sizeof( STREAM ) ) && \
-			stream->type == STREAM_TYPE_MEMORY );
-
-	/* Check that the input parameters are in order */
-	if( !isReadPtr( stream, sizeof( STREAM ) ) )
-		retIntError();
-
-	/* We can't use REQUIRES_S() in this case because the stream is a const 
-	   parameter so instead we return a data-left size of zero */
-	REQUIRES( sanityCheckStreamMem( stream ) && \
-			  stream->type == STREAM_TYPE_MEMORY );
-
-	/* If there's a problem with the stream don't try to do anything */ 
-	if( cryptStatusError( stream->status ) )
-		return( stream->status );
-
-	REQUIRES( !checkOverflowSub( stream->bufSize, stream->bufPos ) );
-	return( stream->bufSize - stream->bufPos );
-	}
-
-CHECK_RETVAL_RANGE_NOERROR( 0, MAX_BUFFER_SIZE ) STDC_NONNULL_ARG( ( 1 ) ) \
-int sMemDataLeft( IN_PTR const STREAM *stream )
-	{
-	int length = sMemDataLeftErr( stream );
-
-	assert( isReadPtr( stream, sizeof( STREAM ) ) && \
-			stream->type == STREAM_TYPE_MEMORY );
-	
-	/* Unlike the standard stream read/write functions this function simply 
-	   returns a record of internal stream state rather than reporting the 
-	   status of a stream operation, so it's not generally checked by the 
-	   caller.  To indicate an error state the best that we can do is to 
-	   report zero bytes available, which will result in an underflow error 
-	   in the caller */
-	return( cryptStatusError( length ) ? 0 : length );
-	}
-
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int sMemGetDataBlock( INOUT_PTR STREAM *stream, 
 					  OUT_BUFFER_ALLOC_OPT( dataSize ) void **dataPtrPtr, 
@@ -476,6 +464,55 @@ int sMemGetDataBlockAbs( INOUT_PTR STREAM *stream,
 	*dataPtrPtr = NULL;
 
 	return( getMemoryBlock( stream, dataPtrPtr, position, dataSize ) );
+	}
+
+/* Return the space remaining in a memory stream, used when we need to 
+   directly manipulate stream data ahead of the current write position, for
+   example to export dynamically-assembled data like a signature or
+   wrapped key into a stream.  Typical usage is (from 
+   keyset/pkcs15_addpriv.c:writeWrappedSessionKey()):
+
+	sMemGetDataBlockRemaining( stream, &dataPtr, &length );
+	iCryptExportKey( dataPtr, length, &exportedKeySize, ... );
+	sExtend( stream, exportedKeySize, MAX_INTLENGTH_SHORT ) */
+
+CHECK_RETVAL_RANGE( 0, MAX_BUFFER_SIZE ) STDC_NONNULL_ARG( ( 1 ) ) \
+static int sMemDataLeftErr( IN_PTR const STREAM *stream )
+	{
+	assert( isReadPtr( stream, sizeof( STREAM ) ) );
+
+	/* Check that the input parameters are in order */
+	if( !isReadPtr( stream, sizeof( STREAM ) ) )
+		retIntError();
+
+	/* We can't use REQUIRES_S() in this case because the stream is a const 
+	   parameter so instead we return a data-left size of zero */
+	REQUIRES( sanityCheckStreamMem( stream ) && \
+			  stream->type == STREAM_TYPE_MEMORY );
+
+	/* If there's a problem with the stream don't try to do anything */ 
+	if( cryptStatusError( stream->status ) )
+		return( stream->status );
+
+	REQUIRES( !checkOverflowSub( stream->bufSize, stream->bufPos ) );
+	return( stream->bufSize - stream->bufPos );
+	}
+
+CHECK_RETVAL_RANGE_NOERROR( 0, MAX_BUFFER_SIZE ) STDC_NONNULL_ARG( ( 1 ) ) \
+int sMemDataLeft( IN_PTR const STREAM *stream )
+	{
+	const int length = sMemDataLeftErr( stream );
+
+	assert( isReadPtr( stream, sizeof( STREAM ) ) && \
+			stream->type == STREAM_TYPE_MEMORY );
+	
+	/* Unlike the standard stream read/write functions this function simply 
+	   returns a record of internal stream state rather than reporting the 
+	   status of a stream operation, so it's not generally checked by the 
+	   caller.  To indicate an error state the best that we can do is to 
+	   report zero bytes available, which will result in an underflow error 
+	   in the caller */
+	return( cryptStatusError( length ) ? 0 : length );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \

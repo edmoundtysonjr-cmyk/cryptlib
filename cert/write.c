@@ -1510,7 +1510,7 @@ static int createPkiUserInfo( INOUT_PTR CERT_PKIUSER_INFO *certUserInfo,
 	status = writeOctetString( &stream, certUserInfo->pkiRevPW,
 							   PKIUSER_AUTHENTICATOR_SIZE, DEFAULT_TAG );
 	if( cryptStatusOK( status ) )
-		userInfoBufPos = stell( &stream );
+		status = userInfoBufPos = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1571,11 +1571,15 @@ static int createPkiUserInfo( INOUT_PTR CERT_PKIUSER_INFO *certUserInfo,
 		}
 	if( cryptStatusOK( status ) )
 		{
+		int position DUMMY_INIT;
+		
 		sMemOpen( &stream, cryptAlgoID, maxCryptAlgoIDSize );
 		status = writeCryptContextAlgoID( &stream, iCryptContext );
 		if( cryptStatusOK( status ) )
-			*cryptAlgoIDSize = stell( &stream );
+			status = position = stell( &stream );
 		sMemDisconnect( &stream );
+		if( !cryptStatusError( status ) )
+			*cryptAlgoIDSize = position;
 		}
 	krnlSendNotifier( iCryptContext, IMESSAGE_DECREFCOUNT );
 	if( cryptStatusError( status ) )

@@ -26,11 +26,9 @@
 ****************************************************************************/
 
 /* Check whether the certificate that we've been given by the client or 
-   server is in a permitted-certificates whitelist.  This is a blocking 
+   server is in a permitted-certificates whitelist.  This is a conditional
    check in that it will only respond with an error if the caller has 
-   provided a whitelist and the certificate isn't in it (so it's really a
-   blocklist rather than a whitelist, but it's named as a whitelist because
-   it short-circuits other checks if the check passes).  If there's no 
+   provided a whitelist and the certificate isn't in it.  If there's no 
    whitelist present then use of the certificate won't be blocked and it's 
    up to the caller to decide whether they want to accept it */
 
@@ -65,15 +63,13 @@ int checkCertWhitelist( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	setMessageData( &msgData, certID, KEYID_SIZE );
 	status = krnlSendMessage( iCryptCert, IMESSAGE_GETATTRIBUTE_S, 
 							  &msgData, CRYPT_CERTINFO_FINGERPRINT_SHA1 );
-	if( cryptStatusOK( status ) )
-		{
-		setMessageKeymgmtInfo( &getkeyInfo, CRYPT_IKEYID_CERTID, 
-							   certID, KEYID_SIZE, NULL, 0, 
-							   KEYMGMT_FLAG_CHECK_ONLY );
-		status = krnlSendMessage( sessionInfoPtr->cryptKeyset, 
-								  IMESSAGE_KEY_GETKEY, &getkeyInfo, 
-								  KEYMGMT_ITEM_PUBLICKEY );
-		}
+	if( cryptStatusError( status ) )
+		return( status );
+	setMessageKeymgmtInfo( &getkeyInfo, CRYPT_IKEYID_CERTID, certID, 
+						   KEYID_SIZE, NULL, 0, KEYMGMT_FLAG_CHECK_ONLY );
+	status = krnlSendMessage( sessionInfoPtr->cryptKeyset, 
+							  IMESSAGE_KEY_GETKEY, &getkeyInfo, 
+							  KEYMGMT_ITEM_PUBLICKEY );
 	if( cryptStatusError( status ) )
 		{
 #ifdef USE_ERRMSGS
@@ -249,10 +245,11 @@ int createSessionHash( IN_PTR const SESSION_INFO *sessionInfoPtr,
 	int status;
 
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
-	assert( isReadPtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
+	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 
 	REQUIRES( sanityCheckSessionTLS( sessionInfoPtr ) );
 	REQUIRES( sanityCheckTLSHandshakeInfo( handshakeInfo ) );
+	REQUIRES( handshakeInfo->sessionHashContext == CRYPT_ERROR );
 
 	/* Clone the current hash state, complete the hashing for the cloned 
 	   context(s), and get the hash value(s) */
@@ -316,7 +313,7 @@ int createSessionHash( IN_PTR const SESSION_INFO *sessionInfoPtr,
 STDC_NONNULL_ARG( ( 1 ) ) \
 void destroySessionHash( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo )
 	{
-	assert( isReadPtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
+	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 
 	if( handshakeInfo->sessionHashContext != CRYPT_ERROR )
 		{
@@ -343,7 +340,7 @@ int createCertVerify( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	int dataLength, length DUMMY_INIT, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
-	assert( isReadPtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
+	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
 	REQUIRES( sanityCheckSessionTLS( sessionInfoPtr ) );
@@ -374,6 +371,7 @@ int createCertVerify( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					min( dataLength, MAX_INTLENGTH_SHORT - 1 ), &length, 
 					CRYPT_FORMAT_CRYPTLIB, sessionInfoPtr->privateKey, 
 					&sigDataInfo, NULL, &localErrorInfo );
+		insertCryptoDelay();
 		krnlSendNotifier( iHashContext, IMESSAGE_DECREFCOUNT );
 		if( cryptStatusError( status ) )
 			{
@@ -423,6 +421,7 @@ int createCertVerify( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					  CRYPT_IFORMAT_TLS13 : CRYPT_IFORMAT_TLS12, 
 					sessionInfoPtr->privateKey, &sigDataInfo, NULL, 
 					&localErrorInfo );
+	insertCryptoDelay();
 	if( cryptStatusError( status ) )
 		{
 		retExtErr( status,
@@ -454,8 +453,8 @@ int checkCertVerify( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	void *dataPtr;
 	int status;
 
-	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
-	assert( isReadPtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
+	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
+	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
 	REQUIRES( sanityCheckSessionTLS( sessionInfoPtr ) );
@@ -608,7 +607,7 @@ int checkCertVerify( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 /* Create/check the signature on the server key data */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 5 ) ) \
-static int createKeyexHash( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
+static int createKeyexHash( IN_PTR const TLS_HANDSHAKE_INFO *handshakeInfo,
 							OUT_HANDLE_OPT CRYPT_CONTEXT *hashContext,
 							IN_ALGO const CRYPT_ALGO_TYPE hashAlgo,
 							IN_LENGTH_HASH_Z const int hashParam,
@@ -645,8 +644,7 @@ static int createKeyexHash( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 	iHashContext = createInfo.cryptHandle;
 	if( hashParam != 0 )
 		{
-		status = krnlSendMessage( createInfo.cryptHandle, 
-								  IMESSAGE_SETATTRIBUTE, 
+		status = krnlSendMessage( iHashContext, IMESSAGE_SETATTRIBUTE, 
 								  ( MESSAGE_CAST ) &hashParam,
 								  CRYPT_CTXINFO_BLOCKSIZE );
 		if( cryptStatusError( status ) )
@@ -664,7 +662,7 @@ static int createKeyexHash( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 		   than just the nonces, which protects against various manipulation
 		   attacks on TLS */
 		status = krnlSendMessage( iHashContext, IMESSAGE_CTX_HASH,
-								  handshakeInfo->helloHash, 
+								  ( MESSAGE_CAST ) handshakeInfo->helloHash, 
 								  handshakeInfo->helloHashSize );
 		}
 	else

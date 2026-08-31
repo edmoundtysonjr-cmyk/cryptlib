@@ -33,7 +33,7 @@
    for the start and end cookies, which can be up to 16 bytes on 128-bit-
    pointer systems */
 
-#define SAFE_BUFFER_SIZE			256
+#define SAFE_BUFFER_SIZE			( 256 + 10 )	/* Min.size + 10 */
 #define SAFE_BUFFER_COOKIE_SIZE		16
 
 static BOOLEAN testCFITrue( const ACCESS_TOKEN accessToken )
@@ -300,6 +300,14 @@ static BOOLEAN testSafetyMechanisms( void )
 	memset( bufPtr, '*',  SAFE_BUFFER_SIZE );
 	if( !safeBufferCheck( bufPtr, SAFE_BUFFER_SIZE ) )
 		return( FALSE );	/* Full buffer use OK */
+	if( safeBufferCheck( bufPtr, SAFE_BUFFER_SIZE - 10 ) )
+		return( FALSE );	/* Incorrect length */
+	if( safeBufferCheck( bufPtr, SAFE_BUFFER_SIZE - 1 ) )
+		return( FALSE );	/* Incorrect length */
+	if( safeBufferCheck( bufPtr, SAFE_BUFFER_SIZE + 1 ) )
+		return( FALSE );	/* Incorrect length */
+	if( safeBufferCheck( bufPtr, SAFE_BUFFER_SIZE + 10000 ) )
+		return( FALSE );	/* Incorrect length */
 	savedValue = bufPtr[ -1 ];
 	bufPtr[ -1 ]++;
 	if( safeBufferCheck( bufPtr, SAFE_BUFFER_SIZE ) )

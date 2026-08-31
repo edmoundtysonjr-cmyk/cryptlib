@@ -941,7 +941,7 @@ static int setSpecialItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 		}
 
 	/* If we're cancelling an existing query, pass it on down */
-	if( dataLength == 6 && !strCompare( data, "cancel", dataLength ) )
+	if( dataLength == 6 && strSame( data, "cancel", dataLength ) )
 		{
 		/* If the caller is trying to cancel a query without one being 
 		   active, we can't continue */

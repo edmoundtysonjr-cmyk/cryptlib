@@ -428,7 +428,7 @@ static int getTPMLabel( INOUT_PTR TPM_INFO *tpmInfo,
 			ENSURES( LOOP_INVARIANT_LARGE( index, startPos + 3, \
 										   fapiInfoStringLength - 1 ) );
 			
-			if( !isAlnum( ch ) && ch != ' ' && ch != '-' && ch != '.' )
+			if( !isAlNum( ch ) && ch != ' ' && ch != '-' && ch != '.' )
 				break;
 			}
 		ENSURES( LOOP_BOUND_OK );

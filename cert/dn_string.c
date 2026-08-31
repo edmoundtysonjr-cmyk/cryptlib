@@ -322,8 +322,8 @@ static BOOLEAN isNativeWidecharString( IN_BUFFER( stringLen ) const BYTE *string
 		{
 		if( stringLen == WCHAR_SIZE )	/* WCHAR_SIZE == 2 */
 			{
-			const int ch1 = string[ 0 ];
-			const int ch2 = string[ 1 ];
+			const int ch1 = byteToInt( string[ 0 ] );
+			const int ch2 = byteToInt( string[ 1 ] );
 
 			/* Check for a two-character ASCII string, usually a country 
 			   name */
@@ -359,7 +359,7 @@ static BOOLEAN isNativeWidecharString( IN_BUFFER( stringLen ) const BYTE *string
 					return( FALSE );
 				hi3 = byteToInt( wCh >> 8 );
 				}
-			if( isAlnum( hi1 ) && isAlnum( hi2 ) && isAlnum( hi3 ) && \
+			if( isAlNum( hi1 ) && isAlNum( hi2 ) && isAlNum( hi3 ) && \
 				hi1 == hi2 && hi2 == hi3 )
 				return( FALSE );
 			}
@@ -937,7 +937,7 @@ static int getNativeUTF8TargetStringLen( IN_BUFFER( stringLen ) \
 											const NATIVE_CHAR_TYPE nativeCharType )
 	{
 	STREAM stream;
-	int status;
+	int position, status;
 
 	assert( isReadPtrDynamic( string, stringLen ) );
 	assert( isWritePtr( targetStringLength, sizeof( int ) ) );
@@ -951,10 +951,13 @@ static int getNativeUTF8TargetStringLen( IN_BUFFER( stringLen ) \
 	sMemNullOpen( &stream );
 	status = writeNativeUTF8String( &stream, string, stringLen, nativeCharType );
 	if( cryptStatusOK( status ) )
-		*targetStringLength = stell( &stream );
+		status = position = stell( &stream );
 	sMemClose( &stream );
-
-	return( status );
+	if( cryptStatusError( status ) )
+		return( status );
+	*targetStringLength = position;
+	
+	return( CRYPT_OK );
 	}
 #endif /* USE_UTF8 */
 
@@ -1056,7 +1059,7 @@ static int copyNativeToUTF8String( OUT_BUFFER( destMaxLen, *destLen ) \
 										const NATIVE_CHAR_TYPE nativeCharType )
 	{
 	STREAM stream;
-	int status;
+	int position, status;
 
 	assert( isWritePtrDynamic( dest, destMaxLen ) );
 	assert( isWritePtr( destLen, sizeof( int ) ) );
@@ -1075,10 +1078,13 @@ static int copyNativeToUTF8String( OUT_BUFFER( destMaxLen, *destLen ) \
 	sMemOpen( &stream, dest, destMaxLen );
 	status = writeNativeUTF8String( &stream, source, sourceLen, nativeCharType );
 	if( cryptStatusOK( status ) )
-		*destLen = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
-
-	return( status );
+	if( cryptStatusError( status ) )
+		return( status );
+	*destLen = position;
+	
+	return( CRYPT_OK );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 4 ) ) \
@@ -1093,7 +1099,7 @@ static int copyASN1ToUTF8String( OUT_BUFFER( destMaxLen, *destLen ) \
 	{
 	STREAM stream;
 	LOOP_INDEX i;
-	int status DUMMY_INIT;
+	int position, status DUMMY_INIT;
 
 	assert( isWritePtrDynamic( dest, destMaxLen ) );
 	assert( isWritePtr( destLen, sizeof( int ) ) );
@@ -1139,10 +1145,13 @@ static int copyASN1ToUTF8String( OUT_BUFFER( destMaxLen, *destLen ) \
 										NATIVE_CHAR_8BIT );
 		}
 	if( cryptStatusOK( status ) )
-		*destLen = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
-
-	return( status );
+	if( cryptStatusError( status ) )
+		return( status );
+	*destLen = position;
+	
+	return( CRYPT_OK );
 	}
 #else
 
@@ -1707,7 +1716,7 @@ int copyToASN1String( OUT_BUFFER( destMaxLen, *destLen ) void *dest,
 	const BOOLEAN unicodeTarget = ( stringType == ASN1_STRING_UNICODE ) ? \
 									TRUE : FALSE;
 	LOOP_INDEX i;
-	int status = CRYPT_OK;
+	int position DUMMY_INIT, status = CRYPT_OK;
 
 	assert( isWritePtrDynamic( dest, destMaxLen ) );
 	assert( isWritePtr( destLen, sizeof( int ) ) );
@@ -1774,10 +1783,13 @@ int copyToASN1String( OUT_BUFFER( destMaxLen, *destLen ) void *dest,
 			}
 		ENSURES( LOOP_BOUND_OK );
 		if( cryptStatusOK( status ) )
-			*destLen = stell( &stream );
+			status = position = stell( &stream );
 		sMemDisconnect( &stream );
-
-		return( status );
+		if( cryptStatusError( status ) )
+			return( status );
+		*destLen = position;
+		
+		return( CRYPT_OK );
 		}
 
 	/* We're on a system that doesn't support UTF-8, we shouldn't be 
@@ -1805,10 +1817,13 @@ int copyToASN1String( OUT_BUFFER( destMaxLen, *destLen ) void *dest,
 		}
 	ENSURES( LOOP_BOUND_OK );
 	if( cryptStatusOK( status ) )
-		*destLen = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
-
-	return( status );
+	if( cryptStatusError( status ) )
+		return( status );
+	*destLen = position;
+	
+	return( CRYPT_OK );
 	}
 
 #else

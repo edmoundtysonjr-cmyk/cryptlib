@@ -686,9 +686,11 @@ static int copySigningCertChain( INOUT_PTR CERT_INFO *certInfoPtr,
 			ENSURES( LOOP_INVARIANT_EXT( i, 0, certInfo->chainEnd - 1,
 										 MAX_CHAINLENGTH ) );
 			krnlSendNotifier( certInfo->chain[ i ], IMESSAGE_DECREFCOUNT );
+			certInfo->chain[ i ] = CRYPT_ERROR;
 			}
 		ENSURES( LOOP_BOUND_OK );
 		certInfo->chainEnd = 0;
+		certInfo->chainPos = CRYPT_ERROR;
 		}
 
 	/* If it's a self-signed certificate then there's no need for a signing 
@@ -1266,9 +1268,11 @@ static int signCertInfo( OUT_BUFFER( signedObjectMaxLength, \
 		}
 	if( cryptStatusOK( status ) )
 		{
-		REQUIRES( !checkOverflowAdd( *signedObjectLength, 
-									 stell( &stream ) ) );
-		*signedObjectLength += stell( &stream );
+		const int position = stell( &stream );
+		
+		REQUIRES( isIntegerRangeNZ( position ) );
+		REQUIRES( !checkOverflowAdd( *signedObjectLength, position ) );
+		*signedObjectLength += position;
 		}
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
@@ -1325,7 +1329,7 @@ static int createSignedObject( INOUT_PTR CERT_INFO *certInfoPtr,
 	status = writeCertFunction( &stream, certInfoPtr, issuerCertInfoPtr, 
 								iSignContext );
 	if( cryptStatusOK( status ) )
-		certObjectLength = stell( &stream );
+		status = certObjectLength = stell( &stream );
 	sMemClose( &stream );
 	if( cryptStatusError( status ) )
 		return( status );

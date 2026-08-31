@@ -153,6 +153,8 @@ BOOLEAN sanityCheckSessionRead( const SESSION_INFO *sessionInfoPtr )
 	}
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
+#ifdef USE_WEBSOCKETS
+
 /* Process an inner protocol's data packets.  This iterates through the 
    payload contents until it's all been consumed, potentially handling
    multiple packets in one go.  So for example an input buffer that
@@ -204,8 +206,6 @@ BOOLEAN sanityCheckSessionRead( const SESSION_INFO *sessionInfoPtr )
 
 #define MAX_PACKETS			16
 
-#ifdef USE_WEBSOCKETS
-
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int processInnerProtocolData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									 INOUT_BUFFER_FIXED( bufSize ) \
@@ -213,25 +213,23 @@ static int processInnerProtocolData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									 IN_DATALENGTH const int bufSize )
 	{
 	BYTE *bufPtr = buffer;
-	LOOP_INDEX noPackets, totalBytesProcessed;
-	int bufEnd = bufSize;
+	LOOP_INDEX noPackets;
+	int totalBytesProcessed, bufEnd = bufSize;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
-	assert( isReadPtr( buffer, bufSize ) );
+	assert( isWritePtr( buffer, bufSize ) );
 
 	REQUIRES( sanityCheckSession( sessionInfoPtr ) );
 	REQUIRES( isBufsizeRangeNZ( bufSize ) );
 
 	/* Walk down the buffer processing each packet in it in turn */
 	LOOP_MED( ( noPackets = 0, totalBytesProcessed = 0 ), 
-			  noPackets < MAX_PACKETS && totalBytesProcessed < bufEnd, 
-			  noPackets++ )
+			  noPackets < MAX_PACKETS && bufEnd > 0, noPackets++ )
 		{
 		int bytesProcessed, status;
 
 		ENSURES( LOOP_INVARIANT_MED( noPackets, 0, MAX_PACKETS - 1 ) );
-		ENSURES( LOOP_INVARIANT_SECONDARY( totalBytesProcessed, 0, 
-										   bufEnd - 1 ) );
+		ENSURES( LOOP_INVARIANT_SECONDARY( bufEnd, 1, bufSize ) );
 
 		status = bytesProcessed = \
 			processInnerPacketFunction( sessionInfoPtr, bufPtr, bufEnd, 
@@ -242,33 +240,42 @@ static int processInnerProtocolData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   data in the buffer has been consumed, so we can exit at this
 			   point */
 			if( status == OK_SPECIAL )
+				{
+				REQUIRES( !checkOverflowAdd( totalBytesProcessed, \
+											 bufEnd ) );
+				totalBytesProcessed += bufEnd;
+				bufEnd = 0;
 				break;
+				}
 
 			return( status );
 			}
+		ENSURES( bytesProcessed >= 0 && bytesProcessed <= bufEnd );
 		REQUIRES( !checkOverflowAdd( totalBytesProcessed, bytesProcessed ) );
 		totalBytesProcessed += bytesProcessed;
 		bufPtr += bytesProcessed;
 		REQUIRES( !checkOverflowSub( bufEnd, bytesProcessed ) );
 		bufEnd -= bytesProcessed;
-		ENSURES( bufEnd >= 0 && bufEnd < bufSize );
+		ENSURES( !checkOverflowAdd( totalBytesProcessed, bufEnd ) && \
+				 totalBytesProcessed + bufEnd <= bufSize );
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( noPackets >= MAX_PACKETS )
+	if( noPackets >= MAX_PACKETS && bufEnd > 0 )
 		{
 		retExt( CRYPT_ERROR_BADDATA,
 				( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
 				  "Encountered more than %d inner protocol packets",
 				  noPackets ) );
 		}
+	ENSURES( totalBytesProcessed >= 0 && totalBytesProcessed <= bufSize );
 
-	return( bufEnd );
+	return( totalBytesProcessed );
 	}
 #endif /* USE_WEBSOCKETS */
 
 /* Data injection point for fuzzing the inner protocol */
 
-#ifdef CONFIG_FUZZ
+#if defined( CONFIG_FUZZ ) && defined( USE_WEBSOCKETS )
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int fuzzInnerProtocol( INOUT_PTR SESSION_INFO *sessionInfoPtr,
@@ -277,7 +284,7 @@ int fuzzInnerProtocol( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	{
 	return( processInnerProtocolData( sessionInfoPtr, buffer, bufSize ) );
 	}
-#endif /* CONFIG_FUZZ */
+#endif /* CONFIG_FUZZ && USE_WEBSOCKETS */
 
 /****************************************************************************
 *																			*
@@ -572,7 +579,7 @@ static int tryRead( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		1. An error code.
 		2. Zero, to indicate that nothing was read.
 		3. OK_SPECIAL and read information READINFO_NOOP to indicate that 
-		   header data but no payload data was read.
+		   the header data but none of the payload data was read.
 		4. A byte count and read information READINFO_HEADERPAYLOAD to 
 		   indicate that some payload data was read as part of the header */
 	if( sessionInfoPtr->pendingPacketLength <= 0 )
@@ -620,12 +627,18 @@ static int tryRead( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	/* Figure out how much we can read.  If there's not enough room in the 
 	   receive buffer to read at least 1K of packet data, don't try anything 
-	   until the user has emptied more data from the buffer */
+	   until the user has emptied more data from the buffer.  We also exit
+	   if pendingPacketRemaining is zero, this shouldn't actually happen
+	   because it would indicate that we got here with 
+	   readInfo == READINFO_NOOP (case 3 above) when we should have exited
+	   with length == 0 (case 2 above), but we handle it here to make sure 
+	   that we don't trigger a check failure further down */
 	REQUIRES( !checkOverflowSub( sessionInfoPtr->receiveBufSize,
 								 sessionInfoPtr->receiveBufEnd ) );
 	bytesLeft = sessionInfoPtr->receiveBufSize - \
 				sessionInfoPtr->receiveBufEnd;
-	if( bytesLeft < 1024 )
+	if( bytesLeft < 1024 || \
+		sessionInfoPtr->pendingPacketRemaining <= 0 )
 		{
 		ENSURES( sanityCheckSessionRead( sessionInfoPtr ) );
 
@@ -637,6 +650,7 @@ static int tryRead( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		/* Limit the amount of data to read to the remaining packet size */
 		bytesLeft = sessionInfoPtr->pendingPacketRemaining;
 		}
+	ENSURES( isBufsizeRangeNZ( bytesLeft ) );
 
 	/* Try and read more of the packet */
 	ENSURES( boundsCheckZ( sessionInfoPtr->receiveBufEnd, bytesLeft,
@@ -686,7 +700,8 @@ static int tryRead( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   protocol data */
 #ifdef USE_WEBSOCKETS
 	if( TEST_FLAG( sessionInfoPtr->flags, 
-				   SESSION_FLAG_SUBPROTOCOL_ACTIVE ) )
+				   SESSION_FLAG_SUBPROTOCOL_ACTIVE ) && \
+		length > 0 )
 		{
 		status = length = \
 			processInnerProtocolData( sessionInfoPtr,
@@ -694,7 +709,21 @@ static int tryRead( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 										sessionInfoPtr->receiveBufPos, 
 									  length );
 		if( cryptStatusError( status ) )
+			{
+			/* The inner protocol is in who-knows-what state, turn it onto a 
+			   fatal error for the outer protocol */
+			*readInfo = READINFO_FATAL;
 			return( status );
+			}
+		if( length <= 0 )
+			{
+			/* All data was consumed by the inner protocol read, turn it into
+			   a no-op */
+			sessionInfoPtr->receiveBufEnd = sessionInfoPtr->receiveBufPos;
+			sessionInfoPtr->pendingPacketLength = 0;
+			*readInfo = READINFO_NOOP;
+			return( OK_SPECIAL );
+			}
 		}
 #endif /* USE_WEBSOCKETS */
 
@@ -712,19 +741,21 @@ static int tryRead( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 /* Get data from the remote system */
 
-CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
+CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2, 4, 5 ) ) \
 static int getData( INOUT_PTR SESSION_INFO *sessionInfoPtr, 
 					OUT_BUFFER( length, *bytesCopied ) BYTE *buffer, 
 					IN_DATALENGTH const int length, 
-					OUT_DATALENGTH_Z int *bytesCopied )
+					OUT_DATALENGTH_Z int *bytesCopied,
+					OUT_BOOL BOOLEAN *isNoopRead )
 	{
 	const int bytesToCopy = min( length, sessionInfoPtr->receiveBufPos );
-	READSTATE_INFO readInfo;
+	READSTATE_INFO readInfo = READINFO_NONE;
 	int bytesRead, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( buffer, length ) );
 	assert( isWritePtr( bytesCopied, sizeof( int ) ) );
+	assert( isWritePtr( isNoopRead, sizeof( BOOLEAN ) ) );
 
 	REQUIRES( sanityCheckSessionRead( sessionInfoPtr ) );
 	REQUIRES( isBufsizeRangeNZ( length ) );
@@ -734,6 +765,7 @@ static int getData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	REQUIRES( isIntegerRangeNZ( length ) ); 
 	memset( buffer, 0, min( 16, length ) );
 	*bytesCopied = 0;
+	*isNoopRead = FALSE;
 
 	/* Copy over as much data as we can and move any remaining data down to 
 	   the start of the receive buffer.  We copy out up to receiveBufPos, 
@@ -799,6 +831,17 @@ static int getData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	status = tryRead( sessionInfoPtr, &bytesRead, &readInfo );
 	if( cryptStatusError( status ) && status != OK_SPECIAL )
 		{
+		/* If it's an internal error then the states of the by-reference
+		   values may be undefined (the internal error could have been 
+		   triggered before the by-reference values could be cleared) so we 
+		   can't check any further.  We do however treat it as a (potential) 
+		   crypto-related error just in case */
+		if( isInternalError( status ) )
+			{
+			registerCryptoFailure();
+			return( status );
+			}
+
 		/* If it's a crypto-related error, register it so that 
 		   countermeasures can be taken */
 		if( readInfo == READINFO_FATAL_CRYPTO )
@@ -806,13 +849,6 @@ static int getData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			registerCryptoFailure();
 			readInfo = READINFO_FATAL;
 			}
-
-		/* If it's an internal error then the states of the by-reference
-		   values may be undefined (the internal error could have been 
-		   triggered before the by-reference values could be cleared) so we 
-		   can't check any further */
-		if( isInternalError( status ) )
-			return( status );
 
 		/* If there's an error reading data, only return an error status if 
 		   we haven't already returned all existing/earlier data.  This 
@@ -859,6 +895,8 @@ static int getData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			{
 			sioctlSet( &sessionInfoPtr->stream, STREAM_IOCTL_READTIMEOUT, 1 );
 			}
+		if( readInfo == READINFO_NOOP )
+			*isNoopRead = TRUE;
 
 		ENSURES( sanityCheckSessionRead( sessionInfoPtr ) );
 
@@ -892,7 +930,7 @@ int getSessionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					OUT_DATALENGTH_Z int *bytesCopied )
 	{
 	BYTE *dataPtr = data;
-	int dataLength, status = CRYPT_OK, LOOP_ITERATOR;
+	int dataLength, noopCount = 0, status = CRYPT_OK, LOOP_ITERATOR;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( data, dataMaxLength ) );
@@ -941,6 +979,7 @@ int getSessionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	LOOP_MAX_REV_INITCHECK( dataLength = dataMaxLength, dataLength > 0 )
 		{
+		BOOLEAN isNoopRead;
 		int byteCount;
 
 		ENSURES( LOOP_INVARIANT_MAX_REV_XXX( dataLength, 1, dataMaxLength ) );
@@ -954,7 +993,8 @@ int getSessionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   available.
 			3. CRYPT_OK to indicate that data was read and more may be 
 			   available */
-		status = getData( sessionInfoPtr, dataPtr, dataLength, &byteCount );
+		status = getData( sessionInfoPtr, dataPtr, dataLength, &byteCount, 
+						  &isNoopRead );
 		if( cryptStatusError( status ) && status != OK_SPECIAL )
 			break;
 
@@ -966,6 +1006,29 @@ int getSessionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			dataPtr += byteCount;
 			REQUIRES( !checkOverflowSub( dataLength, byteCount ) );
 			dataLength -= byteCount;
+			}
+		else
+			{
+			/* It's a no-op read, make sure that we're not getting too many
+			   of these.  This is a bit of a subjective check, we could for
+			   example require a run of consecutive no-op packets before
+			   triggering but then all that an attacker has to do is 
+			   interleave 1-byte packets with the no-ops to evade the 
+			   check.  The error code to return for this case is a bit 
+			   unclear, we use CRYPT_ERROR_TIMEOUT since we've in effect
+			   timed out waiting for data */ 
+			if( isNoopRead )
+				{
+				noopCount++;
+				if( noopCount > 10 )
+					{
+					DEBUG_DIAG(( "Peer sent more than 10 no-op packets, "
+								 "legitimate traffic wouldn't look like "
+								 "this" ));
+					status = CRYPT_ERROR_TIMEOUT;
+					break;
+					}
+				}
 			}
 		if( status == OK_SPECIAL )
 			{
@@ -1020,7 +1083,7 @@ int readPkiDatagram( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		complianceLevel = CRYPT_COMPLIANCELEVEL_STANDARD;
 
 	/* Read the datagram */
-	sessionInfoPtr->receiveBufEnd = 0;
+	sessionInfoPtr->receiveBufEnd = sessionInfoPtr->receiveBufPos = 0;
 	status = initHttpInfoRead( &httpDataInfo, 
 							   sessionInfoPtr->receiveBuffer,
 							   sessionInfoPtr->receiveBufSize );
@@ -1043,13 +1106,17 @@ int readPkiDatagram( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* Perform a sanity check on the length.  This avoids triggering 
 	   assertions in the debug build and provides somewhat more specific 
 	   information for the caller than the invalid-encoding error that we'd 
-	   get later */
+	   get later.  Note the slightly odd length comparison, the sread()
+	   bounds the data length at receiveBufSize so it's really a minimum-
+	   size check with the maximum size present to document that it's being 
+	   done */
 	if( length < minMessageSize || length >= MAX_BUFFER_SIZE )
 		{
 		retExt( CRYPT_ERROR_UNDERFLOW,
 				( CRYPT_ERROR_UNDERFLOW, SESSION_ERRINFO, 
 				  "Invalid PKI message length %d, should be %d to %d", 
-				  length, minMessageSize, MAX_BUFFER_SIZE ) );
+				  length, minMessageSize, 
+				  min( sessionInfoPtr->receiveBufSize, MAX_BUFFER_SIZE ) ) );
 		}
 
 	/* Find out how much data we got and perform a firewall check that
@@ -1075,13 +1142,15 @@ int readPkiDatagram( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* Perform the same check as before, but this time on the real object 
-	   size rather than the amount of data read */
+	   size rather than the amount of data read, with the same conditions 
+	   for the upper length range as before */
 	if( length < minMessageSize || length >= MAX_BUFFER_SIZE )
 		{
 		retExt( CRYPT_ERROR_UNDERFLOW,
 				( CRYPT_ERROR_UNDERFLOW, SESSION_ERRINFO, 
 				  "Invalid PKI message length %d, should be %d to %d", 
-				  length, minMessageSize, MAX_BUFFER_SIZE ) );
+				  length, minMessageSize, 
+				  min( sessionInfoPtr->receiveBufSize, MAX_BUFFER_SIZE ) ) );
 		}
 
 	sessionInfoPtr->receiveBufEnd = length;

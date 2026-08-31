@@ -695,7 +695,7 @@ static int getCrlEntry( INOUT_PTR CERT_INFO *certInfoPtr,
 	sMemNullOpen( &stream );
 	status = writeCertFunction( &stream, certInfoPtr, NULL, CRYPT_UNUSED );
 	if( cryptStatusOK( status ) )
-		crlEntrySize = stell( &stream );
+		status = crlEntrySize = stell( &stream );
 	sMemClose( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1411,6 +1411,7 @@ int getCertComponentString( INOUT_PTR CERT_INFO *certInfoPtr,
 		case CRYPT_CERTINFO_DN:
 			{
 			STREAM stream;
+			int position DUMMY_INIT;
 
 			/* Export the entire DN in string form */
 			status = selectDN( certInfoPtr, CRYPT_ATTRIBUTE_NONE,
@@ -1422,9 +1423,13 @@ int getCertComponentString( INOUT_PTR CERT_INFO *certInfoPtr,
 			status = writeDNstring( &stream, 
 									*certInfoPtr->currentSelection.dnPtr );
 			if( cryptStatusOK( status ) )
-				*certInfoLength = stell( &stream );
+				status = position = stell( &stream );
 			sMemDisconnect( &stream );
-			return( status );
+			if( cryptStatusError( status ) )
+				return( status );
+			*certInfoLength = position;
+
+			return( CRYPT_OK );
 			}
 #endif /* USE_CERT_DNSTRING */
 

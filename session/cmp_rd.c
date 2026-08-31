@@ -355,7 +355,11 @@ static int processExtraCerts( INOUT_PTR STREAM *stream,
 	   Since we're performing certificate verification, we have to mark the 
 	   verifying certificate as trusted if it's not already set as such 
 	   otherwise the verification will fail due to an untrusted-issuer 
-	   error */
+	   error.  Note that this marks it as trusted for all code holding a
+	   reference to it but it both seems unlikely that it'd be being used
+	   in two places at once and it'll be locked for most of the brief 
+	   window while it's being accessed.  So also the comment further down
+	   about the implications of the trust-reset failing */
 	status = krnlSendMessage( sessionInfoPtr->iAuthInContext, 
 							  IMESSAGE_GETATTRIBUTE, &trustValue, 
 							  CRYPT_CERTINFO_TRUSTED_IMPLICIT );
@@ -490,8 +494,10 @@ static int readGeneralInfoAttribute( INOUT_PTR STREAM *stream,
 		status = readSequence( stream, &length );	/* ESSCertID */
 		if( cryptStatusError( status ) )
 			return( status );
-		REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-		endPos = stell( stream ) + length;
+		endPos = stell( stream );
+		REQUIRES( isIntegerRangeNZ( endPos ) );
+		REQUIRES( !checkOverflowAdd( endPos, length ) );
+		endPos += length;
 		ENSURES( isIntegerRangeMin( endPos, length ) );
 		status = readOctetString( stream, certID, &dummy, KEYID_SIZE, 
 								  KEYID_SIZE );
@@ -510,15 +516,19 @@ static int readGeneralInfoAttribute( INOUT_PTR STREAM *stream,
 			DEBUG_DUMP_HEX( protocolInfo->isServer ? "SVR" : "CLI", 
 							protocolInfo->certID, protocolInfo->certIDsize );
 			}
-		if( stell( stream ) < endPos )
+		if( ( status = stell( stream ) ) < endPos )
 			{
+			/* Catch the residual error code from stell() */
+			if( cryptStatusError( status ) )
+				return( status );
+
 			/* Skip the issuerSerial if there's one present.  We can't 
 			   really do much with it in this form without rewriting it into 
 			   the standard issuerAndSerialNumber, but in any case we don't 
 			   need it because we've already got the certificate ID */
 			status = readUniversal( stream );
 			}
-		return( status );
+		return( cryptStatusError( status ) ? status : CRYPT_OK );
 		}
 	if( matchOID( oid, length, OID_ESS_CERTIDv2 ) )
 		{
@@ -534,8 +544,10 @@ static int readGeneralInfoAttribute( INOUT_PTR STREAM *stream,
 		status = readSequence( stream, &length );	/* ESSCertIDv2 */
 		if( cryptStatusError( status ) )
 			return( status );
-		REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-		endPos = stell( stream ) + length;
+		endPos = stell( stream );
+		REQUIRES( isIntegerRangeNZ( endPos ) );
+		REQUIRES( !checkOverflowAdd( endPos, length ) );
+		endPos += length;
 		ENSURES( isIntegerRangeMin( endPos, length ) );
 		status = readOctetString( stream, certIDv2, &dummy, 32, 32 );
 		if( cryptStatusError( status ) )
@@ -554,15 +566,19 @@ static int readGeneralInfoAttribute( INOUT_PTR STREAM *stream,
 							protocolInfo->certIDv2, 
 							protocolInfo->certIDv2size );
 			}
-		if( stell( stream ) < endPos )
+		if( ( status = stell( stream ) ) < endPos )
 			{
+			/* Catch the residual error code from stell() */
+			if( cryptStatusError( status ) )
+				return( status );
+
 			/* Skip the issuerSerial if there's one present.  We can't 
 			   really do much with it in this form without rewriting it into 
 			   the standard issuerAndSerialNumber, but in any case we don't 
 			   need it because we've already got the certificate ID */
 			status = readUniversal( stream );
 			}
-		return( status );
+		return( cryptStatusError( status ) ? status : CRYPT_OK );
 		}
 
 	/* It's something that we don't recognise, skip it */
@@ -584,12 +600,18 @@ static int readGeneralInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
-	LOOP_MED_WHILE( stell( stream ) < endPos )
+	LOOP_MED_WHILE( ( status = stell( stream ) ) < endPos )
 		{
 		ENSURES( LOOP_INVARIANT_MED_GENERIC() );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		status = readGeneralInfoAttribute( stream, protocolInfo );
 		if( cryptStatusError( status ) )
@@ -935,8 +957,10 @@ static int readPkiHeader( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	readShortInteger( stream, NULL );		/* Version */
 	if( !protocolInfo->isCryptlib )
@@ -1548,8 +1572,15 @@ int readPkiMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	/* There may be an (unauthenticated) extraCerts field present after the 
 	   main message, try and process it as required */ 
-	if( stell( &stream ) < endPos )
+	if( ( status = stell( &stream ) ) < endPos )
 		{
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			{
+			sMemDisconnect( &stream );
+			return( status );
+			}
+
 		/* If we're running in compliance with ETSI 33.310, process the
 		   extra certificates */
 		if( TEST_FLAG( sessionInfoPtr->protocolFlags, CMP_PFLAG_3GPP ) )

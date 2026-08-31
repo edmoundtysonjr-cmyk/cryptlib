@@ -53,7 +53,7 @@ BOOLEAN sanityCheckSessionTLS( IN_PTR const SESSION_INFO *sessionInfoPtr )
 		return( FALSE );
 		}
 
-	/* Check TLS session parameters */
+	/* Check TLS-specific session parameters */
 	if( !CHECK_FLAGS( sessionInfoPtr->protocolFlags, 
 					  TLS_PFLAG_NONE, TLS_PFLAG_MAX ) )
 		{
@@ -75,6 +75,11 @@ BOOLEAN sanityCheckSessionTLS( IN_PTR const SESSION_INFO *sessionInfoPtr )
 		)
 		{
 		DEBUG_PUTS(( "sanityCheckSessionTLS: Session parameters" ));
+		return( FALSE );
+		}
+	if( tlsInfo->noopPacketCount < 0 || tlsInfo->noopPacketCount > 10 )
+		{
+		DEBUG_PUTS(( "sanityCheckSessionTLS: No-op packet count" ));
 		return( FALSE );
 		}
 
@@ -99,7 +104,9 @@ BOOLEAN sanityCheckTLSHandshakeInfo( IN_PTR \
 		!( handshakeInfo->sha1context == CRYPT_ERROR || \
 		   isHandleRangeValid( handshakeInfo->sha1context ) ) || \
 		!( handshakeInfo->sha2context == CRYPT_ERROR || \
-		   isHandleRangeValid( handshakeInfo->sha2context ) ) )
+		   isHandleRangeValid( handshakeInfo->sha2context ) ) || \
+		!( handshakeInfo->sessionHashContext == CRYPT_ERROR || \
+		   isHandleRangeValid( handshakeInfo->sessionHashContext ) ) )
 		{
 		DEBUG_PUTS(( "sanityCheckTLSHandshakeInfo: Hash contexts" ));
 		return( FALSE );
@@ -178,7 +185,9 @@ BOOLEAN sanityCheckTLSHandshakeInfo( IN_PTR \
 	/* Check TLS 1.3 information */
 #ifdef USE_TLS13
 	if( !isShortIntegerRange( handshakeInfo->originalClientHelloLength ) || \
-		!isShortIntegerRange( handshakeInfo->originalServerHelloLength ) )
+		!isShortIntegerRange( handshakeInfo->originalServerHelloLength ) || \
+		handshakeInfo->tls13CertContextLen < 0 || \
+		handshakeInfo->tls13CertContextLen > CRYPT_MAX_HASHSIZE )
 		{
 		DEBUG_PUTS(( "sanityCheckTLSHandshakeInfo: TLS 1.3 information" ));
 		return( FALSE );
@@ -283,6 +292,8 @@ static int initHandshakeInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	{
 	const PROTOCOL_INFO *protocolInfo = \
 							DATAPTR_GET( sessionInfoPtr->protocolInfo );
+	TLS_INFO *tlsInfo = sessionInfoPtr->sessionTLS;
+	int status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
@@ -296,19 +307,49 @@ static int initHandshakeInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	else
 		initTLSclientProcessing( handshakeInfo );
 	handshakeInfo->originalVersion = sessionInfoPtr->version;
-	if( sessionInfoPtr->sessionTLS->minVersion <= 0 )
+	if( tlsInfo->minVersion <= 0 )
 		{
 		/* Set the minimum accepted protocol version if required */
-		sessionInfoPtr->sessionTLS->minVersion = protocolInfo->minVersion;
+		tlsInfo->minVersion = protocolInfo->minVersion;
 		}
-	if( sessionInfoPtr->sessionTLS->maxVersion <= 0 )
+	if( tlsInfo->minVersion > sessionInfoPtr->version )
+		{
+		/* Setting the minimum version to TLS 1.3 also lifts the default 
+		   version TLS 1.2 up to TLS 1.3 */
+		sessionInfoPtr->version = tlsInfo->minVersion;
+		}
+	if( tlsInfo->maxVersion <= 0 )
 		{
 		/* Set the maximum accepted protocol version if required */
-		sessionInfoPtr->sessionTLS->maxVersion = \
+		tlsInfo->maxVersion = \
 			( sessionInfoPtr->version > 0 ) ? \
 			sessionInfoPtr->version : protocolInfo->maxVersion;
 		}
-	return( initHandshakeCryptInfo( sessionInfoPtr, handshakeInfo ) );
+
+	status = initHandshakeCryptInfo( sessionInfoPtr, handshakeInfo );
+	if( cryptStatusError( status ) )
+		return( status );
+
+	/* Check that the caller hasn't somehow managed to get an inverted 
+	   version range, theoretically possible because the two are tri-state
+	   values that can be set both implicitly and explicitly.  We have to
+	   do this after calling initHandshakeCryptInfo() because the caller 
+	   will clean it up on an error return but the handles won't have been
+	   set to anything yet until initHandshakeCryptInfo() has been called.
+	   
+	   We have to make this epsilon-probability error a full retExt()
+	   because it's unrelated to the process of setting the values 
+	   earlier */
+	if( tlsInfo->minVersion > tlsInfo->maxVersion )
+		{
+		retExt( CRYPT_ERROR_INVALID,
+				( CRYPT_ERROR_INVALID, SESSION_ERRINFO,
+				  "Configured TLS minimum version %d is greater than the "
+				  "configured maximum version %d",
+				  tlsInfo->minVersion, tlsInfo->maxVersion ) );
+		}
+
+	return( CRYPT_OK );
 	}
 
 /* Push and pop the handshake state */
@@ -342,6 +383,9 @@ static int pushHandshakeInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   jump into the send function and then write a block of data all the 
 	   way at the end of the buffer, far past where a handshake packet would 
 	   be, to the peer */
+	handshakeInfo->checksum = 0;
+	handshakeInfo->checksum = checksumData( handshakeInfo, 
+											sizeof( TLS_HANDSHAKE_INFO ) );
 	REQUIRES( bufPos > 1024 && bufPos < sessionInfoPtr->sendBufSize - 512 );
 	savedHandshakeInfo = sessionInfoPtr->sendBuffer + bufPos;
 	memcpy( savedHandshakeInfo, handshakeInfo, 
@@ -362,6 +406,7 @@ static int popHandshakeInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	{
 	TLS_INFO *tlsInfo = sessionInfoPtr->sessionTLS;
 	void *savedHandshakeInfo;
+	int checksum;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
@@ -376,6 +421,22 @@ static int popHandshakeInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			sizeof( TLS_HANDSHAKE_INFO ) );
 	zeroise( savedHandshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) );
 	DATAPTR_SET( tlsInfo->savedHandshakeInfo, NULL );
+	checksum = handshakeInfo->checksum;
+	handshakeInfo->checksum = 0;
+	if( checksumData( handshakeInfo, 
+					  sizeof( TLS_HANDSHAKE_INFO ) ) != checksum )
+		{
+		/* Something corrupted the handshake information while it was 
+		   sitting in storage, we can't continue.  Note that we just
+		   zeroise the handshakeInfo rather than using 
+		   destroyHandshakeInfo() to clean it up because the contents,
+		   including things like crypto handles, are in an unknown state */
+		zeroise( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) );
+		DEBUG_DIAG(( "Saved handshake info was corrupted while in "
+					 "storage" ));
+		assert( DEBUG_WARN );
+		retIntError();
+		}
 
 	ENSURES( sanityCheckTLSHandshakeInfo( handshakeInfo ) );
 	
@@ -406,7 +467,7 @@ int readUint24( INOUT_PTR STREAM *stream )
 	return( readUint16( stream ) );
 	}
 
-STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int writeUint24( INOUT_PTR STREAM *stream, IN_LENGTH_Z const int length )
 	{
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -443,7 +504,11 @@ int readEcdhValue( INOUT_PTR STREAM *stream,
 	memset( value, 0, min( 16, valueMaxLen ) );
 	*valueLen = 0;
 
-	/* Get the length (as a byte) and make sure that it's valid */
+	/* Get the length (as a byte) and make sure that it's valid.  Note that 
+	   we call isShortECCKey() before the overall length check since it
+	   checks whether it's in a subset of the length range that's in theory
+	   valid for ECC keys but insecure, which would be rejected by the 
+	   overall length check */
 	status = length = sgetc( stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -498,6 +563,71 @@ static int abortStartup( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		destroyHandshakeInfo( handshakeInfo );
 	return( errorStatus );
 	}
+
+/* Check that TLS 1.3-specific options are set up appropriately.  Of 
+   necessity this is called after initHandshakeInfo() has sets up the 
+   options that we're checking so we have to call abortStartup() before we 
+   exit */
+
+#ifdef USE_TLS13
+
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+static int checkTLS13Options( INOUT_PTR SESSION_INFO *sessionInfoPtr,
+							  INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo )
+	{
+	TLS_INFO *tlsInfo = sessionInfoPtr->sessionTLS;
+
+	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
+	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
+
+	/* TLS 1.3 requires a bunch of new algorithms and mechanisms including 
+	   AES-GCM, so if the user has requested TLS 1.3 or newer we need to 
+	   make sure that these are available.  We can't really do the GCM check 
+	   at runtime without creating an AES context each time we check so we 
+	   rely on USE_GCM being defined to tell us whether it's available */
+	if( tlsInfo->maxVersion >= TLS_MINOR_VERSION_TLS13 )
+		{
+		/* TLS 1.3, technically we could also get by with X25519 but ECDH 
+		   and ECDSA are the MTI algorithms so we always required these */
+		if( !algoAvailable( CRYPT_ALGO_ECDH ) || \
+			!algoAvailable( CRYPT_ALGO_ECDSA ) )
+			{
+			( void ) abortStartup( sessionInfoPtr, handshakeInfo, FALSE, 
+								   CRYPT_ERROR_NOTAVAIL );
+			retExt( CRYPT_ERROR_NOTAVAIL,
+					( CRYPT_ERROR_NOTAVAIL, SESSION_ERRINFO, 
+					  "TLS 1.3 and newer require the ECDH and ECDSA "
+					  "algorithms which aren't available in this build of "
+					  "cryptlib" ) );
+			}
+  #if !defined( USE_GCM )
+		( void ) abortStartup( sessionInfoPtr, handshakeInfo, FALSE, 
+							   CRYPT_ERROR_NOTAVAIL );
+		retExt( CRYPT_ERROR_NOTAVAIL,
+				( CRYPT_ERROR_NOTAVAIL, SESSION_ERRINFO, 
+				  "TLS 1.3 and newer require the AES-GCM algorithm which "
+				  "isn't available in this build of cryptlib" ) );
+  #endif /* !USE_GCM */
+		}
+	else
+		{
+		/* TLS classic, make sure that the key that we're using is 
+		   compatible with the protocol version */
+		if( sessionInfoPtr->privateKey != CRYPT_ERROR && \
+			sessionInfoPtr->privateKeyAlgo == CRYPT_ALGO_ED25519 )
+			{
+			( void ) abortStartup( sessionInfoPtr, handshakeInfo, FALSE, 
+								   CRYPT_ERROR_NOTAVAIL );
+			retExt( CRYPT_ERROR_NOTAVAIL,
+					( CRYPT_ERROR_NOTAVAIL, SESSION_ERRINFO, 
+					  "Ed25519 keys can only be used with TLS 1.3 and "
+					  "newer" ) );
+			}
+		}
+
+	return( CRYPT_OK );
+	}
+#endif /* USE_TLS13 */
 
 #ifdef CONFIG_SUITEB
 
@@ -661,24 +791,76 @@ int readTLSCertChain( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								  isServer ? 0 : LENGTH_SIZE + MIN_CERTSIZE );
 	if( cryptStatusError( status ) )
 		return( status );
+
+	/* Handle the TLS 1.3 gratuitously incompatible form of the packet, 
+	   which adds a binary certificate-context blob at this point.  The
+	   standard (RFC 8446) never indicates what the purpose of this is,
+	   the sole hint is in section 4.6.2 which indicates that it can be 
+	   used to disambiguate "multiple CertificateRequests in close 
+	   succession" (?), presumably someone's business model depended on 
+	   having this "feature" present (see also the comment in 
+	   session/tls13_hs.c:writeCertRequest()).
+	   
+	   In any case since we don't do CertificateRequest spraying there's 
+	   nothing worth checking, we either get back a response or we don't 
+	   so the certificate-context value is irrelevant.  We do however save 
+	   it so that we can echo it back later */
+#ifdef USE_TLS13
+	if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 )
+		{
+		int certContextLength;
+
+		status = certContextLength = sgetc( stream );
+		if( !cryptStatusError( status ) && certContextLength > 0 )
+			{
+			/* A certificate context value is only valid if it's coming from
+			   the client */
+			if( !isServer || \
+				!rangeCheck( certContextLength, 1, CRYPT_MAX_HASHSIZE ) || \
+				length < certContextLength + 1 )
+				status = CRYPT_ERROR_BADDATA;
+			else
+				{
+				REQUIRES( rangeCheck( certContextLength, \
+									  1, CRYPT_MAX_HASHSIZE ) );
+				status = sread( stream, 
+								handshakeInfo->tls13CertContext, 
+								certContextLength );
+				}
+			}
+		if( cryptStatusError( status ) )
+			{
+			retExt( CRYPT_ERROR_BADDATA,
+					( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
+					  "Invalid certificate chain context value" ) );
+			}
+		if( isServer )
+			handshakeInfo->tls13CertContextLen = certContextLength;
+		REQUIRES( !checkOverflowSub( length, 1 + certContextLength ) );
+		length -= 1 + certContextLength;
+		}
+#endif /* USE_TLS13 */
+
+	/* There is one special case in which a too-short certificate packet is 
+	   valid and that's where it constitutes the TLS equivalent of an SSL 
+	   no-certificates alert.  SSLv3 sent an TLS_ALERT_NO_CERTIFICATE alert 
+	   to indicate that the client doesn't have a certificate, which is 
+	   handled by the readHSPacketTLS() call.  TLS changed this to send an 
+	   empty certificate packet instead, supposedly because it lead to 
+	   implementation problems (presumably it's necessary to create a state 
+	   machine-based implementation to reproduce these problems, whatever 
+	   they are).
+	   
+	   The TLS 1.0 spec is ambiguous as to what constitutes an empty packet, 
+	   it could be either a packet with a length of zero or a packet 
+	   containing a zero-length certificate list so we check for both.  TLS 
+	   1.1 fixed this to say that that certListLen entry has a length of 
+	   zero.  
+	   
+	   To report this condition we fake the error indicators for consistency 
+	   with the status obtained from an SSLv3 no-certificate alert */
 	if( isServer && ( length == 0 || length == LENGTH_SIZE ) )
 		{
-		/* There is one special case in which a too-short certificate packet 
-		   is valid and that's where it constitutes the TLS equivalent of an 
-		   SSL no-certificates alert.  SSLv3 sent an 
-		   TLS_ALERT_NO_CERTIFICATE alert to indicate that the client 
-		   doesn't have a certificate, which is handled by the 
-		   readHSPacketTLS() call.  TLS changed this to send an empty 
-		   certificate packet instead, supposedly because it lead to 
-		   implementation problems (presumably it's necessary to create a 
-		   state machine-based implementation to reproduce these problems, 
-		   whatever they are).  The TLS 1.0 spec is ambiguous as to what 
-		   constitutes an empty packet, it could be either a packet with a 
-		   length of zero or a packet containing a zero-length certificate 
-		   list so we check for both.  TLS 1.1 fixed this to say that that 
-		   certListLen entry has a length of zero.  To report this condition 
-		   we fake the error indicators for consistency with the status 
-		   obtained from an SSLv3 no-certificate alert */
 		retExt( CRYPT_ERROR_PERMISSION,
 				( CRYPT_ERROR_PERMISSION, SESSION_ERRINFO, 
 				  "Received TLS alert message: No certificate" ) );
@@ -696,41 +878,6 @@ int readTLSCertChain( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				  TLS_HAND_CERTIFICATE ) );
 		}
 	
-	/* Handle the TLS 1.3 gratuitously incompatible form of the packet, 
-	   which adds a binary certificate-context blob at this point */
-#ifdef USE_TLS13
-	if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 )
-		{
-		int certContextLength;
-
-		status = certContextLength = sgetc( stream );
-		if( !cryptStatusError( status ) && certContextLength > 0 )
-			{
-			/* A certificate context value is only valid if it's coming from
-			   the client */
-			if( !isServer || certContextLength > CRYPT_MAX_HASHSIZE )
-				status = CRYPT_ERROR_BADDATA;
-			else
-				{
-				REQUIRES( rangeCheck( certContextLength, \
-									  1, CRYPT_MAX_HASHSIZE ) );
-				status = sread( stream, 
-								handshakeInfo->tls13CertContext, 
-								certContextLength );
-				}
-			}
-		if( cryptStatusError( status ) || length < certContextLength + 1 )
-			{
-			retExt( CRYPT_ERROR_BADDATA,
-					( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
-					  "Invalid certificate chain context value" ) );
-			}
-		handshakeInfo->tls13CertContextLen = certContextLength;
-		REQUIRES( !checkOverflowSub( length, 1 + certContextLength ) );
-		length -= 1 + certContextLength;
-		}
-#endif /* USE_TLS13 */
-
 	/* Read the certificate chain length and make sure that it's in order */
 	status = chainLength = readUint24( stream );
 	if( cryptStatusError( status ) )
@@ -1011,10 +1158,7 @@ static void shutdownFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 		/* We got halfway through the handshake but didn't complete it, 
 		   restore the handshake state and use it to shut down the session.  
 		   We set a dummy status since this is handled by the higher-level 
-		   code that called us.  Since we're being called as part of a
-		   shutdown rather than directly from the startup code, we set the 
-		   shutdownNetworkSession flag to FALSE since it'll be closed down 
-		   by the code that called us */
+		   code that called us */
 		status = popHandshakeInfo( sessionInfoPtr, &handshakeInfo );
 		ENSURES_V( cryptStatusOK( status ) );
 		( void ) abortStartup( sessionInfoPtr, &handshakeInfo, FALSE, 
@@ -1040,29 +1184,6 @@ static int commonStartup( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	REQUIRES( sanityCheckSessionTLS( sessionInfoPtr ) );
 	REQUIRES( isBooleanValue( isServer ) );
 
-	/* TLS 1.3 requires a bunch of new algorithms and mechanisms including 
-	   AES-GCM, so if the user has requested TLS 1.3 or newer we need to 
-	   make sure that these are available.  We can't really do the GCM check 
-	   at runtime without creating an AES context each time we check so we 
-	   rely on USE_GCM being defined to tell us whether it's available */
-#ifdef USE_TLS13
-	if( sessionInfoPtr->sessionTLS->maxVersion >= TLS_MINOR_VERSION_TLS13 && \
-		( !algoAvailable( CRYPT_ALGO_ECDH ) || \
-		  !algoAvailable( CRYPT_ALGO_ECDSA ) ) )
-		{
-		retExt( CRYPT_ERROR_NOTAVAIL,
-				( CRYPT_ERROR_NOTAVAIL, SESSION_ERRINFO, 
-				  "TLS 1.3 and newer require the ECDH and ECDSA algorithms "
-				  "which aren't available in this build of cryptlib" ) );
-		}
-  #if !defined( USE_GCM )
-	retExt( CRYPT_ERROR_NOTAVAIL,
-			( CRYPT_ERROR_NOTAVAIL, SESSION_ERRINFO, 
-			  "TLS 1.3 and newer require the AES-GCM algorithm which "
-			  "isn't available in this build of cryptlib" ) );
-  #endif /* !USE_GCM */
-#endif /* USE_TLS13 */
-
 	/* Begin the handshake, unless we're continuing a partially-opened 
 	   session */
 	if( !TEST_FLAG( sessionInfoPtr->flags, SESSION_FLAG_PARTIALOPEN ) )
@@ -1073,25 +1194,18 @@ static int commonStartup( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		status = initHandshakeInfo( sessionInfoPtr, &handshakeInfo, 
 									isServer );
 #ifdef USE_TLS13
-		if( cryptStatusOK( status ) && \
-			sessionInfoPtr->privateKey != CRYPT_ERROR )
+		if( cryptStatusOK( status ) )
 			{
 			/* Now that we've got the version numbering set up, make sure 
-			   that the key we're using is compatible with the protocol 
-			   version */
-			if( sessionInfoPtr->privateKeyAlgo == CRYPT_ALGO_ED25519 && \
-				sessionInfoPtr->sessionTLS->maxVersion < TLS_MINOR_VERSION_TLS13 )
+			   that everything is as required for TLS 1.3 */
+			status = checkTLS13Options( sessionInfoPtr, &handshakeInfo );
+			if( cryptStatusError( status ) )
 				{
-				/* This is a special-case error because we need to return 
-				   additional information alongside the error code, so we 
-				   can't just drop through to the error handler that 
-				   follows */
-				( void ) abortStartup( sessionInfoPtr, &handshakeInfo, FALSE, 
-									   CRYPT_ERROR_NOTAVAIL );
-				retExt( CRYPT_ERROR_NOTAVAIL,
-						( CRYPT_ERROR_NOTAVAIL, SESSION_ERRINFO, 
-						  "Ed25519 keys can only be used with TLS 1.3 and "
-						  "newer" ) );
+				/* This is a special-case error because checkTLS13Options()
+				   has returned additional information alongside the error 
+				   code, so we can't just drop through to the error handler 
+				   that follows */
+				return( status );
 				}
 			}
 #endif /* USE_TLS13 */
@@ -1155,21 +1269,48 @@ static int commonStartup( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   that some handshake-related information won't be available */
 			SET_FLAG( sessionInfoPtr->flags, SESSION_FLAG_CACHEDINFO );
 
-			/* We've bypassed the keyex state via the resume.  Note that TLS 
-			   1.3 doesn't do session resumption so we can unconditionally 
-			   set the state to the TLS classic value */
+			/* We've bypassed the keyex state via the resume.  TLS 1.3 
+			   doesn't do session resumption (or at least no in a usable
+			   manner, see the comment for 
+			   session/tls13_keyexc:readKeyexTLS13()) so we can never get 
+			   here for TLS 1.3 and can unconditionally set the state to the 
+			   TLS classic state value */
 			handshakeInfo.completedHSstate = HANDSHAKE_STATE_KEYEX;
 			}
 
 		/* TLS 1.3 completely changes the TLS protocol flow in order to 
 		   allow for 0RTT, once we get to this point we've already completed 
-		   the handshake */
+		   the handshake.
+		   
+		   Note that this means the manual certificate check, performed 
+		   below, isn't possible for TLS 1.3 because the protocol doesn't 
+		   allow it.  The workaround for this is to use a keyset allowlist 
+		   as documented in the manual, however in case the caller is 
+		   relying on it we hard-fail.  Unfortunately we can't do this before
+		   the session is established because we don't know at that point 
+		   whether we'll be doing TLS 1.3 or not */
 #ifdef USE_TLS13
 		if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 )
 			{
 			ENSURES( handshakeInfo.completedHSstate == \
 										HANDSHAKE_STATE_COMPLETE );
 			destroyHandshakeInfo( &handshakeInfo );
+
+			if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
+						   TLS_PFLAG_MANUAL_CERTCHECK ) && \
+				sessionInfoPtr->authResponse != AUTHRESPONSE_SUCCESS )
+				{
+				/* At this point the handshake has completed and the session 
+				   is established so we can't use abortStartup() but have to
+				   end the session and perform the cleanup operations
+				   explicitly */
+				sendCloseAlert( sessionInfoPtr, FALSE );
+				destroySecurityContextsTLS( sessionInfoPtr );
+				retExt( CRYPT_ERROR_NOTAVAIL,
+						( CRYPT_ERROR_NOTAVAIL, SESSION_ERRINFO, 
+						  "TLS 1.3 doesn't allow manual certificate "
+						  "checking via CRYPT_TLSOPTION_MANUAL_CERTCHECK" ) );
+				}
 			return( CRYPT_OK );
 			}
 #endif /* USE_TLS13 */
@@ -1251,8 +1392,6 @@ static int getAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								 INOUT_PTR void *data, 
 								 IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE type )
 	{
-	CRYPT_CERTIFICATE *certPtr = ( CRYPT_CERTIFICATE * ) data;
-
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
 	REQUIRES( sanityCheckSessionTLS( sessionInfoPtr ) );
@@ -1267,152 +1406,169 @@ static int getAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	/* If the caller is after the current TLS option settings or sub-
 	   protocol type, return them */
-	if( type == CRYPT_SESSINFO_TLS_OPTIONS )
+	switch( type )
 		{
-		const TLS_INFO *tlsInfo = sessionInfoPtr->sessionTLS;
-		int *valuePtr = ( int * ) data;
+		case CRYPT_SESSINFO_TLS_OPTIONS:
+			{
+			const TLS_INFO *tlsInfo = sessionInfoPtr->sessionTLS;
+			int *valuePtr = ( int * ) data;
 
-		*valuePtr = tlsInfo->minVersion & TLS_MINVER_MASK;
+			*valuePtr = tlsInfo->minVersion & TLS_MINVER_MASK;
 #ifdef CONFIG_SUITEB
-		if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
-					   TLS_PFLAG_SUITEB_128 ) )
-			*valuePtr |= CRYPT_TLSOPTION_SUITEB_128;
-		if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
-					   TLS_PFLAG_SUITEB_256 ) )
-			*valuePtr |= CRYPT_TLSOPTION_SUITEB_256;
+			if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
+						   TLS_PFLAG_SUITEB_128 ) )
+				*valuePtr |= CRYPT_TLSOPTION_SUITEB_128;
+			if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
+						   TLS_PFLAG_SUITEB_256 ) )
+				*valuePtr |= CRYPT_TLSOPTION_SUITEB_256;
 #endif /* CONFIG_SUITEB */
-		if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
-					   TLS_PFLAG_MANUAL_CERTCHECK ) )
-			*valuePtr |= CRYPT_TLSOPTION_MANUAL_CERTCHECK;
-		if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
-					   TLS_PFLAG_DISABLE_NAMEVERIFY ) )
-			*valuePtr |= CRYPT_TLSOPTION_DISABLE_NAMEVERIFY;
-		if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
-					   TLS_PFLAG_DISABLE_CERTVERIFY ) )
-			*valuePtr |= CRYPT_TLSOPTION_DISABLE_CERTVERIFY;
-		if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
-					   TLS_PFLAG_SERVER_SNI ) )
-			*valuePtr |= CRYPT_TLSOPTION_SERVER_SNI;
-		if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
-					   TLS_PFLAG_RESUMED_SESSION ) )
-			*valuePtr |= CRYPT_TLSOPTION_RESUMED;
+			if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
+						   TLS_PFLAG_MANUAL_CERTCHECK ) )
+				*valuePtr |= CRYPT_TLSOPTION_MANUAL_CERTCHECK;
+			if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
+						   TLS_PFLAG_DISABLE_NAMEVERIFY ) )
+				*valuePtr |= CRYPT_TLSOPTION_DISABLE_NAMEVERIFY;
+			if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
+						   TLS_PFLAG_DISABLE_CERTVERIFY ) )
+				*valuePtr |= CRYPT_TLSOPTION_DISABLE_CERTVERIFY;
+			if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
+						   TLS_PFLAG_SERVER_SNI ) )
+				*valuePtr |= CRYPT_TLSOPTION_SERVER_SNI;
+			if( TEST_FLAG( sessionInfoPtr->protocolFlags, \
+						   TLS_PFLAG_RESUMED_SESSION ) )
+				*valuePtr |= CRYPT_TLSOPTION_RESUMED;
 
-		return( CRYPT_OK );
-		}
-#if defined( USE_WEBSOCKETS ) || defined( USE_EAP )
-	if( type == CRYPT_SESSINFO_TLS_SUBPROTOCOL )
-		{
-		int *valuePtr = ( int * ) data;
-
-		*valuePtr = sessionInfoPtr->subProtocol;
-
-		return( CRYPT_OK );
-		}
-#endif /* USE_WEBSOCKETS || USE_EAP */
-#ifdef USE_WEBSOCKETS
-	if( type == CRYPT_SESSINFO_TLS_WSPROTOCOL )
-		{
-		const SESSION_ATTRIBUTE_LIST *attributeListPtr;
-		MESSAGE_DATA *msgData = ( MESSAGE_DATA * ) data;
-
-		attributeListPtr = findSessionInfo( sessionInfoPtr, 
-											CRYPT_SESSINFO_TLS_WSPROTOCOL );
-		if( attributeListPtr == NULL )
-			{
-			setObjectErrorInfo( sessionInfoPtr, 
-								CRYPT_SESSINFO_TLS_WSPROTOCOL, 
-								CRYPT_ERRTYPE_ATTR_ABSENT );
-			return( CRYPT_ERROR_NOTFOUND );
-			}
-		return( attributeCopy( msgData, attributeListPtr->value,
-							   attributeListPtr->valueLength ) );
-		}
-#endif /* USE_WEBSOCKETS */
-
-	/* If it's a subprotocol-specific attribute, return it */
-#ifdef USE_EAP
-	if( type == CRYPT_SESSINFO_TLS_EAPCHALLENGE || \
-		type == CRYPT_SESSINFO_TLS_EAPKEY )
-		{
-		const SESSION_ATTRIBUTE_LIST *attributeListPtr;
-		MESSAGE_DATA *msgData = ( MESSAGE_DATA * ) data;
-
-		attributeListPtr = findSessionInfo( sessionInfoPtr, type );
-		if( attributeListPtr == NULL )
-			{
-			setObjectErrorInfo( sessionInfoPtr, type, 
-								CRYPT_ERRTYPE_ATTR_ABSENT );
-			return( CRYPT_ERROR_NOTFOUND );
-			}
-		return( attributeCopy( msgData, attributeListPtr->value,
-							   attributeListPtr->valueLength ) );
-		}
-	if( type == CRYPT_SESSINFO_TLS_EAPDATA )
-		{
-		MESSAGE_DATA *msgData = ( MESSAGE_DATA * ) data;
-		int dataLen, status;
-
-		/* Find out how much data, if any, is present.  This duplicates 
-		   some of the functionality that would normally be handled via
-		   attributeCopy() but since the only available interface to this 
-		   low-level data is via sioctl() which separates out the data and
-		   length there's no way to directly return it with 
-		   attributeCopy() */
-		status = sioctlGet( &sessionInfoPtr->stream, 
-							STREAM_IOCTL_GETEXTRADATALEN, &dataLen, 
-							sizeof( int ) );
-		if( cryptStatusError( status ) )
-			{
-			setObjectErrorInfo( sessionInfoPtr, type, 
-								CRYPT_ERRTYPE_ATTR_ABSENT );
-			return( CRYPT_ERROR_NOTFOUND );
-			}
-		if( msgData->data == NULL )
-			{
-			/* It's a length-check only, return the data length */
-			msgData->length = dataLen;
 			return( CRYPT_OK );
 			}
-		if( dataLen <= 0 || dataLen > msgData->length )
-			return( CRYPT_ERROR_OVERFLOW );
+		
+#if defined( USE_WEBSOCKETS ) || defined( USE_EAP )
+		case CRYPT_SESSINFO_TLS_SUBPROTOCOL:
+			{
+			int *valuePtr = ( int * ) data;
 
-		/* Get the data and return it to the caller */
-		return( sioctlGet( &sessionInfoPtr->stream, 
-						   STREAM_IOCTL_GETEXTRADATA, msgData->data, 
-						   dataLen ) );
-		}
+			*valuePtr = sessionInfoPtr->subProtocol;
+
+			return( CRYPT_OK );
+			}
+#endif /* USE_WEBSOCKETS || USE_EAP */
+
+#ifdef USE_WEBSOCKETS
+		case CRYPT_SESSINFO_TLS_WSPROTOCOL:
+			{
+			const SESSION_ATTRIBUTE_LIST *attributeListPtr;
+			MESSAGE_DATA *msgData = ( MESSAGE_DATA * ) data;
+
+			attributeListPtr = findSessionInfo( sessionInfoPtr, 
+									CRYPT_SESSINFO_TLS_WSPROTOCOL );
+			if( attributeListPtr == NULL )
+				{
+				setObjectErrorInfo( sessionInfoPtr, 
+									CRYPT_SESSINFO_TLS_WSPROTOCOL, 
+									CRYPT_ERRTYPE_ATTR_ABSENT );
+				return( CRYPT_ERROR_NOTFOUND );
+				}
+			return( attributeCopy( msgData, attributeListPtr->value,
+								   attributeListPtr->valueLength ) );
+			}
+#endif /* USE_WEBSOCKETS */
+
+		/* If it's a subprotocol-specific attribute, return it */
+#ifdef USE_EAP
+		case CRYPT_SESSINFO_TLS_EAPCHALLENGE:
+		case CRYPT_SESSINFO_TLS_EAPKEY:
+			{
+			const SESSION_ATTRIBUTE_LIST *attributeListPtr;
+			MESSAGE_DATA *msgData = ( MESSAGE_DATA * ) data;
+
+			attributeListPtr = findSessionInfo( sessionInfoPtr, type );
+			if( attributeListPtr == NULL )
+				{
+				setObjectErrorInfo( sessionInfoPtr, type, 
+									CRYPT_ERRTYPE_ATTR_ABSENT );
+				return( CRYPT_ERROR_NOTFOUND );
+				}
+			return( attributeCopy( msgData, attributeListPtr->value,
+								   attributeListPtr->valueLength ) );
+			}
+			
+		case CRYPT_SESSINFO_TLS_EAPDATA:
+			{
+			MESSAGE_DATA *msgData = ( MESSAGE_DATA * ) data;
+			int dataLen, status;
+
+			/* Find out how much data, if any, is present.  This duplicates 
+			   some of the functionality that would normally be handled via
+			   attributeCopy() but since the only available interface to 
+			   this low-level data is via sioctl() which separates out the 
+			   data and length there's no way to directly return it with 
+			   attributeCopy() */
+			status = sioctlGet( &sessionInfoPtr->stream, 
+								STREAM_IOCTL_GETEXTRADATALEN, &dataLen, 
+								sizeof( int ) );
+			if( cryptStatusError( status ) )
+				{
+				setObjectErrorInfo( sessionInfoPtr, type, 
+									CRYPT_ERRTYPE_ATTR_ABSENT );
+				return( CRYPT_ERROR_NOTFOUND );
+				}
+			if( msgData->data == NULL )
+				{
+				/* It's a length-check only, return the data length */
+				msgData->length = dataLen;
+				return( CRYPT_OK );
+				}
+			if( dataLen <= 0 || dataLen > msgData->length )
+				return( CRYPT_ERROR_OVERFLOW );
+			msgData->length = dataLen;
+
+			/* Get the data and return it to the caller */
+			return( sioctlGet( &sessionInfoPtr->stream, 
+							   STREAM_IOCTL_GETEXTRADATA, msgData->data, 
+							   dataLen ) );
+			}
 #endif /* USE_EAP */
 
-	/* The caller is querying the SNI-selected certificate, return it as a
-	   data-only copy of the one attached to the server's private key */
-	if( type == CRYPT_SESSINFO_REQUEST )
-		{
-		CRYPT_CERTIFICATE iCryptCert;
-		int status;
+		case CRYPT_SESSINFO_REQUEST:
+			{
+			CRYPT_CERTIFICATE *certPtr = ( CRYPT_CERTIFICATE * ) data;
+			CRYPT_CERTIFICATE iCryptCert;
+			int status;
 
-		status = krnlSendMessage( sessionInfoPtr->privateKey,
-								  IMESSAGE_GETATTRIBUTE, &iCryptCert,
-								  CRYPT_IATTRIBUTE_CERTCOPY_DATAONLY );
-		if( cryptStatusError( status ) )
-			return( CRYPT_ERROR_NOTFOUND );
-		*certPtr = iCryptCert;
+			/* The caller is querying the SNI-selected certificate, return 
+			   it as a data-only copy of the one attached to the server's 
+			   private key */
+			status = krnlSendMessage( sessionInfoPtr->privateKey,
+									  IMESSAGE_GETATTRIBUTE, &iCryptCert,
+									  CRYPT_IATTRIBUTE_CERTCOPY_DATAONLY );
+			if( cryptStatusError( status ) )
+				return( CRYPT_ERROR_NOTFOUND );
+			*certPtr = iCryptCert;
 
-		return( CRYPT_OK );
+			return( CRYPT_OK );
+			}
+
+		case CRYPT_SESSINFO_RESPONSE:
+			{
+			CRYPT_CERTIFICATE *certPtr = ( CRYPT_CERTIFICATE * ) data;
+
+			/* If we didn't get a client/server certificate then there's 
+			   nothing to return */
+			if( sessionInfoPtr->iKeyexAuthContext == CRYPT_ERROR )
+				return( CRYPT_ERROR_NOTFOUND );
+
+			/* Return the information to the caller */
+			krnlSendNotifier( sessionInfoPtr->iKeyexAuthContext, 
+							  IMESSAGE_INCREFCOUNT );
+			*certPtr = sessionInfoPtr->iKeyexAuthContext;
+
+			return( CRYPT_OK );
+			}
+
+		default:
+			retIntError();
 		}
 
-	ENSURES( type == CRYPT_SESSINFO_RESPONSE );
-
-	/* If we didn't get a client/server certificate then there's nothing to 
-	   return */
-	if( sessionInfoPtr->iKeyexAuthContext == CRYPT_ERROR )
-		return( CRYPT_ERROR_NOTFOUND );
-
-	/* Return the information to the caller */
-	krnlSendNotifier( sessionInfoPtr->iKeyexAuthContext, 
-					  IMESSAGE_INCREFCOUNT );
-	*certPtr = sessionInfoPtr->iKeyexAuthContext;
-
-	return( CRYPT_OK );
+	retIntError();
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
@@ -1421,7 +1577,7 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								 IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE type )
 	{
 	TLS_INFO *tlsInfo = sessionInfoPtr->sessionTLS;
-	const int value = *( ( int * ) data );
+	int value;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
@@ -1505,6 +1661,7 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 		ENSURES( protocolInfo != NULL );
 
+		value = *( ( int * ) data );
 		if( value < protocolInfo->minSubProtocol || \
 			value > protocolInfo->maxSubProtocol )
 			return( CRYPT_ARGERROR_VALUE );
@@ -1534,8 +1691,11 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 #endif /* USE_WEBSOCKETS */
 	ENSURES( type == CRYPT_SESSINFO_TLS_OPTIONS );
 
-	/* Make sure that the caller isn't trying to set client/server-only 
-	   options on the wrong session type */
+	/* Make sure that the caller isn't trying to set read-only options, or
+	   client/server-only options on the wrong session type */
+	value = *( ( int * ) data );
+	if( value & CRYPT_TLSOPTION_RESUMED )
+		return( CRYPT_ARGERROR_NUM1 );
 	if( isServer( sessionInfoPtr ) )
 		{
 		if( value & ( CRYPT_TLSOPTION_DISABLE_NAMEVERIFY | \
@@ -1585,10 +1745,34 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 #endif /* CONFIG_SUITEB */
 
-	/* Set the minimum protocol version, a two-bit field that contains the 
+	/* Set the minimum protocol version, a three-bit field that contains the 
 	   minimum version that we're prepared to accept */
 	if( value & TLS_MINVER_MASK )
-		tlsInfo->minVersion = value & TLS_MINVER_MASK;
+		{
+		const PROTOCOL_INFO *protocolInfo = \
+							DATAPTR_GET( sessionInfoPtr->protocolInfo );
+		const int minVersion = value & TLS_MINVER_MASK;
+
+		ENSURES( protocolInfo != NULL );
+
+		static_assert( CRYPT_TLSOPTION_MINVER_TLS11 == TLS_MINOR_VERSION_TLS11,
+					   "TLS 1.1 version define" );
+		static_assert( CRYPT_TLSOPTION_MINVER_TLS12 == TLS_MINOR_VERSION_TLS12,
+					   "TLS 1.2 version define" );
+		static_assert( CRYPT_TLSOPTION_MINVER_TLS13 == TLS_MINOR_VERSION_TLS13,
+					   "TLS 1.3 version define" );
+
+		/* minVersion is a three-bit value so can be set to values higher 
+		   than TLS_MINOR_VERSION_TLS13.  The other check is redundant at
+		   this point since maxVersion is always set 0 until the session is
+		   activated but is present in case a future 
+		   CRYPT_TLSOPTION_MAXVER_xxx changes this */
+		if( minVersion < protocolInfo->minVersion || \
+			minVersion > protocolInfo->maxVersion || \
+			( tlsInfo->maxVersion > 0 && minVersion > tlsInfo->maxVersion ) )
+			return( CRYPT_ARGERROR_NUM1 );
+		tlsInfo->minVersion = minVersion;
+		}
 
 	/* By default if a certificate is used we try and verify the server name 
 	   against the name(s) in the certificate, and the certificate itself, 
@@ -1630,7 +1814,7 @@ static int checkAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								   IN_PTR const void *data,
 								   IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE type )
 	{
-	const CRYPT_CONTEXT cryptContext = *( ( CRYPT_CONTEXT * ) data );
+	CRYPT_CONTEXT cryptContext;
 	int pkcAlgo, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -1646,6 +1830,7 @@ static int checkAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   RSA key we can have either encryption (for RSA keyex) or signing (for 
 	   DH keyex) or both, for a DSA or ECDSA key we need signing (for DH/ECDH 
 	   keyex) */
+	cryptContext = *( ( CRYPT_CONTEXT * ) data );
 	status = krnlSendMessage( cryptContext, IMESSAGE_GETATTRIBUTE,
 							  &pkcAlgo, CRYPT_CTXINFO_ALGO );
 	if( cryptStatusError( status ) )
@@ -1774,15 +1959,32 @@ static int readHeaderFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* Check for a TLS alert message */
 	if( tlsInfo->headerBuffer[ 0 ] == TLS_MSG_ALERT )
 		{
+		/* Under TLS 1.3 everything has to be sent as application data once 
+		   encryption is turned on, so we don't allow anything else.  This
+		   is handled by checkDataPacketHeaderTLS() but we need to special-
+		   case alerts because they're intercepted before they get to
+		   checkDataPacketHeaderTLS(), which only allows application-data
+		   packets */
+#ifdef USE_TLS13
+		if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 )
+			{
+			retExt( CRYPT_ERROR_BADDATA,
+					( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
+					  "Invalid plaintext TLS alert message in TLS 1.3 "
+					  "session" ) );
+			}
+#endif /* USE_TLS13 */
+
 		return( processAlert( sessionInfoPtr, tlsInfo->headerBuffer, 
 							  sessionInfoPtr->receiveBufStartOfs,
 							  readInfo ) );
 		}
 
-	/* Process the header data */
+	/* Process the application data packet header information */
 	sMemConnect( &stream, tlsInfo->headerBuffer, 
 				 sessionInfoPtr->receiveBufStartOfs );
-	status = checkPacketHeaderTLS( sessionInfoPtr, &stream, &packetLength );
+	status = checkDataPacketHeaderTLS( sessionInfoPtr, &stream, 
+									   &packetLength );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1800,14 +2002,43 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int discardPacket( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						  OUT_ENUM_OPT( READINFO ) READSTATE_INFO *readInfo )
 	{
+	TLS_INFO *tlsInfo = sessionInfoPtr->sessionTLS;
+
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( readInfo, sizeof( READSTATE_INFO ) ) );
 
 	/* The packet is noise like a session ticket or rehandshake request, 
 	   discard it */
 	sessionInfoPtr->receiveBufEnd = sessionInfoPtr->receiveBufPos;
-	sessionInfoPtr->pendingPacketLength = 0;
+	sessionInfoPtr->pendingPacketLength = \
+		sessionInfoPtr->pendingPacketRemaining = 0;
 	*readInfo = READINFO_NOOP;
+
+	/* TLS 1.3 added the ability to send assorted no-op packets throughout
+	   the exchange, most notably session tickets (RFC 8446 section 4.6.1,
+	   "At any time after the server has received the client Finished 
+	   message, it MAY send a NewSessionTicket message").  What this means
+	   is that a server could keep us in a perpetual read loop in which
+	   we're reliably reading valid data but all of it is no-ops.  TLS 
+	   classic can also in theory do this by sending rehandshake packets.  
+	   To deal with this we cap the maximum number of no-ops at 3.
+	   
+	   A server can still DoS us by sending no-ops interspersed with single-
+	   byte data packets or even just Slowloris us without any no-ops at the
+	   TLS level (the socket read code tries to defend against Slowloris 
+	   attacks at the TCP level), but at that point at least we're making 
+	   some read progress rather than just spinning in a loop */
+	if( tlsInfo->noopPacketCount >= 3 )
+		{
+		/* We've had more than three no-op packets in a row, there's 
+		   something funny going on */
+		*readInfo = READINFO_FATAL;
+		retExt( CRYPT_ERROR_OVERFLOW,
+				( CRYPT_ERROR_OVERFLOW, SESSION_ERRINFO,
+				  "Peer sent more than three consecutive no-op packets in "
+				  "a row" ) );
+		}
+	tlsInfo->noopPacketCount++;
 
 	return( OK_SPECIAL );
 	}
@@ -1817,6 +2048,7 @@ static int processBodyFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								OUT_ENUM_OPT( READINFO ) \
 									READSTATE_INFO *readInfo )
 	{
+	TLS_INFO *tlsInfo = sessionInfoPtr->sessionTLS;
 	int length, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -1881,9 +2113,9 @@ static int processBodyFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			/* It's noise, discard it.  In particular many TLS 
 			   implementations will send two session ticket packets 
 			   immediately after the handshake to accommodate web browsers
-			   opening multiple streams (because the only way anyone would
-			   ever use TLS is on the web), so we have to discard two of 
-			   these on every connect */
+			   opening multiple streams (because obviously the only way 
+			   anyone would ever use TLS is on the web), so we have to 
+			   discard two of these on every connect */
 			return( discardPacket( sessionInfoPtr, readInfo ) );
 			}
 		}
@@ -1896,6 +2128,9 @@ static int processBodyFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							  &length, TLS_MSG_APPLICATION_DATA );
 	if( cryptStatusError( status ) )
 		return( status );
+
+	/* It's a standard data packet, reset the no-op packet count */
+	tlsInfo->noopPacketCount = 0;
 
 	*readInfo = READINFO_NONE;
 	return( length );

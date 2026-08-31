@@ -328,7 +328,6 @@ int processChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	BYTE arg1String[ CRYPT_MAX_TEXTSIZE + 8 ];
 #endif /* USE_SSH_EXTENDED */
 	const BYTE *arg1Ptr = NULL;
-	BYTE buffer[ UINT32_SIZE + 8 ];
 	long channelNo;
 	LOOP_INDEX i;
 	int typeLen, arg1Len = 0, maxPacketSize DUMMY_INIT, status;
@@ -414,6 +413,8 @@ int processChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	if( !cryptStatusError( status ) )
 		{
+		BYTE buffer[ UINT32_SIZE + 8 ];
+
 		( void ) sread( stream, buffer, UINT32_SIZE );	/* Skip window size */
 		status = maxPacketSize = readUint32( stream );
 		}
@@ -425,23 +426,45 @@ int processChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				  channelInfoPtr->channelName ) );
 		}
 
+	/* If this is the client then opening a new channel by the server isn't
+	   permitted.  We've finally got valid packet data so we can start 
+	   sending error responses from now on */
+	if( !isServer( sessionInfoPtr ) )
+		{
+		( void ) sendOpenResponseFailed( sessionInfoPtr, channelNo );
+		retExt( CRYPT_ERROR_PERMISSION,
+				( CRYPT_ERROR_PERMISSION, SESSION_ERRINFO, 
+				  "Server attempted to a open a '%s' channel to the client",
+				  channelInfoPtr->channelName ) );
+		}
+
+	ENSURES( isServer( sessionInfoPtr ) );
+
 	/* Make sure that the packet size is in order */
 	if( maxPacketSize < PACKET_SIZE_MIN || maxPacketSize > PACKET_SIZE_MAX )
 		{
 		/* General sanity check to make sure that the packet size is in 
-		   range.  We've finally got valid packet data so we can send error 
-		   responses from now on */
+		   range */
 		( void ) sendOpenResponseFailed( sessionInfoPtr, channelNo );
 		retExt( CRYPT_ERROR_BADDATA,
 				( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
 				  "Invalid '%s' channel maximum packet size parameter "
-				  "value %d, should be 1K...1MB", 
-				  channelInfoPtr->channelName, maxPacketSize ) );
+				  "value %d, should be %d...%d", 
+				  channelInfoPtr->channelName, maxPacketSize,
+				  PACKET_SIZE_MIN, PACKET_SIZE_MAX ) );
 		}
 	REQUIRES( !checkOverflowSub( sessionInfoPtr->receiveBufSize,
 								 EXTRA_PACKET_SIZE ) );
-	maxPacketSize = min( maxPacketSize, \
-						 sessionInfoPtr->receiveBufSize - EXTRA_PACKET_SIZE );
+	if( maxPacketSize > sessionInfoPtr->receiveBufSize - EXTRA_PACKET_SIZE )
+		{
+		/* We can never go below PACKET_SIZE_MIN using the buffer size as 
+		   our limit */
+		static_assert( MIN_BUFFER_SIZE - EXTRA_PACKET_SIZE > PACKET_SIZE_MIN,
+					   "Minimum buffer size is less than minimum packet "
+					   "size" );
+
+		maxPacketSize = sessionInfoPtr->receiveBufSize - EXTRA_PACKET_SIZE;
+		}
 
 	/* Read any other information that may be present */
 #ifdef USE_SSH_EXTENDED
@@ -459,19 +482,6 @@ int processChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		arg1Ptr = arg1String;
 		}
 #endif /* USE_SSH_EXTENDED */
-
-	/* If this is the client then opening a new channel by the server isn't
-	   permitted */
-	if( !isServer( sessionInfoPtr ) )
-		{
-		( void ) sendOpenResponseFailed( sessionInfoPtr, channelNo );
-		retExt( CRYPT_ERROR_PERMISSION,
-				( CRYPT_ERROR_PERMISSION, SESSION_ERRINFO, 
-				  "Server attempted to a open a '%s' channel to the client",
-				  channelInfoPtr->channelName ) );
-		}
-
-	ENSURES( isServer( sessionInfoPtr ) );
 
 	/* Add the new channel */
 	status = addChannel( sessionInfoPtr, channelNo, maxPacketSize,
@@ -551,8 +561,8 @@ int processChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		/* The activation failed, make sure the channel doesn't remain 
 		   marked as active.  This is more a hygiene thing than anything 
 		   else since the session can't continue without an open channel */
-		( void ) setChannelExtAttribute( sessionInfoPtr, SSH_ATTRIBUTE_ACTIVE, 
-										 FALSE );
+		( void ) deleteChannel( sessionInfoPtr, channelNo, CHANNEL_BOTH, 
+								TRUE );
 		return( status );
 		}
 
@@ -628,7 +638,8 @@ int processChannelRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   sending back a response with a placeholder channel number or a
 	   response when want_reply could have been false had it been able to
 	   be decoded */
-	readString32( stream, stringBuffer, CRYPT_MAX_TEXTSIZE, &stringLength );
+	( void ) readString32( stream, stringBuffer, CRYPT_MAX_TEXTSIZE, 
+						   &stringLength );
 	status = value = sgetc( stream );
 	if( cryptStatusError( status ) || \
 		stringLength <= 0 || stringLength > CRYPT_MAX_TEXTSIZE  )
@@ -675,7 +686,11 @@ int processChannelRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		/* If the other side doesn't want a response to their request, we're 
 		   done */
 		if( !wantReply )
+			{
+			if( isChannelRequest )
+				selectChannel( sessionInfoPtr, prevChannelNo, CHANNEL_READ );
 			return( CRYPT_OK );
+			}
 
 		/* Send a request-denied response to the other side's request */
 		if( isChannelRequest )
@@ -791,7 +806,7 @@ int processChannelRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   active until the channel itself is closed.
 			   
 			   Note that this loop relies on clearAddressAndPort() returning
-			   an error code once we run out of port forwards to cancel, so
+			   an error code once we run out of port forwards to cancel, so 
 			   the loop bound is implicitly set by that rather than an 
 			   explicit loop iterator */
 			LOOP_MED_INITCHECK( ( requestOK = FALSE, status = CRYPT_OK ), 
@@ -799,7 +814,9 @@ int processChannelRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				{
 				ENSURES( LOOP_INVARIANT_MED_GENERIC() );
 
-				sseek( stream, offset );
+				status = sseek( stream, offset );
+				if( cryptStatusError( status ) )
+					break;
 				status = clearAddressAndPort( sessionInfoPtr, stream );
 				if( cryptStatusOK( status ) )
 					requestOK = TRUE;
@@ -829,9 +846,13 @@ int processChannelRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						  SESSION_SSH_CORRUPT_CHANNEL_REQUEST_2 );
 			if( cryptStatusError( status ) || !requestOK )
 				{
+				int localStatus;
+				
 				/* The request failed, go back to the previous channel */
-				status = selectChannel( sessionInfoPtr, prevChannelNo,
-										CHANNEL_READ );
+				localStatus = selectChannel( sessionInfoPtr, prevChannelNo,
+											 CHANNEL_READ );
+				if( cryptStatusOK( status ) )
+					status = localStatus;
 				}
 			}
 		else
@@ -841,7 +862,8 @@ int processChannelRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* If this request ends the negotiation, let the caller know */
-	return( ( requestInfoPtr->flags & REQUEST_FLAG_TERMINAL ) ? \
+	return( ( requestOK && ( requestInfoPtr->flags & \
+							 REQUEST_FLAG_TERMINAL ) ) ? \
 			OK_SPECIAL : CRYPT_OK );
 	}
 #endif /* USE_SSH */

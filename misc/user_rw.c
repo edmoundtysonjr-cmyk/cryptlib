@@ -576,7 +576,7 @@ int prepareConfigData( INOUT_ARRAY( configOptionsCount ) \
 	sMemOpen( &stream, dataPtr, length );
 	status = writeConfigData( &stream, configOptions, configOptionsCount );
 	if( cryptStatusOK( status ) )
-		length = stell( &stream );
+		status = length = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		{

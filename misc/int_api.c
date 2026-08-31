@@ -508,7 +508,7 @@ static BOOLEAN checkNontrivialKey( IN_BUFFER( dataLength ) const BYTE *data,
 		{
 		ENSURES_B( LOOP_INVARIANT_LARGE( i, 0, dataLength - 1 ) );
 
-		if( !isAlnum( data[ i ] ) )
+		if( !isAlNum( byteToInt( data[ i ] ) ) )
 			break;
 		}
 	ENSURES_B( LOOP_BOUND_OK );
@@ -1193,7 +1193,7 @@ int iCryptReadSubjectPublicKey( INOUT_PTR TYPECAST( STREAM * ) struct ST *stream
 	ALGOID_PARAMS algoIDparams;
 	void *spkiPtr DUMMY_INIT_PTR;
 	const int startPos = stell( stream );
-	int spkiLength, status;
+	int spkiLength, position, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( iPubkeyContext, sizeof( CRYPT_CONTEXT ) ) );
@@ -1259,8 +1259,10 @@ int iCryptReadSubjectPublicKey( INOUT_PTR TYPECAST( STREAM * ) struct ST *stream
 	/* Since we're doing a direct import of a memory block, make sure that 
 	   the claimed object length as given in the wrapper matches the actual 
 	   payload length */
-	if( checkOverflowSub( stell( stream ), startPos ) || \
-		stell( stream ) - startPos != spkiLength )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( checkOverflowSub( position, startPos ) || \
+		position - startPos != spkiLength )
 		return( CRYPT_ERROR_BADDATA );
 
 	/* Create the public-key context and send the key data to it */
@@ -1314,29 +1316,14 @@ int iCryptReadSubjectPublicKey( INOUT_PTR TYPECAST( STREAM * ) struct ST *stream
 #if defined( USE_HTTP ) || defined( USE_BASE64 ) || \
 	defined( USE_SCEP ) || defined( USE_SSH )
 
-/* Read a line of text data ending in an EOL.  If we get more data than will 
-   fit into the read buffer we discard it until we find an EOL.  As a 
-   secondary concern we want to strip leading, trailing, and repeated 
-   whitespace.  Leading whitespace is handled by setting the seen-whitespace 
-   flag to true initially, this treats any whitespace at the start of the 
-   line as superfluous and strips it.  Stripping of repeated whitespace is 
-   also handled by the seenWhitespace flag, and stripping of trailing 
-   whitespace is handled by walking back through any final whitespace once we 
-   see the EOL. 
-   
-   We optionally handle continued lines denoted by the MIME convention of a 
-   semicolon as the last non-whitespace character by setting the 
-   seenContinuation flag if we see a semicolon as the last non-whitespace 
-   character.
-
-   Finally, we also need to handle generic DoS attacks.  If we see more than
-   MAX_LINE_LENGTH characters in a line we bail out */
+/* The maximum number of characters that we'll read, to handle DoS attacks.  
+   If we see more than MAX_LINE_LENGTH characters in a line we bail out */
 
 #define MAX_LINE_LENGTH		4096
 
-/* The extra level of indirection provided by this function is necessary 
-   because the the extended error information isn't accessible from outside 
-   the stream code so we can't set it in formatTextLineError() in the usual 
+/* Handle error reporting.  The extra level of indirection provided by this 
+   function is necessary because the the extended error information isn't 
+   accessible from outside the stream code so we can't set it in the usual 
    manner via a retExt().  Instead we call retExtFn() directly and then pass 
    the result down to the stream layer via an ioctl */
 
@@ -1375,6 +1362,46 @@ static int exitTextLineError( INOUT_PTR STREAM *stream,
 	return( status );
 	}
 
+CHECK_RETVAL_ERROR STDC_NONNULL_ARG( ( 1 ) ) \
+static int exitInvalidChar( INOUT_PTR STREAM *stream,
+							IN_BYTE const int ch, 
+							IN_LENGTH_SHORT const int position,
+							OUT_OPT_BOOL BOOLEAN *localError )
+	{
+	assert( isWritePtr( stream, sizeof( STREAM ) ) );
+	assert( localError == NULL || \
+			isWritePtr( localError, sizeof( BOOLEAN ) ) );
+
+	REQUIRES( rangeCheck( ch, 0, 0xFF ) );
+
+	return( exitTextLineError( stream, "Invalid character 0x%02X at "
+							   "position %d", ch, position, localError,
+							   CRYPT_ERROR_BADDATA ) );
+	}
+
+CHECK_RETVAL_ERROR STDC_NONNULL_ARG( ( 1 ) ) \
+static int exitUnderflow( INOUT_PTR STREAM *stream,
+						  IN_LENGTH_SHORT const int position,
+						  OUT_OPT_BOOL BOOLEAN *localError )
+	{
+	assert( isWritePtr( stream, sizeof( STREAM ) ) );
+	assert( localError == NULL || \
+			isWritePtr( localError, sizeof( BOOLEAN ) ) );
+
+	return( exitTextLineError( stream, "Ran out of input at position %d, "
+							   "expected further text", position, 0, 
+							   localError, CRYPT_ERROR_UNDERFLOW ) );
+	}
+
+/* sgetc() only works on file and memory streams so we have to emulate a 
+   network-stream sgetc() here.  We check for potential zero-length reads, 
+   which shouldn't actually occur because they'll be converted into an error 
+   status but in theory there are some special-case conditions where we 
+   could make the stream nonblocking and/or allow partial reads for 
+   speculative read-ahead where this could lead to a zero-byte read count.  
+   This shouldn't actually happen to a stream on which readTextLine() is 
+   called but to be safe we catch and convert the condition into an error */
+
 CHECK_RETVAL_RANGE( 0, 255 ) STDC_NONNULL_ARG( ( 1 ) ) \
 static int networkReadCharFunction( INOUT_PTR TYPECAST( STREAM * ) \
 										struct ST *streamPtr )
@@ -1385,44 +1412,224 @@ static int networkReadCharFunction( INOUT_PTR TYPECAST( STREAM * ) \
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
-	/* This readChar function is necessary because sgetc() only works on 
-	   file and memory streams, so we emulate a network-stream sgetc() here.  
-	   We check for potential zero-length reads, which shouldn't actually 
-	   occur because they'll be converted into an error status but in theory
-	   there are some special-case conditions where we could make the stream 
-	   nonblocking and/or allow partial reads for speculative read-ahead 
-	   where this could lead to a zero-byte read count.  This shouldn't
-	   actually happen to a stream on which readTextLine() is called but to
-	   be safe we catch and convert the condition into an error */
 	status = length = sread( stream, &ch, 1 );
 	if( cryptStatusError( status ) )
 		return( status );
-	return( ( length <= 0 ) ? CRYPT_ERROR_UNDERFLOW : byteToInt( ch ) );
+	return( ( length <= 0 ) ? CRYPT_ERROR_READ : byteToInt( ch ) );
 	}
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
-int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
-				  OUT_BUFFER( lineBufferMaxLen, *lineBufferSize ) \
-						char *lineBuffer,
-				  IN_LENGTH_SHORT_MIN( 16 ) const int lineBufferMaxLen, 
-				  OUT_RANGE( 0, lineBufferMaxLen ) int *lineBufferSize, 
-				  OUT_OPT_BOOL BOOLEAN *localError,
-				  IN_PTR_OPT READCHAR_FUNCTION readCharFunctionOpt, 
-				  IN_ENUM_OPT( READTEXT ) const READTEXT_TYPE options )
+/* Categorise a character into one of the classes that the parsing FSM 
+   accepts.  Check the FSM_STATE_TYPE definition and FSM tables before 
+   modifying the enum list */
+
+typedef enum {
+	CHAR_CLASS_NONE,		/* No character class */
+	CHAR_CLASS_TEXT,		/* Text character */
+	CHAR_CLASS_WS,			/* Whitespace */
+	CHAR_CLASS_CONT,		/* Continuation character ';' */
+	CHAR_CLASS_CR,			/* CR */
+	CHAR_CLASS_LF,			/* LF */
+	CHAR_CLASS_EOF,			/* EOF */
+	CHAR_CLASS_ERROR,		/* Invalid character */
+	CHAR_CLASS_LAST			/* Last possible character class */
+	} CHAR_CLASS_TYPE;
+
+CHECK_RETVAL_ENUM( CHAR_CLASS ) \
+static CHAR_CLASS_TYPE getCharClass( IN_BYTE const int ch )
 	{
-	READCHAR_FUNCTION readCharFunction;
-	BOOLEAN seenWhitespace, seenContinuation = FALSE;
+	REQUIRES_EXT( rangeCheck( ch, 0, 0xFF ), CHAR_CLASS_ERROR );
+	
+	switch( ch )
+		{
+		case ';':
+			return( CHAR_CLASS_CONT );
+		
+		case '\r':
+			return( CHAR_CLASS_CR );
+		
+		case '\n':
+			return( CHAR_CLASS_LF );
+		
+		case ' ':
+		case '\t':
+			/* We can't use isspace() for this because it includes all sorts 
+			   of extra control characters that we don't want to allow, and 
+			   no doubt there'll be locale-dependent interpretations that 
+			   allow lowercase tabs and spaces with umlauts */
+			return( CHAR_CLASS_WS );
+			
+		default:
+			/* We add an extra guard around the entry-point to 
+			   isValidTextChar() to catch wildy out-of-range values */
+			if( ch < ' ' || ch > 0x7F )
+				return( CHAR_CLASS_ERROR );
+			if( isValidTextChar( ch ) )
+				return( CHAR_CLASS_TEXT );
+			return( CHAR_CLASS_ERROR );
+		}
+	
+	retIntError_Ext( CHAR_CLASS_ERROR );
+	}
+
+/* The FSM state tables used to parse text lines.  We have to make the 
+   states zero-based so that they can be used to index the FSM tables.  
+   Notes on specific states:
+
+	FSM_WS_SKIP: Used to skip leading whitespace.
+
+	FSM_WS: Used to skip inline repeated whitespace.
+
+	FSM_CR: Can only be followed by a LF or EOF */
+
+typedef enum {
+	FSM_STATE_NONE, 
+	
+	/* Standard FSM states */
+	FSM_START = FSM_STATE_NONE, 
+					/* Initial state, can't be moved to by the FSM */
+	FSM_TEXT,		/* Record char, go to FSM_TRUNC if required */
+	FSM_WS,			/* Record char, then go to FSM_WS_SKIP */
+	FSM_WS_SKIP,	/* Skip if WS, otherwise record char */
+	FSM_WS_LEAD,	/* As for FSM_WS_SKIP but for leading whitespace,
+					   needs to be followed by a text char */
+	FSM_CR, 
+	FSM_CONT, 
+	FSM_WS_CONT, 
+	FSM_CR_CONT, 
+	
+	/* A state that can't be directly entered from the FSM but is triggered 
+	   externally, used to consume remaining input */
+	FSM_TRUNC,
+	
+	/* Non-FSM states that terminate processing */
+	FSM_DONE, FSM_EOF, FSM_ERROR, 
+	
+	FSM_STATE_LAST
+	} FSM_STATE_TYPE;
+
+/* The FSM parsing tables.  Notes for each table:
+
+   Text FSM: 
+   
+	For FSM_START/FSM_WS_LEAD, a CHAR_CONT at the start of the line isn't
+	treated as a continuation character, it'd be continuing an empty line.  
+	
+	FSM_START can either allow or disallow leading whitespace.  Setting the
+	CHAR_WS transition to FSM_WS_LEAD (not FSM_WS) enables skipping leading 
+	whitespace, but we currently set it to FSM_ERROR since the lines that 
+	we're reading (HTTP header, PEM, SSH ID) shouldn't have leading 
+	whitespace.  Note that this currently makes FSM_WS_LEAD unreachable, 
+	it's left there to preserve the table ordering and in case it's needed in
+	the future.
+		
+	The FSM is currently set up to reject blank lines, e.g. "   \n", as 
+	invalid rather than reducing them to empty lines, if required this can 
+	be changed to treat them as plain empty lines.
+	
+   HTTP FSM:
+
+	FSM_START explicitly disallows whitespace at the start of the line to
+	implement the RFC 9112 section 5.2 ban on obs-fold, "a server that 
+	receives an obs-fold in a request message that is not within a 
+	"message/http" container MUST either reject the message by sending a 
+	400 [..]", with gateways required to reject or sanitise the message
+	into a non-folded form.  Returning a CRYPT_ERROR_BADDATA means that the
+	calling code responds with a 400 error.
+	
+	This is for server-side, client-side we're supposed to unfold the line
+	but the only time we'd ever see this is in a request-smuggling
+	attack, no legitimate server would ever need to fold Content-Length, 
+	Content-Type, Transfer-Encoding, Connection, or Server.
+	
+	We're also pretty strict about requiring a full CRLF (RFC 9112 section 
+	2.1, "An HTTP/1.1 message consists of a start-line followed by a CRLF",
+	with RFC 7230 before it saying, section 3.1.1, "A request-line begins 
+	with a method token, followed by a single space (SP), the request-
+	target, another single space (SP), the protocol version, and ends with 
+	CRLF)" and the same with other line types, and RFC 2616 before that
+	saying (section 2.2) "HTTP/1.1 defines the sequence CR LF as the end-of-
+	line marker for all protocol elements except the entity-body".
+	
+	RFC 9112 section 2.2 says "Although the line terminator for the start-
+	line and fields is the sequence CRLF, a recipient MAY recognize a single 
+	LF as a line terminator and ignore any preceding CR" (RFC 7230 has no
+	equivalent text) which seems to be saying that a parser can ignore the 
+	CR part and only look for the LF rather than that it can accept 
+	standalone LFs.  The text is actually somewhat ambiguous, which is why 
+	some servers accept bare LFs, making request-smuggling possible, but in 
+	our case we fail closed and reject bare LFs, forcing a full CRLF.
+	
+	Notable differences to the text FSM are that CHAR_EOF always results in
+	FSM_ERROR because having the peer close the connection produces a
+	truncated header and not a valid text line, and that no leading 
+	whitespace (for the obsolete obs-fold line-continuation mechanism) or
+	explicit line continuations as for the text FSM are allowed */
+
+typedef FSM_STATE_TYPE FSM_TABLE_ENTRY[ 9 ];
+
+static const FSM_TABLE_ENTRY textFSM[] = {
+ /*	Current										Current Character
+	State			CHAR_TEXT	CHAR_WS		CHAR_CONT		CHAR_CR		CHAR_LF		CHAR_EOF
+	--------		---------	-------		--------		-------		-------		-------- */
+  { FSM_START,		FSM_TEXT,	FSM_ERROR,	FSM_TEXT,		FSM_CR,		FSM_DONE,	FSM_ERROR },
+  { FSM_TEXT,		FSM_TEXT,	FSM_WS,		FSM_CONT,		FSM_CR,		FSM_DONE,	FSM_EOF },
+  { FSM_WS,			FSM_TEXT,	FSM_WS_SKIP,FSM_CONT,		FSM_CR,		FSM_DONE,	FSM_EOF },
+  { FSM_WS_SKIP,	FSM_TEXT,	FSM_WS_SKIP,FSM_CONT,		FSM_CR,		FSM_DONE,	FSM_EOF },
+  { FSM_WS_LEAD,	FSM_TEXT,	FSM_WS_LEAD,FSM_TEXT,		FSM_ERROR,	FSM_ERROR,	FSM_ERROR },
+  { FSM_CR,			FSM_ERROR,	FSM_ERROR,	FSM_ERROR,		FSM_ERROR,	FSM_DONE,	FSM_EOF },
+  { FSM_CONT,		FSM_TEXT,	FSM_WS_CONT,FSM_CONT,		FSM_CR_CONT,FSM_WS_SKIP,FSM_ERROR },
+  { FSM_WS_CONT,	FSM_TEXT,	FSM_WS_CONT,FSM_CONT,		FSM_CR_CONT,FSM_WS_SKIP,FSM_ERROR },
+  { FSM_CR_CONT,	FSM_ERROR,	FSM_ERROR,	FSM_ERROR,		FSM_CR_CONT,FSM_WS_SKIP,FSM_ERROR },
+  { FSM_TRUNC,		FSM_TRUNC,	FSM_TRUNC,	FSM_TRUNC,		FSM_TRUNC,	FSM_DONE,	FSM_EOF },
+	{ 0 }, { 0 }
+	};
+
+static const FSM_TABLE_ENTRY httpFSM[] = {
+ /*	Current											Current Character
+	State			CHAR_TEXT	CHAR_WS		CHAR_CONT		CHAR_CR		CHAR_LF		CHAR_EOF
+	--------		---------	-------		--------		-------		-------		-------- */
+  {	FSM_START,		FSM_TEXT,	FSM_ERROR,	FSM_TEXT,		FSM_CR,		FSM_ERROR,	FSM_ERROR },
+  { FSM_TEXT,		FSM_TEXT,	FSM_WS,		FSM_TEXT,		FSM_CR,		FSM_ERROR,	FSM_ERROR },
+  { FSM_WS,			FSM_TEXT,	FSM_WS_SKIP,FSM_TEXT,		FSM_CR,		FSM_ERROR,	FSM_ERROR },
+  { FSM_WS_SKIP,	FSM_TEXT,	FSM_WS_SKIP,FSM_TEXT,		FSM_CR,		FSM_ERROR,	FSM_ERROR },
+  { FSM_WS_LEAD,	FSM_ERROR,	FSM_ERROR,	FSM_ERROR,		FSM_ERROR,	FSM_ERROR,	FSM_ERROR },
+  { FSM_CR,			FSM_ERROR,	FSM_ERROR,	FSM_ERROR,		FSM_ERROR,	FSM_DONE,	FSM_ERROR },
+  { FSM_CONT,		FSM_ERROR,	FSM_ERROR,	FSM_ERROR,		FSM_ERROR,	FSM_ERROR,	FSM_ERROR },
+  { FSM_WS_CONT,	FSM_ERROR,	FSM_ERROR,	FSM_ERROR,		FSM_ERROR,	FSM_ERROR,	FSM_ERROR },
+  { FSM_CR_CONT,	FSM_ERROR,	FSM_ERROR,	FSM_ERROR,		FSM_ERROR,	FSM_ERROR,	FSM_ERROR },
+  { FSM_TRUNC,		FSM_ERROR,	FSM_ERROR,	FSM_ERROR,		FSM_ERROR,	FSM_ERROR,	FSM_ERROR },
+	{ 0 }, { 0 }
+	};
+	
+/* Use the FSM table to read/parse a line of text */
+
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4, 5, 7 ) ) \
+static int fsmParse( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
+					 OUT_BUFFER( lineBufferMaxLen, *lineBufferSize ) \
+						char *lineBuffer,
+					 IN_LENGTH_SHORT_MIN( 16 ) const int lineBufferMaxLen, 
+					 OUT_RANGE( 0, lineBufferMaxLen ) int *lineBufferSize, 
+					 IN_ARRAY( fsmTableSize ) const FSM_TABLE_ENTRY *fsmTable,
+					 IN_LENGTH_SHORT_MIN( 4 ) const int fsmTableSize,
+					 IN_PTR READCHAR_FUNCTION readCharFunction, 
+					 OUT_OPT_BOOL BOOLEAN *localError,
+					 IN_ENUM_OPT( READTEXT ) const READTEXT_TYPE readOption )
+	{
+	FSM_STATE_TYPE fsmState = FSM_START, prevState;
 	LOOP_INDEX totalChars;
-	int bufPos = 0;
+	int bufPos = 0, restartPoint = CRYPT_ERROR;
 
 	assert( isWritePtr( streamPtr, sizeof( STREAM ) ) );
 	assert( isWritePtrDynamic( lineBuffer, lineBufferMaxLen ) );
 	assert( isWritePtr( lineBufferSize, sizeof( int ) ) );
+	assert( isReadPtrDynamic( fsmTable, 
+							  fsmTableSize * sizeof( FSM_TABLE_ENTRY ) ) );
 	assert( localError == NULL || \
 			isWritePtr( localError, sizeof( BOOLEAN ) ) );
 
 	REQUIRES( isShortIntegerRangeMin( lineBufferMaxLen, 16 ) );
-	REQUIRES( isEnumRangeOpt( options, READTEXT ) );
+	REQUIRES( isShortIntegerRangeMin( fsmTableSize, 4 ) );
+	REQUIRES( isEnumRangeOpt( readOption, READTEXT ) );
 
 	/* Clear return values */
 	REQUIRES( isShortIntegerRangeNZ( lineBufferMaxLen ) ); 
@@ -1431,28 +1638,16 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 	if( localError != NULL )
 		*localError = FALSE;
 
-	/* Set up the appropriate read function */
-	if( readCharFunctionOpt != NULL )
-		readCharFunction = readCharFunctionOpt;
-	else
-		{
-		readCharFunction = ( streamPtr->type == STREAM_TYPE_NETWORK ) ? \
-						   networkReadCharFunction : sgetc;
-		}
-	ENSURES( readCharFunction != NULL );
-
-	/* Set the seen-whitespace flag initially to strip leading whitespace */
-	seenWhitespace = TRUE;
-
 	/* Read up to MAX_LINE_LENGTH chars.  Anything longer than this is 
 	   probably a DoS */
 	LOOP_MAX( totalChars = 0, totalChars < MAX_LINE_LENGTH, totalChars++ )
 		{
-		int ch, status, LOOP_ITERATOR_ALT;
+		CHAR_CLASS_TYPE charClass;
+		int ch, status;
 
 		ENSURES( LOOP_INVARIANT_MAX( totalChars, 0, MAX_LINE_LENGTH - 1 ) );
 
-		/* Get the next input character */
+		/* Get the next input character and classify it into an FSM class */
 		status = ch = readCharFunction( streamPtr );
 		if( cryptStatusError( status ) )
 			{
@@ -1469,7 +1664,8 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 				   error state, so we need to reset it before continuing 
 				   since we're emulating a valid read of an EOL */
 				sClearError( streamPtr );
-				ch = '\n';
+				charClass = CHAR_CLASS_EOF;
+				ch = ' ';	/* Reset from error code to dummy value */
 				}
 			else
 				{
@@ -1477,121 +1673,163 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 				   return, it's a real error */
 				return( status );
 				}
-			}                 
-
-		/* If it's an EOL and we're returning raw data, don't perform any 
-		   further processing such as stripping off trailing whitespace */
-		if( options == READTEXT_RAW && ch == '\n' )
-			break;
-
-		/* If it's an EOL or a continuation marker, strip trailing 
-		   whitespace */
-		if( ch == '\n' || \
-			( options == READTEXT_MULTILINE && ch == ';' ) )
-			{
-			/* Strip trailing whitespace.  At this point it's all been
-			   canonicalised so we don't need to check for anything other 
-			   than spaces */
-			LOOP_LARGE_REV_CHECKINC_ALT( bufPos > 0 && \
-											lineBuffer[ bufPos - 1 ] == ' ',
-										 bufPos-- )
+			}
+		else
+			{  
+			/* Determine the FSM character class for the new character */
+			charClass = getCharClass( ch );
+			if( charClass == CHAR_CLASS_ERROR )
 				{
-				ENSURES( LOOP_INVARIANT_LARGE_REV_XXX_ALT( bufPos, 1, 
-														   totalChars ) );
-						 /* totalChars is the overall number of characters 
-						    seen which is always the same or larger than 
-							bufPos, the number of characters stored */
+				return( exitInvalidChar( streamPtr, ch, totalChars, 
+										 localError ) );
 				}
-			ENSURES( LOOP_BOUND_LARGE_REV_OK_ALT );
+
+			/* Adjust the character class for the read options:
+		
+				If we're not reading in multiline mode than a continuation 
+				character is just an ordinary text character.
+			
+				If we're reading in raw mode then whitespace is just an 
+				ordinary text character */
+			if( readOption != READTEXT_MULTILINE && \
+				charClass == CHAR_CLASS_CONT )
+				charClass = CHAR_CLASS_TEXT;
+			if( readOption == READTEXT_RAW && charClass == CHAR_CLASS_WS )
+				charClass = CHAR_CLASS_TEXT;
+
+			/* If we're canonicalising whitespace, do so now */
+			if( readOption != READTEXT_RAW && ch == '\t' )
+				ch = ' ';
 			}
 
-		/* Process EOL.  This is handled for any read option including 
-		   READTEXT_RAW */
-		if( ch == '\n' )
+		/* Move to the next state in the FSM after remembering the current 
+		   state.  This is needed to determine whether a continuation 
+		   character ';' is embedded in a piece of text, so it's just a 
+		   plain character, or is an actual line-continuation character */
+		REQUIRES( isEnumRangeOpt( charClass, CHAR_CLASS ) );
+		REQUIRES( isEnumRangeOpt( fsmState, FSM_STATE ) && \
+				  rangeCheck( fsmState, 0, fsmTableSize - 1 ) );
+		REQUIRES( fsmTable[ fsmState ][ 0 ] == fsmState );
+		prevState = fsmState;
+		fsmState = fsmTable[ fsmState ][ charClass ];
+		switch( fsmState )
 			{
-			/* If we've seen a continuation marker, the line continues on 
-			   the next one */
-			if( seenContinuation )
-				{
-				seenContinuation = FALSE;
+			case FSM_START:
+				/* This is the initial state, we can never get to this as a 
+				   successor state */
+				retIntError();
+				
+			case FSM_CONT:
+				/* A continuation character acts like an EOL, so we truncate 
+				   any trailing whitespace before continuing */
+				if( bufPos > 0 && lineBuffer[ bufPos - 1 ] == ' ' )
+					bufPos--;
+
+				/* If it's a READTEXT_MULTILINE read and we've started a new 
+				   line, make sure that there's some content present */
+				if( restartPoint != CRYPT_ERROR && bufPos <= restartPoint )
+					{
+					return( exitUnderflow( streamPtr, totalChars, 
+										   localError ) );
+					}
+				STDC_FALLTHROUGH;
+
+			case FSM_TEXT:
+			case FSM_WS:
+				/* If we're over the maximum buffer size this is an error 
+				   unless we're reading with READTEXT_TRUNCATE */
+				if( bufPos >= lineBufferMaxLen )
+					{
+					/* If we've been asked to return all input but we've run 
+					   out of space, tell the caller */
+					if( readOption != READTEXT_TRUNCATE )
+						{
+						return( exitTextLineError( streamPtr, 
+										"Text line too long, more than %d "
+										"characters", lineBufferMaxLen, 0, 
+										localError, CRYPT_ERROR_OVERFLOW ) );
+						}
+				
+					/* From now on we're in truncate mode */
+					fsmState = FSM_TRUNC;
+					continue;
+					}
+
+				/* Record the character */
+				REQUIRES( !checkOverflowInc( bufPos ) );
+				lineBuffer[ bufPos++ ] = intToByte( ch );
+				ENSURES( bufPos > 0 && bufPos <= totalChars + 1 && \
+						 bufPos <= MAX_LINE_LENGTH );
+						 /* The 'totalChars + 1' is because totalChars is
+							the loop iterator and won't have been 
+							incremented yet at this point */
+				break;
+			
+			case FSM_WS_SKIP:
+			case FSM_WS_LEAD:
+				/* If we've arrived here from a continuation state then the 
+				   line has been continued onto the next one, remember where 
+				   the continued portion starts so that we can check that 
+				   it's nonempty */
+				if( prevState == FSM_CONT || prevState == FSM_WS_CONT || \
+					prevState == FSM_CR_CONT )
+					restartPoint = bufPos;
+
+				/* We're eating repeated whitespace in this state so nothing 
+				   to do */
 				continue;
-				}
+			
+			case FSM_CR:
+			case FSM_WS_CONT:
+			case FSM_CR_CONT:
+				/* FSM_internal states used only to move to a particular 
+				   next state */
+				break;
+			
+			case FSM_DONE:
+			case FSM_EOF:
+				/* We're done, strip trailing whitespace unless we're reading
+				   in raw mode.  This has both been canonicalised so we 
+				   don't need to check for anything other than spaces, and 
+				   there should only be a single value because we strip 
+				   repeated spaces */
+				if( readOption != READTEXT_RAW && \
+					bufPos > 0 && lineBuffer[ bufPos - 1 ] == ' ' )
+					bufPos--;
+				
+				/* If it's a READTEXT_MULTILINE read and we've started a new 
+				   line, make sure that there's some content present */
+				if( restartPoint != CRYPT_ERROR && bufPos <= restartPoint )
+					{
+					return( exitUnderflow( streamPtr, totalChars, 
+										   localError ) );
+					}
+				
+				*lineBufferSize = bufPos;
 
-			/* We're done */
-			break;
+				return( CRYPT_OK );
+			
+			case FSM_ERROR:
+				/* If we ran out of input rather than hitting an invalid 
+				   character, for example EOF in the middle of a continued 
+				   line, report it as such */
+				if( charClass == CHAR_CLASS_EOF )
+					{
+					return( exitUnderflow( streamPtr, totalChars, 
+										   localError ) );
+					}
+					
+				return( exitInvalidChar( streamPtr, ch, totalChars, 
+										 localError ) );
+			
+			case FSM_TRUNC:
+				/* We're just consuming input in this state so nothing to 
+				   do */
+				break;
+			
+			default:
+				retIntError(); 
 			}
-
-		/* Ignore any additional decoration that may accompany EOLs.  As for 
-		   '\n', this is handled for any read option including 
-		   READTEXT_RAW */
-		if( ch == '\r' )
-			continue;
-
-		/* If we're over the maximum buffer size and we're not returning the 
-		   raw input data, discard any further input until we either hit EOL 
-		   or exceed the DoS threshold at MAX_LINE_LENGTH */
-		if( bufPos >= lineBufferMaxLen )
-			{
-			/* If we've run off into the weeds (for example we're reading 
-			   binary data following the text header), bail out */
-			if( !isValidTextChar( ch ) )
-				{
-				return( exitTextLineError( streamPtr, "Invalid character "
-										   "0x%02X at position %d", ch, 
-										   totalChars, localError,
-										   CRYPT_ERROR_BADDATA ) );
-				}
-			if( options == READTEXT_RAW )
-				{
-				/* We've been asked to return all input but there's not 
-				   enough room for it */
-				return( exitTextLineError( streamPtr, "Text line too long, "
-										   "more than %d characters", 
-										   lineBufferMaxLen, 0, localError, 
-										   CRYPT_ERROR_OVERFLOW ) );
-				}
-			continue;
-			}
-
-		/* Process whitespace if necessary.  We can't use isspace() for this 
-		   because it includes all sorts of extra control characters that we 
-		   don't want to allow */
-		if( options != READTEXT_RAW && ( ch == ' ' || ch == '\t' ) )
-			{
-			if( seenWhitespace )
-				{
-				/* Ignore leading and repeated whitespace */
-				continue;
-				}
-			ch = ' ';	/* Canonicalise whitespace */
-			}
-
-		/* Process any remaining chars */
-		if( !isValidTextChar( ch ) )
-			{
-			return( exitTextLineError( streamPtr, "Invalid character "
-									   "0x%02X at position %d", ch, 
-									   totalChars, localError,
-									   CRYPT_ERROR_BADDATA ) );
-			}
-		REQUIRES( !checkOverflowInc( bufPos ) );
-		lineBuffer[ bufPos++ ] = intToByte( ch );
-		ENSURES( bufPos > 0 && bufPos <= totalChars + 1 && \
-				 bufPos <= MAX_LINE_LENGTH );
-				 /* The 'totalChars + 1' is because totalChars is the loop
-				    iterator and won't have been incremented yet at this 
-					point */
-
-		/* Update the state variables.  If the character that we've just 
-		   processed was whitespace or if we've seen a continuation 
-		   character or we're processing whitespace after having seen a 
-		   continuation character (which makes it effectively leading 
-		   whitespace to be stripped), remember this */
-		seenWhitespace = ( ch == ' ' ) ? TRUE : FALSE;
-		seenContinuation = ( options == READTEXT_MULTILINE ) && \
-						   ( ch == ';' || \
-						     ( seenContinuation && seenWhitespace ) ) ? \
-						   TRUE : FALSE;
 		}
 	ENSURES( LOOP_BOUND_OK );
 	if( totalChars >= MAX_LINE_LENGTH )
@@ -1604,6 +1842,63 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 
 	return( CRYPT_OK );
 	}
+
+/* Read a line of text data ending in an EOL, with optional handling of 
+   continued lines denoted by the MIME convention of a semicolon as the last 
+   character */
+
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
+int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
+				  OUT_BUFFER( lineBufferMaxLen, *lineBufferSize ) \
+						char *lineBuffer,
+				  IN_LENGTH_SHORT_MIN( 16 ) const int lineBufferMaxLen, 
+				  OUT_RANGE( 0, lineBufferMaxLen ) int *lineBufferSize, 
+				  OUT_OPT_BOOL BOOLEAN *localError,
+				  IN_ENUM_OPT( READTEXT ) const READTEXT_TYPE options,
+				  IN_BOOL const BOOLEAN isNetworkStream )
+	{
+	/* All of the other parameters are passed directly to fsmParse(), the 
+	   only one that we check here is the one that's used locally.  The
+	   network-stream version is only ever called from one location,
+	   session/ssh2_id.c:readSSHID(), otherwise it's always called with
+	   memory streams */
+	REQUIRES( isBooleanValue( isNetworkStream ) );
+	
+	return( fsmParse( streamPtr, lineBuffer, lineBufferMaxLen, 
+					  lineBufferSize, textFSM, 
+					  FAILSAFE_ARRAYSIZE( textFSM, FSM_TABLE_ENTRY ),
+					  isNetworkStream ? networkReadCharFunction : sgetc, 
+					  localError, options ) );
+	}
+
+/* Read a line of text with HTTP semantics.  This is kept distinct from the
+   standard readTextLine() because we need to enforce RFC 7230/9110 
+   semantics as much as possible, including all of the things that we really 
+   don't care about, in order to prevent various attacks involving 
+   manipulating HTTP headers.  What we're trying to do here is to remain as 
+   close as possible to what RFC 7230/9110 requires so that an attacker 
+   can't take advantage of differences between how we handle a given HTTP 
+   line and how the other party handles it.  This isn't bulletproof because 
+   we're not a full-blown web server but it does try and close the bigger 
+   attack vectors */
+
+#ifdef USE_HTTP 
+
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4, 6 ) ) \
+int readHttpLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
+				  OUT_BUFFER( lineBufferMaxLen, *lineBufferSize ) \
+						char *lineBuffer,
+				  IN_LENGTH_SHORT_MIN( 16 ) const int lineBufferMaxLen, 
+				  OUT_RANGE( 0, lineBufferMaxLen ) int *lineBufferSize, 
+				  OUT_OPT_BOOL BOOLEAN *localError,
+				  IN_PTR READCHAR_FUNCTION readCharFunction )
+	{
+	return( fsmParse( streamPtr, lineBuffer, lineBufferMaxLen, 
+					  lineBufferSize, httpFSM, 
+					  FAILSAFE_ARRAYSIZE( httpFSM, FSM_TABLE_ENTRY ),
+					  readCharFunction, localError, READTEXT_NONE ) );
+	}
+#endif /* USE_HTTP */
 #endif /* USE_HTTP || USE_BASE64 || USE_SCEP || USE_SSH */
 
 /****************************************************************************
@@ -1619,13 +1914,23 @@ int readTextLine( INOUT_PTR TYPECAST( STREAM * ) struct ST *streamPtr,
 #if defined( USE_HTTP ) || defined( USE_BASE64 ) || \
 	defined( USE_SCEP ) || defined( USE_SSH )
 
+typedef enum {
+	TEST_OPTION_NONE,			/* No test option type */
+	TEST_OPTION_TRUNCATION,		/* Test truncation of input to fit output */
+	TEST_OPTION_LAST			/* Last possible test option */
+	} TEST_OPTION_TYPE;
+	
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 3 ) ) \
-static BOOLEAN testReadLine( IN_BUFFER( dataInLength ) const char *dataIn,
-							 IN_LENGTH_SHORT_MIN( 2 ) const int dataInLength, 
-							 IN_BUFFER( dataOutLength ) const char *dataOut,
-							 IN_LENGTH_SHORT_MIN( 1 ) const int dataOutLength,
-							 IN_ENUM_OPT( READTEXT ) const READTEXT_TYPE options,
-							 IN_BOOL const BOOLEAN testTruncation )
+static BOOLEAN testRead( IN_BUFFER( dataInLength ) const char *dataIn,
+						 IN_LENGTH_SHORT_MIN( 1 ) const int dataInLength, 
+						 IN_BUFFER( dataOutLength ) const char *dataOut,
+						 IN_LENGTH_SHORT_MIN( 1 ) const int dataOutLength,
+						 IN_ENUM_OPT( READTEXT ) \
+							const READTEXT_TYPE options,
+						 IN_STATUS const int expectedStatus,
+						 IN_ENUM_OPT( TEST_OPTION ) \
+							const TEST_OPTION_TYPE testOption,
+						 IN_BOOL const BOOLEAN isHttpRead )
 	{
 	STREAM stream;
 	BYTE buffer[ 32 + 8 ];
@@ -1634,11 +1939,14 @@ static BOOLEAN testReadLine( IN_BUFFER( dataInLength ) const char *dataIn,
 	assert( isReadPtrDynamic( dataIn, dataInLength ) );
 	assert( isReadPtrDynamic( dataOut, dataOutLength ) );
 
-	REQUIRES_B( isShortIntegerRangeMin( dataInLength, 2 ) );
-	REQUIRES_B( ( !testTruncation && rangeCheck( dataOutLength, 1, 32 ) ) || \
-				( testTruncation && rangeCheck( dataOutLength, 16, 32 ) ) );
+	REQUIRES_B( isShortIntegerRangeMin( dataInLength, 1 ) );
+	REQUIRES_B( ( testOption != TEST_OPTION_TRUNCATION && \
+				  rangeCheck( dataOutLength, 1, 32 ) ) || \
+				( testOption == TEST_OPTION_TRUNCATION && \
+				  rangeCheck( dataOutLength, 16, 32 ) ) );
 	REQUIRES_B( isEnumRangeOpt( options, READTEXT ) );
-	REQUIRES_B( isBooleanValue( testTruncation ) );
+	REQUIRES_B( isEnumRangeOpt( testOption, TEST_OPTION ) );
+	REQUIRES_B( isBooleanValue( isHttpRead ) );
 
 	/* The self-test code tests, among other things, truncation of overly 
 	   long input lines, in which case we give the buffer size as 
@@ -1646,18 +1954,78 @@ static BOOLEAN testReadLine( IN_BUFFER( dataInLength ) const char *dataIn,
 	   actual buffer size */
 	memset( buffer, '*', 32 );	/* Pollute the data buffer */
 	sMemPseudoConnect( &stream, dataIn, dataInLength );
-	status = readTextLine( &stream, buffer, 
-						   testTruncation ? dataOutLength : 32, &length, 
-						   NULL, NULL, options );
+	if( isHttpRead )
+		status = readHttpLine( &stream, buffer, 32, &length, NULL, sgetc );
+	else
+		{
+		status = readTextLine( &stream, buffer, 
+							   ( testOption == TEST_OPTION_TRUNCATION ) ? \
+							     dataOutLength : 32, &length, NULL, 
+							   options, FALSE );
+		}
 	sMemDisconnect( &stream );
+	if( status != expectedStatus )
+		{
+		DEBUG_DIAG(( "Got %d, expected %d, for '%s' -> '%s'", 
+					 status, expectedStatus, dataIn, dataOut ));
+		return( FALSE );
+		}
 	if( cryptStatusError( status ) )
-		return( FALSE );
+		{
+		/* We expected an error return, we're done */
+		return( TRUE );
+		}
+	if( dataOutLength >= 7 && !memcmp( dataOut, "<blank>", 7 ) )
+		{
+		return( ( length == 0 ) ? TRUE : FALSE );
+		}
 	if( length != dataOutLength || memcmp( buffer, dataOut, dataOutLength ) )
+		{
+		DEBUG_DIAG(( "Got %d, expected %d, for '%s' -> '%s'", 
+					 status, expectedStatus, dataIn, dataOut ));
 		return( FALSE );
+		}
 
 	return( TRUE );
 	}
+
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 3 ) ) \
+static BOOLEAN testReadLine( IN_BUFFER( dataInLength ) const char *dataIn,
+							 IN_LENGTH_SHORT_MIN( 1 ) \
+								const int dataInLength, 
+							 IN_BUFFER( dataOutLength ) const char *dataOut,
+							 IN_LENGTH_SHORT_MIN( 1 ) \
+								const int dataOutLength,
+							 IN_ENUM_OPT( READTEXT ) \
+								const READTEXT_TYPE options,
+							 IN_STATUS const int expectedStatus,
+							 IN_ENUM_OPT( TEST_OPTION ) \
+								const TEST_OPTION_TYPE testOption )
+	{
+	return( testRead( dataIn, dataInLength, dataOut, dataOutLength, options,
+					  expectedStatus, testOption, FALSE ) );
+	}
 #endif /* USE_HTTP || USE_BASE64 || USE_SCEP || USE_SSH */
+
+#ifdef USE_HTTP 
+
+CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1, 3 ) ) \
+static BOOLEAN testReadHttp( IN_BUFFER( dataInLength ) const char *dataIn,
+							 IN_LENGTH_SHORT_MIN( 1 ) \
+								const int dataInLength, 
+							 IN_BUFFER( dataOutLength ) const char *dataOut,
+							 IN_LENGTH_SHORT_MIN( 1 ) \
+								const int dataOutLength,
+							 IN_ENUM_OPT( READTEXT ) \
+								const READTEXT_TYPE options,
+							 IN_STATUS const int expectedStatus,
+							 IN_ENUM_OPT( TEST_OPTION ) \
+								const TEST_OPTION_TYPE testOption )
+	{
+	return( testRead( dataIn, dataInLength, dataOut, dataOutLength, options,
+					  expectedStatus, testOption, TRUE ) );
+	}
+#endif /* USE_HTTP */
 
 #if defined( USE_BASE64 ) 
 
@@ -1770,67 +2138,137 @@ BOOLEAN testIntAPI( void )
 	/* Test the text-line read code */
 #if defined( USE_HTTP ) || defined( USE_BASE64 ) || \
 	defined( USE_SCEP ) || defined( USE_SSH )
+
+	/* Whitespace handling */
 	if( !testReadLine( "abcdefgh\n", 9, "abcdefgh", 8, READTEXT_NONE, 
-					   FALSE ) || \
-		!testReadLine( "abcdefghijklmnopq\n", 18, 
-					   "abcdefghijklmnop", 16, READTEXT_NONE, TRUE ) || \
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
 		!testReadLine( " abcdefgh\n", 10, "abcdefgh", 8, READTEXT_NONE, 
-					   FALSE ) || \
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) || \
 		!testReadLine( "abcdefgh \n", 10, "abcdefgh", 8, READTEXT_NONE, 
-					   FALSE ) || \
-		!testReadLine( " ab cdefgh \n", 12, "ab cdefgh", 9, 
-					   READTEXT_NONE, FALSE ) || \
-		!testReadLine( "   ab   cdefgh   \n", 18, "ab cdefgh", 9, 
-					   READTEXT_NONE, FALSE ) )
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadLine( "ab cdefgh \n", 11, "ab cdefgh", 9, READTEXT_NONE, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadLine( "ab\tcdefgh\t\n", 11, "ab cdefgh", 9, READTEXT_NONE, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadLine( "ab   cdefgh   \n", 15, "ab cdefgh", 9, 
+					   READTEXT_NONE, CRYPT_OK, TEST_OPTION_NONE ) )
 		return( FALSE );
+
+	/* Hard EOL */
 	if( !testReadLine( "abcdefgh", 8, "abcdefgh", 8, READTEXT_NONE, 
-					   FALSE ) || \
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
 		!testReadLine( " abcdefgh", 9, "abcdefgh", 8, READTEXT_NONE, 
-					   FALSE ) || \
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) || \
 		!testReadLine( "abcdefgh ", 9, "abcdefgh", 8, READTEXT_NONE, 
-					   FALSE ) )
+					   CRYPT_OK, TEST_OPTION_NONE ) )
 		return( FALSE );
-	if( !testReadLine( "abcdefgh", 8, "abcdefgh", 8, READTEXT_RAW, 
-					   FALSE ) || \
-		!testReadLine( " abcdefgh", 9, " abcdefgh", 9, READTEXT_RAW, 
-					   FALSE ) || \
-		!testReadLine( "abcdefgh ", 9, "abcdefgh ", 9, READTEXT_RAW, 
-					   FALSE ) || \
-		!testReadLine( "   ab   cdefgh   ", 17, "   ab   cdefgh   ", 17, 
-					   READTEXT_RAW, FALSE ) )
+
+	/* CR / LF handling */
+	if( !testReadLine( "abcdefgh\r\n", 10, "abcdefgh", 8, READTEXT_NONE, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadLine( "abcdefgh\rijk\n", 13, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) || \
+		!testReadLine( "abcdefgh\r\r\n", 11, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) )
 		return( FALSE );
-	if( !testReadLine( "abcdefgh\r\n", 10, "abcdefgh", 8, 
-					   READTEXT_NONE, FALSE ) || \
-		!testReadLine( "abcdefgh\r\r\n", 11, "abcdefgh", 8, 
-					   READTEXT_NONE, FALSE ) )
+
+	/* Error handling */
+	if( !testReadLine( "   \t   \n", 8, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) || \
+		!testReadLine( "abc\x12" "efgh\n", 9, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) || \
+		!testReadLine( "abc\x12" "efgh\n", 9, "<error>", 7, READTEXT_RAW, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) || \
+		!testReadLine( "  ", 2, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) || \
+		!testReadLine( "    ", 4, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) )
 		return( FALSE );
-	if( testReadLine( "   \t   \n", 8, "", 1, READTEXT_NONE, FALSE ) || \
-		testReadLine( "abc\x12" "efgh\n", 9, "", 1, READTEXT_NONE, 
-					  FALSE ) || \
-		testReadLine( "abc\x12" "efgh\n", 9, "", 1, READTEXT_RAW, 
-					  FALSE ) || \
-		testReadLine( "  ", 2, "", 1, READTEXT_NONE, FALSE ) )
-		return( FALSE );
+
+	/* Multi-line read */
 	if( !testReadLine( "abcdefgh;\nabc\n", 14, 
-					   "abcdefgh;", 9, READTEXT_NONE, FALSE ) || \
+					   "abcdefgh;", 9, READTEXT_NONE, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
 		!testReadLine( "abcdefgh;\nabc\n", 14, 
-					   "abcdefgh;abc", 12, READTEXT_MULTILINE, FALSE ) || \
+					   "abcdefgh;abc", 12, READTEXT_MULTILINE, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadLine( "abcdefgh;abc\nabc\n", 17,
+					   "abcdefgh;abc", 12, READTEXT_MULTILINE,
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
 		!testReadLine( "abcdefgh; \n abc\n", 16, 
-					   "abcdefgh;abc", 12, READTEXT_MULTILINE, FALSE ) || \
+					   "abcdefgh;abc", 12, READTEXT_MULTILINE, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
 		!testReadLine( "abcdefgh ; \n abc\n", 17, 
 					   "abcdefgh;abc", 12, READTEXT_MULTILINE, 
-					   FALSE ) || \
-		!testReadLine( "abcdefgh;abc\nabc\n", 17, 
-					   "abcdefgh;abc", 12, READTEXT_MULTILINE, FALSE ) )
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadLine( "a;;b\n", 5, "a;;b", 4, READTEXT_MULTILINE, 
+					   CRYPT_OK, TEST_OPTION_NONE ) )
 		return( FALSE );
-	if( testReadLine( "abcdefgh;\n", 10, "", 1, READTEXT_MULTILINE, 
-					  FALSE ) || \
-		testReadLine( "abcdefgh;\n\n", 11, "", 1, READTEXT_MULTILINE, 
-					  FALSE ) || \
-		testReadLine( "abcdefgh;\n \n", 12, "", 1, READTEXT_MULTILINE, 
-					  FALSE ) )
+
+	/* Raw text read */
+	if( !testReadLine( "abcdefgh", 8, "abcdefgh", 8, READTEXT_RAW, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadLine( " abcdefgh", 9, " abcdefgh", 9, READTEXT_RAW, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadLine( "abcdefgh ", 9, "abcdefgh ", 9, READTEXT_RAW, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadLine( "   ab   cdefgh   ", 17, "   ab   cdefgh   ", 17, 
+					   READTEXT_RAW, CRYPT_OK, TEST_OPTION_NONE ) )
+		return( FALSE );
+
+	/* Over-long input line */
+	if( !testReadLine( "abcdefghijklmnopq\n", 18, 
+					   "abcdefghijklmnop", 16, READTEXT_NONE, 
+					   CRYPT_ERROR_OVERFLOW, TEST_OPTION_TRUNCATION ) )
+		return( FALSE );
+
+	/* Multi-line read error handling */
+	if( !testReadLine( "abcdefgh;\n", 10, "<error>", 7, READTEXT_MULTILINE, 
+					   CRYPT_ERROR_UNDERFLOW, TEST_OPTION_NONE ) || \
+		!testReadLine( "abcdefgh;\n\n", 11, "<error>", 7, READTEXT_MULTILINE, 
+					   CRYPT_ERROR_UNDERFLOW, TEST_OPTION_NONE ) || \
+		!testReadLine( "abcdefgh;\n \n", 12, "<error>", 7, READTEXT_MULTILINE, 
+					   CRYPT_ERROR_UNDERFLOW, TEST_OPTION_NONE ) || \
+		!testReadLine( "abcdefgh;\nijkl;\n  \n", 19, "<error>", 7, READTEXT_MULTILINE, 
+					   CRYPT_ERROR_UNDERFLOW, TEST_OPTION_NONE ) )
 		return( FALSE );
 #endif /* USE_HTTP || USE_BASE64 || USE_SCEP || USE_SSH */
+
+	/* Test the HTTP-line read code */
+#if defined( USE_HTTP ) 
+	if( !testReadHttp( "http/1.0\r\n", 10, "http/1.0", 8, READTEXT_NONE, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadHttp( " http/1.0\r\n", 11, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) || \
+		!testReadHttp( "  http/1.0\r\n", 12, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) )
+		return( FALSE );
+
+	/* Malformed line terminators */
+	if( !testReadHttp( "http/1.0\r", 9, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_UNDERFLOW, TEST_OPTION_NONE ) || 
+					   /* Underflow rather than bad-data because we ran out
+					      of input before getting the LF */
+		!testReadHttp( "http/1.0\n", 9, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) || \
+		!testReadHttp( "\r http/1.0\r\n", 12, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) || \
+		!testReadHttp( "a\rb\r\n", 5, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) || \
+		!testReadHttp( " \r\n", 3, "<error>", 7, READTEXT_NONE, 
+					   CRYPT_ERROR_BADDATA, TEST_OPTION_NONE ) )
+		return( FALSE );
+
+		/* Odds and ends: Blank lines, no special handling for ';' as in 
+		   readTextLine() */
+	if( !testReadHttp( "\r\n", 2, "<blank>", 7, READTEXT_NONE, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadHttp( "a;b\r\n", 5, "a;b", 3, READTEXT_NONE, 
+					   CRYPT_OK, TEST_OPTION_NONE ) || \
+		!testReadHttp( "a;\r\nb\r\n", 7, "a;", 2, READTEXT_NONE, 
+					   CRYPT_OK, TEST_OPTION_NONE ) )
+		return( FALSE );
+#endif /* USE_HTTP */
 
 	return( TRUE );
 	}

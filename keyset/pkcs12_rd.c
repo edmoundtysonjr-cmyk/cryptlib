@@ -759,8 +759,10 @@ int pkcs12ReadKeyset( INOUT_PTR STREAM *stream,
 		   may or may not be of the same type */
 		if( length != CRYPT_UNUSED )
 			{
-			REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-			innerEndPos = stell( stream ) + length;
+			innerEndPos = stell( stream );
+			REQUIRES( isIntegerRangeNZ( innerEndPos ) );
+			REQUIRES( !checkOverflowAdd( innerEndPos, length ) );
+			innerEndPos += length;
 			ENSURES( isIntegerRangeMin( innerEndPos, length ) );
 			}
 		if( !isEncrypted )
@@ -776,9 +778,10 @@ int pkcs12ReadKeyset( INOUT_PTR STREAM *stream,
 				}
 			if( length == CRYPT_UNUSED && innerLength != CRYPT_UNUSED )
 				{
-				REQUIRES( !checkOverflowAdd( stell( stream ), 
-											 innerLength ) );
-				innerEndPos = stell( stream ) + innerLength;
+				innerEndPos = stell( stream );
+				REQUIRES( isIntegerRangeNZ( innerEndPos ) );
+				REQUIRES( !checkOverflowAdd( innerEndPos, innerLength ) );
+				innerEndPos += innerLength;
 				ENSURES( isIntegerRangeMin( innerEndPos, innerLength ) );
 				}
 			}
@@ -798,8 +801,10 @@ int pkcs12ReadKeyset( INOUT_PTR STREAM *stream,
 				pkcs12Free( pkcs12info, maxNoPkcs12objects );
 				return( status );
 				}
-			REQUIRES( !checkOverflowAdd( stell( stream ), innerLength ) );
-			innerEndPos = stell( stream ) + innerLength;
+			innerEndPos = stell( stream );
+			REQUIRES( isIntegerRangeNZ( innerEndPos ) );
+			REQUIRES( !checkOverflowAdd( innerEndPos, innerLength ) );
+			innerEndPos += innerLength;
 			REQUIRES( isIntegerRangeMin( innerEndPos, innerLength ) );
 
 			/* In practice it's not quite this simple.  Firstly, this
@@ -1194,7 +1199,7 @@ static int getItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 	if( keyIDtype == CRYPT_IKEYID_KEYID || \
 		keyIDtype == CRYPT_IKEYID_PGPKEYID || \
 		keyIDtype == CRYPT_IKEYID_ISSUERID || \
-		( keyIDlength == 6 && !strCompare( keyID, "[none]", 6 ) ) )
+		( keyIDlength == 6 && strSame( keyID, "[none]", 6 ) ) )
 		{
 		pkcs12infoPtr = pkcs12FindEntry( pkcs12info,
 										 keysetInfoPtr->keyDataNoObjects,

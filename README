@@ -1,3 +1,17 @@
+Changes in 3.4.9.5 release
+==========================
+
+cryptlib 3.4.9.5 is a fourth intermediate release to prepare for the cleanup
+changes in 3.5.  In particular it fixes a few problems with checking non-
+default ASN.1 algorithm parameters for AES and SHA-2, for example where the
+code would check for a generic SHA-2 rather than specifically SHA2-512, or the
+enveloping code would default to AES-128 to impedance-match other algorithms
+with 128-bit keys even if the user requested AES-256.
+
+In addition to this it handles further corner cases that were previously
+detected and reported as CRYPT_ERROR_INTERNAL with more appropriate error
+codes like CRYPT_ERROR_BADDATA or CRYPT_ERROR_OVERFLOW.
+
 Changes in 3.4.9.4 release
 ==========================
 
@@ -77,17 +91,17 @@ attributes.  In particular:
   identifiers are still present but any attempt to create a DES or RC4 context
   will fail.
 
+- The cryptExportKey() and cryptImportKey() functions have been renamed to
+  cryptWrapKey() and cryptUnwrapKey() to reduce confusion over their use.
+  When building with 3.4.9.1, most common compilers will emit a warning to
+  switch to the new function names.
+
 - The ability to call cryptEncrypt()/cryptDecrypt() with RSA keys has been
   removed since the same functionality is already provided through
   cryptWrapKey()/cryptUnwrapKey().  This change brings the usage into line
   with other algorithms like DSA, DH, ElGamal, ECDH, and ECDSA that can't be
   used directly with cryptEncrypt()/cryptDecrypt(), and even for RSA it
   required custom code to perform PKCS #1/PSS/OAEP padding and unpadding.
-
-- The cryptExportKey() and cryptImportKey() functions have been renamed to
-  cryptWrapKey() and cryptUnwrapKey() to reduce confusion over their use.
-  When building with 3.4.9.1, most common compilers will emit a warning to
-  switch to the new function names.
 
 Changes in 3.4.9 release
 ========================
@@ -109,12 +123,8 @@ free-for-all that the RFC allows for.
 The build process has been updated to take advantage of new capabilities and
 code security features added in newer compilers.
 
-Changes in 3.4.8 release
-========================
-
-The CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA1 attribute for secure sessions has
-been changed to CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2 to reflect universal
-usage.
+With this release, cryptlib 3.4.7, and by extension all earlier versions, have
+been end-of-life'd.
 
 Changes in 3.4.8 release
 ========================
@@ -126,6 +136,10 @@ the value in the protocolInfo structure at the end of session/tls.c.
 
 The TLS 1.3 code has been updated based on deployment experience with 3.4.7 to
 deal with issues with nonstandard TLS 1.3 implementations.
+
+The CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA1 attribute for secure sessions has
+been changed to CRYPT_SESSINFO_SERVER_FINGERPRINT_SHA2 to reflect universal
+usage.
 
 With this release, cryptlib 3.4.6, and by extension all earlier versions, have
 been end-of-life'd.

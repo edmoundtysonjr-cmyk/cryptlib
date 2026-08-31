@@ -551,6 +551,10 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	REQUIRES( type == CRYPT_SESSINFO_REQUEST );
 
+	/* Make sure that there aren't any conflicts with existing attributes */
+	if( !checkAttributesConsistent( sessionInfoPtr, type ) )
+		return( CRYPT_ERROR_INITED );
+
 	/* Make sure that everything is set up ready to go.  Since RTCS requests
 	   aren't signed like normal certificate objects we can't just check the 
 	   immutable attribute but have to perform a dummy export for which the

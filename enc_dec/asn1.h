@@ -772,7 +772,8 @@ int readRawObjectAlloc( INOUT_PTR STREAM *stream,
 							int *objectLengthPtr,
 						IN_LENGTH_SHORT_MIN( OBJECT_HEADER_DATA_SIZE ) \
 							const int minLength,
-						IN_LENGTH_SHORT const int maxLength );
+						IN_LENGTH_SHORT_MIN( OBJECT_HEADER_DATA_SIZE + 1 ) \
+							const int maxLength );
 
 /* Determine the length of an ASN.1-encoded object (this just reads the
    outer length if present, but will burrow down into the object if necessary

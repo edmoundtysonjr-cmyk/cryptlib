@@ -26,6 +26,13 @@
   #endif /* Compiler-specific includes */
 #endif /* USE_COMPRESSION */
 
+/* The maximum number of actions/content-list items that we allow.  In 
+   almost all cases this will be a single item, very rarely two, and that's 
+   it, so the value below is more a sanity-check limit to prevent running
+   off into the weeds */
+
+#define MAX_ENV_ITEMS		32
+
 /****************************************************************************
 *																			*
 *								Envelope Actions							*
@@ -249,6 +256,7 @@ typedef struct {
 typedef struct {
 	/* Authenticated-encryption algorithm information */
 	CRYPT_ALGO_TYPE authEncAlgo;	/* AuthEnc algo.for this object */
+	int authEncKeysize;				/* Key size for the algorithm */
 
 	/* Authenticated encryption algorithm parameter data.  The various index 
 	   values are to locations within the authEncParamData, not the object 
@@ -971,10 +979,10 @@ ACTION_LIST *findActionIndirect( IN_PTR const ACTION_LIST *actionListStart,
 								 const int param1, const int param2 );
 STDC_NONNULL_ARG( ( 1 ) ) \
 void deleteActionLists( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr );
-CHECK_RETVAL_PTR STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int deleteUnusedActions( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN checkActions( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr );
+BOOLEAN checkActions( IN_PTR const ENVELOPE_INFO *envelopeInfoPtr );
 
 /* Prototypes for content list management functions */
 

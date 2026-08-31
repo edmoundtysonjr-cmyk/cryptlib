@@ -1194,8 +1194,6 @@ static const TEST_FUNCTION_INFO sessionTestInfo[] = {
 	MK_TESTFUNC( testSessionSSHPubkeyAuth ),
 	MK_TESTFUNC( testSessionSSHPortforward ),
 	MK_TESTFUNC( testSessionSSHExec ),
-	MK_TESTFUNC( testSessionSSL ),
-	MK_TESTFUNC( testSessionSSLLocalSocket ),
 	MK_TESTFUNC( testSessionTLS ),
 	MK_TESTFUNC( testSessionTLSLocalSocket ),
 	MK_TESTFUNC( testSessionTLS11 ),
@@ -1275,6 +1273,8 @@ BOOLEAN testSessionsLoopback( void )
 	/* SSH tests */
 	if( !testSessionSSHClientServer() )
 		return( FALSE );
+	if( !testSessionSSHClientServerConfirmAuth() )
+		return( FALSE );
 	if( !testSessionSSHClientServerDsaKey() )
 		return( FALSE );
 	if( !testSessionSSHClientServerEccKey() )
@@ -1329,7 +1329,13 @@ BOOLEAN testSessionsLoopback( void )
 		return( FALSE );
 	if( !testSessionTLS12NoSharedKeyClientServer() )
 		return( FALSE );
+	if( !testSessionTLS12ClientServerEccKey() )
+		return( FALSE );
+	if( !testSessionTLS12ClientServerEcc384Key() )
+		return( FALSE );
 	if( !testSessionTLS12ClientCertClientServer() )
+		return( FALSE );
+	if( !testSessionTLS12NoClientCertClientServer() )
 		return( FALSE );
 	if( !testSessionTLS12ClientCertManualClientServer() )
 		return( FALSE );

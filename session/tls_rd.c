@@ -335,6 +335,7 @@ static int processUnexpectedProtocol( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isReadPtr( headerBuffer, headerSize ) );
 
 	REQUIRES( isShortIntegerRangeNZ( headerSize ) );
+	REQUIRES( headerSize >= TLS_HEADER_SIZE );
 
 	/* Try and read a bit more of the message from the other side, since 
 	   TLS_HEADER_SIZE only provides the initial status code for something 
@@ -420,12 +421,12 @@ static int processUnexpectedProtocol( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3, 4 ) ) \
 static int recoverPacketDataTLS13( IN_BUFFER( dataLength ) const BYTE *data,
-							IN_DATALENGTH_MIN( UINT16_SIZE + 1 ) \
-								const int dataLength,
-							OUT_LENGTH_BOUNDED_Z( dataLength ) \
-								int *payloadLength, 
-							OUT_RANGE( TLS_MSG_NONE, TLS_MSG_LAST ) \
-								int *packetType )
+								   IN_DATALENGTH_MIN( 1 + 1 ) \
+										const int dataLength,
+								   OUT_LENGTH_BOUNDED_Z( dataLength ) \
+										int *payloadLength, 
+								   OUT_RANGE( TLS_MSG_NONE, TLS_MSG_LAST ) \
+										int *packetType )
 	{
 	LOOP_INDEX payloadEnd;
 
@@ -437,7 +438,7 @@ static int recoverPacketDataTLS13( IN_BUFFER( dataLength ) const BYTE *data,
 			  /* Min. 1 byte content, 1 byte contentType */
 
 	/* Clear return values */
-	*payloadLength = CRYPT_ERROR;
+	*payloadLength = 0;
 	*packetType = TLS_MSG_NONE;
 
 	/* Find the end of the zero padding.  We need at least one byte of 
@@ -498,7 +499,7 @@ static int checkPacketHeader( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									const int packetType, 
 							  IN_DATALENGTH_Z const int minLength, 
 							  IN_DATALENGTH const int maxLength,
-							  const BOOLEAN isFirstMessage )
+							  IN_BOOL const BOOLEAN isFirstMessage )
 	{
 	TLS_INFO *tlsInfo = sessionInfoPtr->sessionTLS;
 	const int ivLength = \
@@ -616,7 +617,7 @@ static int checkPacketHeader( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	return( CRYPT_OK );
 	}
 
-/* Check that the header of a TLS packet and TLS handshake packet is in 
+/* Check that the header of a TLS data packet and TLS handshake packet is in 
    order.  This is always called with sufficient data in the input stream so 
    we don't have to worry about special-casing error reporting for stream 
    read errors, however for the handshake packet read we do need to check 
@@ -624,9 +625,9 @@ static int checkPacketHeader( INOUT_PTR SESSION_INFO *sessionInfoPtr,
    TLS packet so we can't check the exact space requirements in advance */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
-int checkPacketHeaderTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr, 
-						  INOUT_PTR STREAM *stream, 
-						  OUT_DATALENGTH_Z int *packetLength )
+int checkDataPacketHeaderTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr, 
+							  INOUT_PTR STREAM *stream, 
+							  OUT_DATALENGTH_Z int *packetLength )
 	{
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -828,7 +829,9 @@ static int unwrapPacketTLSStd( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			  dataMaxLength <= MAX_PACKET_SIZE + \
 							   sessionInfoPtr->authBlocksize + 256 && \
 			  dataMaxLength < MAX_BUFFER_SIZE );
-	REQUIRES( ( dataMaxLength % sessionInfoPtr->cryptBlocksize ) == 0 );
+	REQUIRES( !checkOverflowDiv( dataMaxLength, 
+								 sessionInfoPtr->cryptBlocksize ) && \
+			  ( dataMaxLength % sessionInfoPtr->cryptBlocksize ) == 0 );
 	REQUIRES( packetType >= TLS_PACKETTYPE_FIRST && \
 			  packetType <= TLS_PACKETTYPE_LAST );
 
@@ -855,7 +858,11 @@ static int unwrapPacketTLSStd( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   MAC time difference and because it requires repeatedly connecting
 		   with a fixed-format secret such as a password at the same 
 		   location in the packet (which MS Outlook does however manage to 
-		   do), but we take this step anyway just to be safe */
+		   do), but we take this step anyway just to be safe.  The 
+		   difference between the corrupted padding and OK padding is in
+		   theory up to 256 bytes which is four HMAC-SHA256 input blocks 
+		   but in practice is 0-15 bytes which means that it's usually 
+		   within the same block as the payload */
 		badDecrypt = TRUE;
 		REQUIRES( !checkOverflowAdd( MAX_PACKET_SIZE, 
 									 sessionInfoPtr->authBlocksize ) );
@@ -940,8 +947,14 @@ static int unwrapPacketTLSMAC( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			  dataMaxLength <= MAX_PACKET_SIZE + \
 							   sessionInfoPtr->authBlocksize + 256 && \
 			  dataMaxLength < MAX_BUFFER_SIZE );
-	REQUIRES( ( ( dataMaxLength - sessionInfoPtr->authBlocksize ) % \
-				sessionInfoPtr->cryptBlocksize ) == 0 );
+
+	REQUIRES( !checkOverflowSub( dataMaxLength, \
+								 sessionInfoPtr->authBlocksize ) && \
+			  !checkOverflowDiv( dataMaxLength - \
+										sessionInfoPtr->authBlocksize,
+								 sessionInfoPtr->cryptBlocksize ) && \
+			  ( ( dataMaxLength - sessionInfoPtr->authBlocksize ) % \
+								sessionInfoPtr->cryptBlocksize ) == 0 );
 	REQUIRES( packetType >= TLS_PACKETTYPE_FIRST && \
 			  packetType <= TLS_PACKETTYPE_LAST );
 
@@ -1222,6 +1235,16 @@ int unwrapPacketTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* Clear return values */
 	*dataLength = 0;
 	*actualPacketType = TLS_MSG_NONE;
+
+	/* Make sure that we have at least one byte of payload and the one-byte
+	   content-type present once the MAC/ICV data is removed */
+	if( dataMaxLength <= sessionInfoPtr->authBlocksize + 1 )
+		{
+		retExt( CRYPT_ERROR_BADDATA,
+				( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
+				  "Invalid zero-length encrypted payload in %s (%d) packet", 
+				  getTLSPacketName( packetType ), packetType ) );
+		}
 
 	/* Unwrap the data based on the type of processing that we're using */
 	if( TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_BERNSTEIN ) )

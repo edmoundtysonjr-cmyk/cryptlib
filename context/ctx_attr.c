@@ -588,6 +588,7 @@ int getContextAttributeS( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 			{
 			STREAM stream;
 			KEYFORMAT_TYPE formatType;
+			int position DUMMY_INIT;
 
 			REQUIRES( contextType == CONTEXT_PKC && \
 					  !needsKey( contextInfoPtr ) );
@@ -601,9 +602,13 @@ int getContextAttributeS( INOUT_PTR CONTEXT_INFO *contextInfoPtr,
 								contextInfoPtr, capabilityInfoPtr->cryptAlgo,
 								formatType,  "public_key", 10 );
 			if( cryptStatusOK( status ) )
-				msgData->length = stell( &stream );
+				status = position = stell( &stream );
 			sMemDisconnect( &stream );
-			return( status );
+			if( cryptStatusError( status ) )
+				return( status );
+			msgData->length = position;
+
+			return( CRYPT_OK );
 			}
 
 #ifdef USE_PGPKEYS 

@@ -60,8 +60,8 @@
    actually get caught now rather than silently continuing */
 
 /* A buffer cookie, used as a canary to check for overwrites, being the XOR 
-   of the low 64 bits of the address and either a random value (the user-
-   defined FIXED_SEED) or a fixed bit pattern */
+   of the low 64 bits of the address, the buffer size, and either a random 
+   value (the user-defined FIXED_SEED) or a fixed bit pattern */
 
 #ifdef FIXED_SEED
 static const BYTE canarySeed[ SAFEBUFFER_COOKIE_SIZE ] = { FIXED_SEED };
@@ -73,9 +73,11 @@ static const BYTE canarySeed[ SAFEBUFFER_COOKIE_SIZE ] = \
 STDC_NONNULL_ARG( ( 1 ) ) \
 static void makeCanary( OUT_BUFFER_FIXED( SAFEBUFFER_COOKIE_SIZE ) \
 							BYTE *canary,
-						const void *address )
+						IN_PTR const void *address, 
+						IN_DATALENGTH const int size )
 	{
-	uintptr_t addressValue = ( uintptr_t ) address;
+	const uintptr_t addressValue = ( uintptr_t ) address;
+	const uintptr_t sizeValue = ( uintptr_t ) size;
 	const int shiftCountMod = ( sizeof( uintptr_t ) == 4 ) ? 32 : 64;
 	LOOP_INDEX i;
 
@@ -101,7 +103,9 @@ static void makeCanary( OUT_BUFFER_FIXED( SAFEBUFFER_COOKIE_SIZE ) \
 		
 		ENSURES_V( LOOP_INVARIANT_SMALL( i, 0, SAFEBUFFER_COOKIE_SIZE - 1 ) );
 		
-		canary[ i ] = intToByte( addressValue >> shiftCount ) ^ canarySeed[ i ];
+		canary[ i ] = intToByte( addressValue >> shiftCount ) ^ \
+					  intToByte( sizeValue >> shiftCount ) ^ \
+					  canarySeed[ i ];
 		}
 	ENSURES_V( LOOP_BOUND_OK );
 	}
@@ -125,10 +129,10 @@ void safeBufferInit( INOUT_BUFFER_FIXED( bufSize ) void *buffer,
 	REQUIRES_V( isBufsizeRangeMin( bufSize, 256 ) );
 
 	/* Insert the cookies, which correspond to the address at which they're
-	   stored XOR'd with a fixed magic value */
-	makeCanary( cookie, startCookiePtr );
+	   stored XOR'd with the buffer size XOR'd with a fixed magic value */
+	makeCanary( cookie, startCookiePtr, bufSize );
 	memcpy( startCookiePtr, cookie, SAFEBUFFER_COOKIE_SIZE );
-	makeCanary( cookie, endCookiePtr );
+	makeCanary( cookie, endCookiePtr, bufSize );
 	memcpy( endCookiePtr, cookie, SAFEBUFFER_COOKIE_SIZE );
 	}
 
@@ -155,18 +159,16 @@ void *safeBufferAlloc( IN_DATALENGTH const int bufSize )
 	}
 
 STDC_NONNULL_ARG( ( 1 ) ) \
-void safeBufferFree( const void *buffer )
+void safeBufferFree( IN_PTR const void *buffer,
+					 IN_DATALENGTH const int bufSize )
 	{
 	void *startCookiePtr = ( ( BYTE * ) buffer ) - SAFEBUFFER_COOKIE_SIZE;
-	BYTE cookie[ SAFEBUFFER_COOKIE_SIZE + 16 ];
+			 /* Although this is declared 'const', we have to override the 
+			    const to be able to pass it to free() */
 
-	assert( isReadPtr( buffer, SAFEBUFFER_COOKIE_SIZE ) );
+	assert( isReadPtrDynamic( buffer, bufSize ) );
 
-	/* We can't check the overall buffer state since we don't know its size
-	   in order to locate the end cookie, but we can check at least the 
-	   start cookie for validity */
-	makeCanary( cookie, startCookiePtr );
-	if( memcmp( cookie, startCookiePtr, SAFEBUFFER_COOKIE_SIZE ) )
+	if( !safeBufferCheck( buffer, bufSize ) )
 		{
 		/* Buffer corrupted, don't try and free it */
 		assert( DEBUG_WARN );
@@ -180,19 +182,24 @@ CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN safeBufferCheck( IN_BUFFER( bufSize ) const void *buffer, 
 						 IN_DATALENGTH const int bufSize )
 	{
-	const BYTE *startCookiePtr = ( ( const BYTE * ) buffer ) - SAFEBUFFER_COOKIE_SIZE;
-	const BYTE *endCookiePtr = ( ( const BYTE * ) buffer ) + bufSize;
+	const BYTE *startCookiePtr = \
+					( ( const BYTE * ) buffer ) - SAFEBUFFER_COOKIE_SIZE;
+	const BYTE *endCookiePtr;
 	BYTE cookie[ SAFEBUFFER_COOKIE_SIZE + 16 ];
 
 	REQUIRES_B( isBufsizeRangeMin( bufSize, 256 ) );
 
 	/* Check that the cookies haven't been disturbed.  We don't DEBUG_WARN on
 	   these because they're used in the self-test, relying on actual checks 
-	   being wrapped in REQUIRES_B()/ENSURES_B() */
-	makeCanary( cookie, startCookiePtr );
+	   being wrapped in REQUIRES_B()/ENSURES_B().  We check the start cookie
+	   first, which also encodes the buffer size, so that an incorrect 
+	   buffer size passed as an argument is caught before it reads arbitrary 
+	   memory */
+	makeCanary( cookie, startCookiePtr, bufSize );
 	if( memcmp( cookie, startCookiePtr, SAFEBUFFER_COOKIE_SIZE ) )
 		return( FALSE );
-	makeCanary( cookie, endCookiePtr );
+	endCookiePtr = ( ( const BYTE * ) buffer ) + bufSize;
+	makeCanary( cookie, endCookiePtr, bufSize );
 	if( memcmp( cookie, endCookiePtr, SAFEBUFFER_COOKIE_SIZE ) )
 		return( FALSE );
 

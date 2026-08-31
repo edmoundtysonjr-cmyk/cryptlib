@@ -98,17 +98,24 @@ static int readWantBacks( INOUT_PTR STREAM *stream,
 	status = readConstructed( stream, &length, CTAG_QR_WANTBACK );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 
 	/* Read and record each wantBack */
 	protocolInfo->wantBacks = SCVP_WANTBACK_FLAG_NONE;
 	LOOP_MED( wantBackCount = 0, 
-			  wantBackCount < 16 && stell( stream ) < endPos, 
+			  wantBackCount < 16 && \
+				( status = stell( stream ) ) < endPos, 
 			  wantBackCount++ )
 		{
 		ENSURES( LOOP_INVARIANT_MED( wantBackCount, 0, 15 ) );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		status = readOID( stream, wantBackOIDinfo, 
 						  FAILSAFE_ARRAYSIZE( wantBackOIDinfo, OID_INFO ), 
@@ -259,8 +266,10 @@ static int readScvpRequest( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusOK( status ) )
 		{
-		REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-		endPos = stell( stream ) + length;
+		endPos = stell( stream );
+		REQUIRES( isIntegerRangeNZ( endPos ) );
+		REQUIRES( !checkOverflowAdd( endPos, length ) );
+		endPos += length;
 		ENSURES( isIntegerRangeMin( endPos, length ) );
 		status = readCertRefs( stream, &sessionInfoPtr->iCertRequest, 
 							   &localErrorInfo );
@@ -341,10 +350,15 @@ static int readScvpRequest( INOUT_PTR STREAM *stream,
 	   anything with any of this stuff, we skip it until someone can 
 	   identify a use for any of the fields */
 	LOOP_MED( additionalInfoCount = 0,
-			  additionalInfoCount < 16 && stell( stream ) < endPos,
+			  additionalInfoCount < 16 && \
+				( status = stell( stream ) ) < endPos,
 			  additionalInfoCount++ )
 		{
 		ENSURES( LOOP_INVARIANT_MED( additionalInfoCount, 0, 15 ) );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		status = readUniversal( stream );
 		if( cryptStatusError( status ) )
@@ -652,7 +666,7 @@ static void sendErrorResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							   IN_ERROR const int errorStatus )
 	{
 	STREAM stream;
-	int scvpStatus, status;
+	int position DUMMY_INIT, scvpStatus, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( protocolInfo, sizeof( SCVP_PROTOCOL_INFO ) ) );
@@ -686,12 +700,15 @@ static void sendErrorResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	writeEnumerated( &stream, scvpStatus, DEFAULT_TAG );
 	status = writeRequestRef( &stream, protocolInfo );
 	if( cryptStatusOK( status ) )
-		sessionInfoPtr->receiveBufEnd = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
-	if( cryptStatusOK( status ) )
+	if( !cryptStatusError( status ) )
 		{
 		ERROR_INFO localErrorInfo;
 
+		REQUIRES_V( isShortIntegerRangeNZ( position ) );
+		sessionInfoPtr->receiveBufEnd = position;
+		
 		/* Since this message is being sent in response to an existing 
 		   error, we don't care about the possible error information 
 		   returned from the function that sends the error response,
@@ -863,7 +880,7 @@ static int createScvpResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 #ifdef USE_ERRMSGS
 	char certName[ CRYPT_MAX_TEXTSIZE + 8 ];
 #endif /* USE_ERRMSGS */
-	int replyObjSize DUMMY_INIT, status;
+	int replyObjSize DUMMY_INIT, position, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( protocolInfo, sizeof( SCVP_PROTOCOL_INFO ) ) );
@@ -874,7 +891,7 @@ static int createScvpResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	sMemNullOpen( &stream );
 	status = writeReplyObjects( &stream, sessionInfoPtr, protocolInfo );
 	if( cryptStatusOK( status ) )
-		replyObjSize = stell( &stream );
+		status = replyObjSize = stell( &stream );
 	sMemClose( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -955,9 +972,9 @@ static int createScvpResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   that we wrote earlier.  The magic value that's subtracted from the 
 	   overall length is the size of the SEQUENCE wrapper, consisting of 
 	   tag + length-of-length + 2-byte length */
-	sessionInfoPtr->receiveBufEnd = stell( &stream );
-	ENSURES( sessionInfoPtr->receiveBufEnd > 256 && \
-			 sessionInfoPtr->receiveBufEnd <= 65536 );
+	position = stell( &stream );
+	ENSURES( position > 256 && position <= 65536 );
+	sessionInfoPtr->receiveBufEnd = position;
 	sseek( &stream, 0 );
 	status = writeSequence( &stream, 
 							sessionInfoPtr->receiveBufEnd - ( 1 + 1 + 2 ) );

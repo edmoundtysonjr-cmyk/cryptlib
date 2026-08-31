@@ -371,8 +371,10 @@ int readDNstring( INOUT_PTR_DATAPTR DATAPTR_DN *dnPtr,
 						deleteDN( &dn );
 					return( CRYPT_ARGERROR_STR1 );
 					}
-				textBuffer[ 0 ] = intToByte( toUpper( textBuffer[ 0 ] ) );
-				textBuffer[ 1 ] = intToByte( toUpper( textBuffer[ 1 ] ) );
+				textBuffer[ 0 ] = \
+						intToByte( toUpper( byteToInt( textBuffer[ 0 ] ) ) );
+				textBuffer[ 1 ] = \
+						intToByte( toUpper( byteToInt( textBuffer[ 1 ] ) ) );
 				}
 			status = insertDNstring( &dn, type, textBuffer, textIndex, 
 									 valueStringType,

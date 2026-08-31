@@ -242,10 +242,15 @@ static int setSuiteInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			}
 #endif /* USE_SHA2_EXT */
 		}
+	CLEAR_FLAG( sessionInfoPtr->protocolFlags,
+				TLS_PFLAG_GCM | TLS_PFLAG_BERNSTEIN );
+				/* Pre-clear flags in case we're replacing an existing suite 
+				   that's set them */
 	if( cipherSuiteInfoPtr->flags & \
 		( CIPHERSUITE_FLAG_GCM | CIPHERSUITE_FLAG_BERNSTEIN ) )
 		{
-		/* The AEAD ciphers are stream ciphers with special-case requirements */
+		/* The AEAD ciphers are stream ciphers with special-case 
+		   requirements */
 		sessionInfoPtr->cryptBlocksize = 1;
 		if( cipherSuiteInfoPtr->flags & CIPHERSUITE_FLAG_GCM )
 			SET_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_GCM );
@@ -277,14 +282,13 @@ static int handleSignallingSuite( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 											TLS_LAST_SUITE ) \
 										const int cipherSuite )
 	{
-	const PROTOCOL_INFO *protocolInfo = \
-				DATAPTR_GET( sessionInfoPtr->protocolInfo );
+	const TLS_INFO *tlsInfo = sessionInfoPtr->sessionTLS;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 
 	REQUIRES( isSignallingSuite( cipherSuite ) );
-	REQUIRES( protocolInfo != NULL );
+	REQUIRES( tlsInfo != NULL );
 
 	switch( cipherSuite )
 		{
@@ -303,10 +307,11 @@ static int handleSignallingSuite( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			/* If the client has fallen back to a lower version and has 
 			   indicated this to us, and if this version is lower than what 
 			   we'd normally be using, abort the handshake with an insecure-
-			   fallback alert */
+			   fallback alert.  Note that we check for tlsInfo->maxVersion,
+			   the configured maximum version, not protocolInfo->maxVersion,
+			   the maximum version that we're capable of */
 			if( isServer( sessionInfoPtr ) && \
-				handshakeInfo->clientOfferedVersion < \
-											protocolInfo->maxVersion )
+				handshakeInfo->clientOfferedVersion < tlsInfo->maxVersion )
 				{
 				handshakeInfo->failAlertType = \
 									TLS_ALERT_INAPPROPRIATE_FALLBACK;
@@ -314,7 +319,7 @@ static int handleSignallingSuite( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						( CRYPT_ERROR_NOSECURE, SESSION_ERRINFO, 
 						  "Client attempted insecure fallback from "
 						  "protocol version %d to version %d",
-						  protocolInfo->maxVersion,
+						  tlsInfo->maxVersion,
 						  handshakeInfo->clientOfferedVersion ) );
 				}
 			break;
@@ -1017,7 +1022,7 @@ int processHelloTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					 IN_BOOL const BOOLEAN isServer )
 	{
 	BOOLEAN potentiallyResumedSession = FALSE;
-	int endPos, length, suiteLength, value, status;
+	int endPos, position, length, suiteLength, value, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
@@ -1048,8 +1053,10 @@ int processHelloTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	status = processVersionInfo( sessionInfoPtr, stream, &value, FALSE );
 	if( cryptStatusError( status ) )
@@ -1216,7 +1223,9 @@ int processHelloTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	/* If there's extra data present at the end of the packet, check for TLS
 	   extension data */
-	if( stell( stream ) != endPos )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( position != endPos )
 		{
 		int extensionLength;
 		
@@ -1237,32 +1246,19 @@ int processHelloTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   and the third isn't valid because the data present has gone past
 		   the end of the claimed data present */
 		REQUIRES( !checkOverflowSub( endPos, UINT16_SIZE * 3 ) );
-		if( stell( stream ) > endPos - ( UINT16_SIZE * 3 ) )
+		if( position > endPos - ( UINT16_SIZE * 3 ) )
 			{
 			retExt( CRYPT_ERROR_BADDATA,
 					( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
 					  "TLS hello contains extraneous data" ) );
 			}
-		REQUIRES( !checkOverflowSub( endPos, stell( stream ) ) );
-		extensionLength = endPos - stell( stream );
+		REQUIRES( !checkOverflowSub( endPos, position ) );
+		extensionLength = endPos - position;
 		ENSURES( isShortIntegerRangeNZ( extensionLength ) );
 		status = readExtensions( stream, sessionInfoPtr, handshakeInfo, 
 								 actionType, extensionLength );
 		if( cryptStatusError( status ) )
-			{
-			/* In the case of TLS 1.3 where the keyex is handled via data 
-			   stuffed into extensions we can end up with no usable keyex 
-			   information present, in which case we have to tell the client 
-			   to guess again (seriously! That's how the protocol works) */
-#ifdef USE_TLS13
-			if( status != OK_SPECIAL )
-				return( status );
-
-			ENSURES( *actionType == TLSHELLO_ACTION_RETRY );
-#else
 			return( status );
-#endif /* USE_TLS13 */
-			}
 		handshakeInfo->flags |= HANDSHAKE_FLAG_HASEXTENSIONS;
 		}
 
@@ -1303,10 +1299,11 @@ int processHelloTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				  "system could be found" ) );
 		}
 
-	/* If we've eventually ended up with a GCM suite, typically in 
+	/* If we've eventually ended up with an AEAD suite, typically in 
 	   conjunction with an ECC suite, turn off encrypt-then-MAC in case it 
 	   was selected */
-	if( TEST_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_GCM ) )
+	if( TEST_FLAG( sessionInfoPtr->protocolFlags, 
+				   TLS_PFLAG_GCM | TLS_PFLAG_BERNSTEIN ) )
 		{
 		CLEAR_FLAG( sessionInfoPtr->protocolFlags, TLS_PFLAG_ENCTHENMAC );
 		if( isServer )
@@ -1342,8 +1339,10 @@ int processHelloTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 #endif /* CONFIG_SUITEB */
 
-	/* If we need to get the client to retry the Client Hello, let the 
-	   caller know */
+	/* In the case of TLS 1.3 where the keyex is handled via data stuffed 
+	   into extensions we can end up with no usable keyex information 
+	   present, in which case we have to tell the client to guess again 
+	   (seriously! That's how the protocol works) */
 #ifdef USE_TLS13
 	if( *actionType == TLSHELLO_ACTION_RETRY )
 		return( OK_SPECIAL );

@@ -545,7 +545,8 @@ int writeKeyAttributes( OUT_BUFFER( privKeyAttributeMaxLen, \
 	{
 	STREAM stream;
 	int commonAttributeSize, commonKeyAttributeSize;
-	int keyIdentifierDataSize DUMMY_INIT, keyUsage, status;
+	int keyIdentifierDataSize DUMMY_INIT, keyUsage;
+	int position DUMMY_INIT, status;
 
 	assert( isWritePtrDynamic( privKeyAttributes, privKeyAttributeMaxLen ) );
 	assert( isWritePtr( privKeyAttributeSize, sizeof( int ) ) );
@@ -637,10 +638,11 @@ int writeKeyAttributes( OUT_BUFFER( privKeyAttributeMaxLen, \
 								 CTAG_IA_IDENTIFIERS );
 		}
 	if( cryptStatusOK( status ) )
-		*privKeyAttributeSize = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( cryptStatusOK( status ) );
-	ENSURES( isIntegerRangeNZ( *privKeyAttributeSize ) );
+	ENSURES( !cryptStatusError( status ) );
+	ENSURES( isIntegerRangeNZ( position ) );
+	*privKeyAttributeSize = position;
 	pkcs15infoPtr->privKeyUsage = keyUsage;	/* Update stored usage information */
 
 	/* Determine how big the public key attribute collections will be */
@@ -670,10 +672,11 @@ int writeKeyAttributes( OUT_BUFFER( privKeyAttributeMaxLen, \
 		status = writeGeneralizedTime( &stream, pkcs15infoPtr->validTo, 
 									   CTAG_KA_VALIDTO );
 	if( cryptStatusOK( status ) )
-		*pubKeyAttributeSize = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( cryptStatusOK( status ) );
-	ENSURES( isIntegerRangeNZ( *pubKeyAttributeSize ) );
+	ENSURES( !cryptStatusError( status ) );
+	ENSURES( isIntegerRangeNZ( position ) );
+	*pubKeyAttributeSize = position;
 	pkcs15infoPtr->pubKeyUsage = keyUsage;	/* Update stored usage information */
 
 	return( CRYPT_OK );
@@ -693,7 +696,7 @@ int writeCertAttributes( OUT_BUFFER( certAttributeMaxLen, *certAttributeSize ) \
 	BOOLEAN trustedImplicit;
 	int commonAttributeSize, commonCertAttributeSize;
 	int keyIdentifierDataSize, trustedUsageSize;
-	int isCA, trustedUsage, status;
+	int isCA, trustedUsage, position DUMMY_INIT, status;
 
 	assert( isWritePtrDynamic( certAttributes, certAttributeMaxLen ) );
 	assert( isWritePtr( certAttributeSize, sizeof( int ) ) );
@@ -761,10 +764,11 @@ int writeCertAttributes( OUT_BUFFER( certAttributeMaxLen, *certAttributeSize ) \
 	status = writeGeneralizedTime( &stream, pkcs15infoPtr->validTo,
 								   CTAG_CA_VALIDTO );
 	if( cryptStatusOK( status ) )
-		*certAttributeSize = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( cryptStatusOK( status ) );
-	ENSURES( isIntegerRangeNZ( *certAttributeSize ) );
+	ENSURES( !cryptStatusError( status ) );
+	ENSURES( isIntegerRangeNZ( position ) );
+	*certAttributeSize = position;
 
 	return( CRYPT_OK );
 	}

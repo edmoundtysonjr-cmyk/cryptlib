@@ -661,6 +661,7 @@ int importCert( IN_BUFFER( certObjectLength ) const void *certObject,
 			{
 			krnlSendNotifier( certInfoPtr->iPubkeyContext, 
 							  IMESSAGE_DECREFCOUNT );
+			certInfoPtr->iPubkeyContext = CRYPT_ERROR;
 			krnlSendNotifier( *certificate, IMESSAGE_DESTROY );
 			*certificate = CRYPT_ERROR;
 			return( status );
@@ -769,7 +770,7 @@ int exportCert( OUT_BUFFER_OPT( certObjectMaxLength, *certObjectLength ) \
 		sMemNullOpen( &nullStream );
 		status = writeCertChain( &nullStream, certInfoPtr );
 		if( cryptStatusOK( status ) )
-			length = encodedLength = stell( &nullStream );
+			status = length = encodedLength = stell( &nullStream );
 		sMemClose( &nullStream );
 		if( cryptStatusError( status ) )
 			return( status );

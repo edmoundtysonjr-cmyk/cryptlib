@@ -191,7 +191,8 @@ BOOLEAN sanityCheckAlgoIDparams( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 	   the reason given above */
 	if( isSigAlgo( cryptAlgo ) )
 		{
-		if( !isEnumRangeOpt( algoIDparams->encodingType, ALGOID_ENCODING ) )
+		if( !isEnumRangeOpt( algoIDparams->encodingType, ALGOID_ENCODING ) || \
+			algoIDparams->encodingType == ALGOID_ENCODING_PKCS1 )
 			{
 			DEBUG_PUTS(( "sanityCheckAlgoIDparams: PKC signature parameters" ));
 			return( FALSE );
@@ -199,7 +200,8 @@ BOOLEAN sanityCheckAlgoIDparams( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 		}
 	else
 		{
-		if( !isEnumRange( algoIDparams->encodingType, ALGOID_ENCODING ) )
+		if( !isEnumRange( algoIDparams->encodingType, ALGOID_ENCODING ) || \
+			algoIDparams->encodingType == ALGOID_ENCODING_PKCS1 )
 			{
 			DEBUG_PUTS(( "sanityCheckAlgoIDparams: PKC crypt parameters" ));
 			return( FALSE );
@@ -216,8 +218,9 @@ BOOLEAN sanityCheckAlgoIDparams( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 *																			*
 ****************************************************************************/
 
-/* Work with the ridiculously complex parameter sets required for RSA-OAEP
-   and RSA-PSS.  The parameters are mostly identical for OAEP and PSS:
+/* Work with the ridiculously complex everything-optional-all-the-time 
+   parameter sets required for RSA-OAEP and RSA-PSS.  The parameters are 
+   mostly identical for OAEP and PSS:
 
 	Parameters ::= SEQUENCE {
 		hashAlgorithm		[0]	EXPLICIT AlgorithmIdentifier,
@@ -226,7 +229,25 @@ BOOLEAN sanityCheckAlgoIDparams( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 			hashAlgorithm	AlgorithmIdentifier,	-- Same as main hashAlgo
 			}
 		saltLength			[2] EXPLICIT INTEGER	-- RSA-PSS only
-		} */
+		} 
+
+   PSS then also has:
+   
+		trailerField		[3]	INTEGER DEFAULT 1
+
+   but the spec says (RFC 4055 section 3.1) "The value MUST be 1", and since
+   it's DEFAULT 1 it's always omitted.  Similarly, OAEP has:
+
+		pSourceFunc			[2] AlgorithmIdentifier DEFAULT 
+									pSpecifiedEmptyIdentifier
+		
+		pSpecifiedEmptyIdentifier	AlgorithmIdentifier ::= { id-pSpecified }
+									
+   with a large pile of confusing, contradictory, and often circular text 
+   covering it (RFC 4055 section 4.1), but what we choose to apply is 
+   "compliant implementations MUST NOT use any value other than 
+   id-pSpecified for pSourceFunc" which is the DEFAULT and therefore again
+   omitted */
 
 #if defined( USE_OAEP ) || defined( USE_PSS )
 
@@ -380,8 +401,10 @@ static int readPKCSparams( INOUT_PTR STREAM *stream,
 
 		return( CRYPT_OK );
 		}
-	REQUIRES_S( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES_S( isIntegerRangeNZ( endPos ) );
+	REQUIRES_S( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES_S( isIntegerRangeMin( endPos, length + 1 ) );
 
 	/* Read the hash algorithm */
@@ -415,12 +438,23 @@ static int readPKCSparams( INOUT_PTR STREAM *stream,
 
 	/* If they're OAEP parameters, we're done */
 	if( algoIDparams->encodingType == ALGOID_ENCODING_OAEP )
+		{
+		/* If there's any trailing further parameters (that shouldn't be 
+		   there), turn it into an error */
+		if( stell( stream ) != endPos ) 
+			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
+
 		return( CRYPT_OK );
+		}
 
 	/* Read the optional salt length and make sure that it matches the hash 
 	   size */
-	if( stell( stream ) < endPos )
+	if( ( status = stell( stream ) ) < endPos )
 		{
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
+
 		status = tag = peekTag( stream );
 		if( cryptStatusError( status ) )
 			return( status );
@@ -453,6 +487,11 @@ static int readPKCSparams( INOUT_PTR STREAM *stream,
 			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 		}
 	
+	/* If there's any trailing further parameters (that shouldn't be there),
+	   turn it into an error */
+	if( stell( stream ) != endPos ) 
+		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
+
 	return( CRYPT_OK );
 	}
 #endif /* USE_OAEP || USE_PSS */
@@ -470,16 +509,17 @@ static int readPKCSparams( INOUT_PTR STREAM *stream,
 
 CHECK_RETVAL_BOOL \
 BOOLEAN checkAlgoID( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
-					 IN_MODE_OPT const CRYPT_MODE_TYPE cryptMode )
+					 IN_RANGE( 0, 100 ) const int cryptParam )
 	{
 	ALGOID_PARAMS algoIDparams;
 
 	REQUIRES_B( isEnumRange( cryptAlgo, CRYPT_ALGO ) );
-	REQUIRES_B( isEnumRangeOpt( cryptMode, CRYPT_MODE ) );
+	REQUIRES_B( rangeCheck( cryptParam, 0, 100 ) );
 
-	/* If it's a basic algorithm like a hash algorithm then there are no 
-	   additional parameters */
-	if( cryptMode == CRYPT_MODE_NONE )
+	/* If it's a basic algorithm like a PKC algorithm or a hash algorithm 
+	   with no selectable block size then there are no additional 
+	   parameters */
+	if( cryptParam == 0 )
 		{
 		return( ( algorithmToOID( cryptAlgo, NULL, \
 								  ALGOTOOID_CHECK_VALID ) != NULL ) ? \
@@ -487,7 +527,15 @@ BOOLEAN checkAlgoID( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 		}
 
 	/* It's a crypto algorithm, specify the additional parameter */
-	initAlgoIDparamsCrypt( &algoIDparams, cryptMode, 0 );
+	if( isConvAlgo( cryptAlgo ) )
+		{
+		initAlgoIDparamsCrypt( &algoIDparams, cryptParam, 0 );
+		}
+	else
+		{
+		REQUIRES_B( isHashAlgo( cryptAlgo ) || isMacAlgo( cryptAlgo ) );
+		initAlgoIDparamsHash( &algoIDparams, cryptAlgo, cryptParam );
+		}
 	return( ( algorithmToOID( cryptAlgo, &algoIDparams, \
 							  ALGOTOOID_CHECK_VALID ) != NULL ) ? \
 			TRUE : FALSE );
@@ -517,7 +565,13 @@ int readGenericAlgoID( INOUT_PTR STREAM *stream,
 	status = readFixedOID( stream, oid, oidLength );
 	if( cryptStatusError( status ) )
 		return( status );
-	length -= oidLength;
+	if( length < oidLength )
+		length = UNDERFLOW_MARKER;
+	else
+		{
+		REQUIRES( !checkOverflowSub( length, oidLength ) );
+		length -= oidLength;
+		}
 	if( !isShortIntegerRange( length ) )
 		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 	if( length > 0 )
@@ -564,7 +618,8 @@ static int sizeofAlgoIDparams( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 
 	/* Map the algorithm parameters to an OID */
 	oid = algorithmToOID( cryptAlgo, algoIDparams, ALGOTOOID_REQUIRE_VALID );
-	REQUIRES( oid != NULL );
+	if( oid == NULL )
+		return( CRYPT_ERROR_NOTAVAIL );
 
 	/* Return the overall encoded algorithmID size */
 	if( algoIDparams != NULL )
@@ -590,8 +645,7 @@ static int sizeofAlgoIDparams( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
 		
 		/* It's an algorithm for which there's no further special-case 
 		   handling required */
-		ENSURES( ( algoIDparams->encodingType == ALGOID_ENCODING_NONE || \
-				   algoIDparams->encodingType == ALGOID_ENCODING_PKCS1 ) && \
+		ENSURES( algoIDparams->encodingType == ALGOID_ENCODING_NONE && \
 				 algoIDparams->extraLength == 0 );
 		}
 
@@ -623,7 +677,7 @@ int sizeofAlgoID( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo )
 
 CHECK_RETVAL_LENGTH_SHORT STDC_NONNULL_ARG( ( 2 ) ) \
 int sizeofAlgoIDex( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
-					const ALGOID_PARAMS *algoIDparams )
+					IN_PTR const ALGOID_PARAMS *algoIDparams )
 	{
 	REQUIRES( isEnumRange( cryptAlgo, CRYPT_ALGO ) );
 	REQUIRES( algoIDparams != NULL );
@@ -663,7 +717,7 @@ int sizeofContextAlgoID( IN_HANDLE const CRYPT_CONTEXT iCryptContext )
 
 CHECK_RETVAL_LENGTH STDC_NONNULL_ARG( ( 2 ) ) \
 int sizeofContextAlgoIDex( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
-						   const ALGOID_PARAMS *algoIDparams )
+						   IN_PTR const ALGOID_PARAMS *algoIDparams )
 	{
 	REQUIRES( isHandleRangeValid( iCryptContext ) );
 	REQUIRES( algoIDparams != NULL );
@@ -747,6 +801,14 @@ static int readAlgoIDparams( INOUT_PTR STREAM *stream,
 	   present and nothing else */
 	if( algoIDparams == NULL )
 		{
+#if defined( USE_OAEP ) || defined( USE_PSS )
+		/* If the algorithm requires parameters in order for us to work with
+		   it and the caller has indicated they're not interested in them 
+		   then we can't continue */
+		if( algoIDparamPtr->encodingType != ALGOID_ENCODING_NONE )
+			return( sSetError( stream, CRYPT_ERROR_NOTAVAIL ) );
+#endif /* USE_OAEP || USE_PSS */
+
 		/* If there are no parameters then we're done */
 		if( length <= 0 )
 			return( CRYPT_OK );
@@ -806,12 +868,22 @@ static int readAlgoIDInfo( INOUT_PTR STREAM *stream,
 			{
 			queryInfo->hashParam = algoIDparams.hashParam;
 			}
+		else
+			{
+			if( isSpecialAlgo( queryInfo->cryptAlgo ) )
+				queryInfo->keySize = algoIDparams.cryptKeySize;
+			}
 		}
 
 	/* Some broken implementations use sign + hash algoIDs in places where
 	   a hash algoID is called for, if we find one of these then we modify 
 	   the read AlgorithmIdentifier information to make it look like a hash
 	   algoID */
+#if 0	/* 12/8/26 This added for 3.2.0 in 2005 and changed numerous times
+				   since then with updates to the ASN.1 read code.  Due to
+				   upstream code changes it hasn't been enabled for at least
+				   10 years without causing any problems so is almost 
+				   certainly no longer necessary */
 	if( isPkcAlgo( queryInfo->cryptAlgo ) && \
 		isHashAlgo( algoIDparams.hashAlgo ) )
 		{
@@ -819,6 +891,7 @@ static int readAlgoIDInfo( INOUT_PTR STREAM *stream,
 		queryInfo->cryptAlgo = algoIDparams.hashAlgo;
 		queryInfo->hashParam = algoIDparams.hashParam;
 		}
+#endif /* 0 */
 
 	/* Hash algorithms will either have NULL parameters or none at all
 	   depending on which interpretation of which standard the sender used
@@ -965,6 +1038,25 @@ int readContextAlgoID( INOUT_PTR STREAM *stream,
 								  IMESSAGE_SETATTRIBUTE_S, &msgData,
 								  CRYPT_CTXINFO_IV );
 		}
+	if( cryptStatusOK( status ) && \
+		isParameterisedConvAlgo( queryInfoPtr->cryptAlgo ) && \
+		queryInfoPtr->keySize > 0 )
+		{
+		/* There's a keysize parameter present, set it.  This is actually a
+		   no-op because when we later load the key into the context the 
+		   keysize is set to the size of the loaded key, overriding what we 
+		   set here.  It's not clear how much effort we should go to to 
+		   check and deal with this, the loaded key is cryptographically
+		   protected, for example by being wrapped in an RSA keyex, while
+		   what we're loading here is coming from unauthenticated 
+		   parameters.  The end result will be a CRYPT_ERROR_WRONGKEY which
+		   seems more understandable as an error than "sender used an 
+		   algorithm OID that doesn't match the actual key size" */
+		status = krnlSendMessage( createInfo.cryptHandle,
+								  IMESSAGE_SETATTRIBUTE, 
+								  &queryInfoPtr->keySize,
+								  CRYPT_CTXINFO_KEYSIZE );
+		}
 	if( cryptStatusError( status ) )
 		{
 		/* If there's an error in the parameters stored with the key then 
@@ -1064,8 +1156,7 @@ static int writeAlgoIDparams( INOUT_PTR STREAM *stream,
 
 		/* It's an algorithm for which there's no further special-case 
 		   handling required */
-		ENSURES( ( algoIDparams->encodingType == ALGOID_ENCODING_NONE || \
-				   algoIDparams->encodingType == ALGOID_ENCODING_PKCS1 ) && \
+		ENSURES( algoIDparams->encodingType == ALGOID_ENCODING_NONE && \
 				 algoIDparams->extraLength == 0 );
 		}
 
@@ -1092,7 +1183,7 @@ int writeAlgoID( INOUT_PTR STREAM *stream,
 RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int writeAlgoIDex( INOUT_PTR STREAM *stream, 
 				   IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
-				   const ALGOID_PARAMS *algoIDparams,
+				   IN_PTR const ALGOID_PARAMS *algoIDparams,
 				   IN_TAG const int tag )
 	{
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -1127,7 +1218,7 @@ int writeContextAlgoID( INOUT_PTR STREAM *stream,
 RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int writeContextAlgoIDex( INOUT_PTR STREAM *stream, 
 						  IN_HANDLE const CRYPT_CONTEXT iCryptContext,
-						  const ALGOID_PARAMS *algoIDparams )
+						  IN_PTR const ALGOID_PARAMS *algoIDparams )
 	{
 	int algorithm, status;
 
@@ -1160,12 +1251,10 @@ int writeContextAlgoIDex( INOUT_PTR STREAM *stream,
 static const OID_INFO eccOIDinfoTbl[] = {
 	/* NIST P-256, X9.62 p256r1, SECG p256r1, 1 2 840 10045 3 1 7 */
 	{ MKOID( "\x06\x08\x2A\x86\x48\xCE\x3D\x03\x01\x07" ), CRYPT_ECCCURVE_P256 },
-#ifdef USE_SHA2_EXT
 	/* NIST P-384, SECG p384r1, 1 3 132 0 34 */
 	{ MKOID( "\x06\x05\x2B\x81\x04\x00\x22" ), CRYPT_ECCCURVE_P384 },
 	/* NIST P-521, SECG p521r1, 1 3 132 0 35 */
 	{ MKOID( "\x06\x05\x2B\x81\x04\x00\x23" ), CRYPT_ECCCURVE_P521 },
-#endif /* USE_SHA2_EXT */
 	/* Brainpool p256r1, 1 3 36 3 3 2 8 1 1 7 */
 	{ MKOID( "\x06\x09\x2B\x24\x03\x03\x02\x08\x01\x01\x07" ), CRYPT_ECCCURVE_BRAINPOOL_P256 },
 	/* Brainpool p384r1, 1 3 36 3 3 2 8 1 1 11 */
@@ -1221,7 +1310,11 @@ int sizeofECCOID( IN_ENUM( CRYPT_ECCCURVE ) \
 	LOOP_INDEX i;
 	int oidInfoSize, status;
 
-	REQUIRES( isEnumRange( curveType, CRYPT_ECCCURVE ) );
+	REQUIRES( isEnumRange( curveType, CRYPT_ECCCURVE ) && \
+			  curveType != CRYPT_ECCCURVE_25519 && \
+			  curveType != CRYPT_ECCCURVE_448 );
+			  /* This function is only called for ECDH/ECDSA curves, not any
+			     other ECC algorithm types */
 
 	status = getOIDinfo( &oidInfo, &oidInfoSize );
 	if( cryptStatusError( status ) )
@@ -1252,10 +1345,11 @@ int readECCOID( INOUT_PTR STREAM *stream,
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( curveType, sizeof( CRYPT_ECCCURVE_TYPE ) ) );
+	assert( isWritePtr( fieldSize, sizeof( int ) ) );
 
 	/* Clear return values */
 	*curveType = CRYPT_ECCCURVE_NONE;
-	*fieldSize = CRYPT_ERROR;
+	*fieldSize = 0;
 
 	/* Read the ECC OID */
 	status = getOIDinfo( &oidInfo, &oidInfoSize );
@@ -1283,7 +1377,11 @@ int writeECCOID( INOUT_PTR STREAM *stream,
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
-	REQUIRES_S( isEnumRange( curveType, CRYPT_ECCCURVE ) );
+	REQUIRES_S( isEnumRange( curveType, CRYPT_ECCCURVE ) && \
+				curveType != CRYPT_ECCCURVE_25519 && \
+				curveType != CRYPT_ECCCURVE_448 );
+				/* This function is only called for ECDH/ECDSA curves, not 
+				   any other ECC algorithm types */
 
 	status = getOIDinfo( &oidInfo, &oidInfoSize );
 	if( cryptStatusError( status ) )

@@ -564,7 +564,7 @@ static int writeUserIndex( IN_HANDLE const CRYPT_KEYSET iIndexKeyset,
 		}
 	ENSURES( LOOP_BOUND_OK );
 	if( cryptStatusOK( status ) )
-		userIndexDataLength = stell( &stream );
+		status = userIndexDataLength = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -671,10 +671,10 @@ static int writeUserData( OUT_BUFFER( userDataMaxLength, \
 								   userFileInfo->userNameLength, 
 								   BER_STRING_UTF8 );
 	if( cryptStatusOK( status ) )
-		*userDataLength = stell( &stream );
+		status = *userDataLength = stell( &stream );
 	sMemDisconnect( &stream );
 
-	return( status );
+	return( cryptStatusError( status ) ? status : CRYPT_OK );
 	}
 
 /* Send user data to a user keyset */

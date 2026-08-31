@@ -176,24 +176,42 @@ int getWindowSize( const SESSION_INFO *sessionInfoPtr )
 					   SSH_PFLAG_WINDOWSIZE ) ? \
 			0x1000000 : MAX_WINDOW_SIZE );
 	}
+		
+/* Clear all channel attributes that were set in an aborted channel 
+   creation */
+
+STDC_NONNULL_ARG( ( 1 ) ) \
+void clearChannelAttributes( INOUT_PTR SESSION_INFO *sessionInfoPtr )
+	{ 
+	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
+
+	REQUIRES_V( sanityCheckSessionSSH( sessionInfoPtr ) );
+
+	setChannelExtAttribute( sessionInfoPtr, SSH_ATTRIBUTE_WINDOWSIZE, 0 );
+	setChannelExtAttribute( sessionInfoPtr, SSH_ATTRIBUTE_WINDOWCOUNT, 0 );
+	setChannelExtAttribute( sessionInfoPtr, SSH_ATTRIBUTE_ACTIVE, FALSE );
+	}
 
 /* Process a channel control message.  Returns OK_SPECIAL to tell the caller
    to try again with the next packet */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int processChannelControlMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 								  INOUT_PTR STREAM *stream )
 	{
-	SSH_INFO *sshInfo = sessionInfoPtr->sessionSSH;
-	const long prevChannelNo = \
-				getCurrentChannelNo( sessionInfoPtr, CHANNEL_READ );
-	long channelNo;
+	SSH_INFO *sshInfo;
+	long prevChannelNo, channelNo;
 	int status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
 	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	sshInfo = sessionInfoPtr->sessionSSH;
+	prevChannelNo = getCurrentChannelNo( sessionInfoPtr, CHANNEL_READ );
 
 	/* See what we've got.  SSH has a whole pile of no-op equivalents that 
 	   we have to handle as well as the obvious no-ops.  We can also get 
@@ -330,8 +348,11 @@ int processChannelControlMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			LOOP_INDEX i;
 			int length, totalLength;
 
-			/* If it's a channel message, try and read the channel number */
-			if( sshInfo->packetType >= SSH_MSG_CHANNEL_OPEN && \
+			/* If it's a channel message, try and read the channel number.  
+			   SSH_MSG_CHANNEL_OPEN is the exception here because it starts 
+			   with a string rather than the channel number, but it's also
+			   handled earlier so we'll never see it here */
+			if( sshInfo->packetType > SSH_MSG_CHANNEL_OPEN && \
 				sshInfo->packetType <= SSH_MSG_CHANNEL_FAILURE )
 				{
 				channelNo = readUint32( stream );
@@ -467,7 +488,7 @@ int processChannelControlMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 		case SSH_MSG_CHANNEL_REQUEST:
 			status = processChannelRequest( sessionInfoPtr, stream,
-											channelNo );
+											prevChannelNo );
 			if( cryptStatusError( status ) && status != OK_SPECIAL )
 				return( status );
 			return( OK_SPECIAL );
@@ -508,7 +529,9 @@ int processChannelControlMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			DEBUG_PRINT(( "Processing channel close message for "
 						  "channel %ld.\n", channelNo ));
 
-			/* If this wasn't the last channel, we're done */
+			/* If this wasn't the last channel, we're done.  This is purely
+			   a notification message so we don't report a potentially 
+			   session-killing error if there's a problem sending it */
 			if( status != OK_SPECIAL )
 				return( OK_SPECIAL );
 
@@ -602,9 +625,7 @@ int closeChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				  IN_BOOL const BOOLEAN closeAllChannels )
 	{
 	SES_READHEADER_FUNCTION readHeaderFunction;
-	READSTATE_INFO readInfo;
-	const long currWriteChannelNo = \
-				getCurrentChannelNo( sessionInfoPtr, CHANNEL_WRITE );
+	long currWriteChannelNo;
 	LOOP_INDEX noChannels = 1;
 	int status;
 
@@ -613,9 +634,12 @@ int closeChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
 	REQUIRES( isBooleanValue( closeAllChannels ) );
 
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
 	readHeaderFunction = ( SES_READHEADER_FUNCTION ) \
 						 FNPTR_GET( sessionInfoPtr->readHeaderFunction );
 	REQUIRES( readHeaderFunction != NULL );
+	currWriteChannelNo = getCurrentChannelNo( sessionInfoPtr, CHANNEL_WRITE );
 
 	/* If we've already sent the final channel-close message in response to
 	   getting a final close notification from the peer then we're done */
@@ -673,7 +697,7 @@ int closeChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		status = selectChannel( sessionInfoPtr, CRYPT_USE_DEFAULT,
 								CHANNEL_WRITE );
 		LOOP_MED( noChannels = 0, 
-				  noChannels <= SSH_MAX_CHANNELS && \
+				  noChannels < SSH_MAX_CHANNELS && \
 					cryptStatusOK( status ) && \
 					cryptStatusOK( \
 						selectChannel( sessionInfoPtr, CRYPT_USE_DEFAULT,
@@ -728,11 +752,11 @@ int closeChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* If there's not enough room in the receive buffer to read at least 1K
-	   of packet data then we can't try anything further */
+	   of data then we can't try anything further */
 	REQUIRES( !checkOverflowSub( sessionInfoPtr->receiveBufSize,
 								 sessionInfoPtr->receiveBufEnd ) );
-	if( sessionInfoPtr->receiveBufSize - sessionInfoPtr->receiveBufEnd < \
-		min( sessionInfoPtr->pendingPacketRemaining, 1024 ) )
+	if( sessionInfoPtr->receiveBufSize - \
+								sessionInfoPtr->receiveBufEnd < 1024 )
 		return( CRYPT_OK );
 
 	/* If we're in the middle of reading other data then there's no hope of
@@ -773,51 +797,67 @@ int closeChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   absolute minimum needed to clear the stream (sendCloseNotification() 
 	   has already set the necessary (small) nonzero timeout for us).
 	   
-	   Finally, we don't bother trying to decode what's being sent, since 
-	   we're in the process of closing the session it doesn't really matter 
-	   what the other side is sending us, it's not as if we're going to
-	   abort the shutdown because some channel flag is set wrong */
+	   Finally, we don't bother trying to decode what's being sent beyond 
+	   the header itself, since we're in the process of closing the session 
+	   it doesn't really matter what the other side is sending us, it's not 
+	   as if we're going to abort the shutdown at this point */
 	LOOP_SMALL_REV_CHECKINC( noChannels > 0, noChannels-- )
 		{
-		int length;
+		SSH_INFO *sshInfo = sessionInfoPtr->sessionSSH;
+		BYTE buffer[ 256 + 8 ];
+		READSTATE_INFO dummy;
+		int remainingDataLength, length;
 		
 		ENSURES( LOOP_INVARIANT_SMALL_REV_XXX( noChannels, 1, 
 											   SSH_MAX_CHANNELS ) );
 
-		status = length = readHeaderFunction( sessionInfoPtr, &readInfo );
+		status = length = readHeaderFunction( sessionInfoPtr, &dummy );
 		if( cryptStatusError( status ) )
 			break;
+		if( length <= 0 )
+			{
+			/* No buffer space (which shouldn't happen given that we've 
+			   checked for it earlier) or a soft timeout on read, retrying
+			   for any remaining channels isn't going to get us anything so
+			   we exit now */
+			break;
+			}
 
 		/* Adjust the packet information for the packet header data that was 
-		   just read */
-		REQUIRES( !checkOverflowAdd( sessionInfoPtr->receiveBufEnd, length ) );
-		sessionInfoPtr->receiveBufEnd += length;
-		REQUIRES( !checkOverflowSub( sessionInfoPtr->pendingPacketRemaining,
-									 length ) );
-		sessionInfoPtr->pendingPacketRemaining -= length;
-		if( sessionInfoPtr->pendingPacketRemaining <= 512 )
+		   just read.  We're just clearing the input at this point so we 
+		   reset the size indicators and read any data into a dummy buffer */
+		remainingDataLength = sessionInfoPtr->pendingPacketRemaining;
+		sessionInfoPtr->pendingPacketLength = \
+			sessionInfoPtr->pendingPacketRemaining = \
+				sshInfo->partialPacketDataLength = 0;
+		REQUIRES( !checkOverflowSub( remainingDataLength, length ) );
+		remainingDataLength -= length;
+		if( remainingDataLength > 256 )
 			{
-			const int bytesLeft = sessionInfoPtr->receiveBufSize - \
-								  sessionInfoPtr->receiveBufEnd;
-
-			REQUIRES( !checkOverflowSub( sessionInfoPtr->receiveBufSize,
-										 sessionInfoPtr->receiveBufEnd ) );
-			ENSURES( isBufsizeRange( bytesLeft ) );
-
-			/* We got a packet and it's probably the channel close ack, read 
-			   it */
-			REQUIRES( boundsCheck( sessionInfoPtr->receiveBufEnd, 
-								   min( sessionInfoPtr->pendingPacketRemaining, \
-										bytesLeft ), 
-								   sessionInfoPtr->receiveBufSize ) );
-			status = sread( &sessionInfoPtr->stream,
-							sessionInfoPtr->receiveBuffer + \
-								sessionInfoPtr->receiveBufEnd,
-							min( sessionInfoPtr->pendingPacketRemaining, \
-								 bytesLeft ) );
-			if( cryptStatusError( status ) )
-				break;
+			/* We've got something that's far too big to be a channel close 
+			   ack or similar control message, don't try and process it.  We
+			   exit now because we could have arbitrary amounts of further 
+			   data to read and/or an almost-full buffer to process it 
+			   through, and without being able to clear it the next 
+			   readHeaderFunction() call will be processing garbage */
+			DEBUG_DIAG(( "Received packet containing %d bytes data when we "
+						 "were expecting a close ack, exiting", 
+						 remainingDataLength ));
+			return( CRYPT_OK );
 			}
+		if( remainingDataLength <= 0 )
+			{
+			/* We cleared everything in the header read */
+			continue;
+			}
+			
+		/* We got a packet and it's probably the channel close ack, read it */
+		REQUIRES( rangeCheck( remainingDataLength, 1, 256 ) );
+		status = length = sread( &sessionInfoPtr->stream, buffer, 
+								 remainingDataLength );
+		zeroise( buffer, 256 );
+		if( cryptStatusError( status ) || length != remainingDataLength )
+			break;
 		}
 	ENSURES( LOOP_BOUND_SMALL_REV_OK );
 

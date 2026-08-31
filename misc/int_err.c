@@ -844,7 +844,7 @@ STDC_NONNULL_ARG( ( 1, 3 ) ) \
 void formatHexData( OUT_BUFFER_FIXED( hexTextMaxLen ) char *hexText, 
 					IN_LENGTH_SHORT_MIN( 48 ) const int hexTextMaxLen,
 					IN_BUFFER( hexDataLen ) const BYTE *hexData,
-					IN_LENGTH_SHORT_MIN( 4 ) const int hexDataLen )
+					IN_LENGTH_SHORT_MIN( 1 ) const int hexDataLen )
 	{
 	int length;
 
@@ -852,11 +852,17 @@ void formatHexData( OUT_BUFFER_FIXED( hexTextMaxLen ) char *hexText,
 	assert( isReadPtr( hexData, hexDataLen ) );
 
 	REQUIRES_V( isShortIntegerRangeMin( hexTextMaxLen, 48 ) );
-	REQUIRES_V( isShortIntegerRangeMin( hexDataLen, 4 ) );
+	REQUIRES_V( isShortIntegerRangeMin( hexDataLen, 1 ) );
 
 	/* Clear return value */
 	REQUIRES_V( isShortIntegerRangeMin( hexTextMaxLen, 48 ) ); 
 	memset( hexText, 0, min( 16, hexTextMaxLen ) );
+
+	/* In theory we should be passing at least 4 bytes / 32 bits of data to
+	   this function, we can work with less but that's probably a caller-side
+	   error because something like a single byte isn't really a probably-
+	   unique ID, so we warn in debug mode */
+	assert( hexDataLen >= 4 );
 
 	/* Format the hex data as ASCII hex.  If it's 10 bytes or less then we 
 	   output the entire quantity for a maximum total of 30 bytes, well 
@@ -866,6 +872,7 @@ void formatHexData( OUT_BUFFER_FIXED( hexTextMaxLen ) char *hexText,
 		int offset = 0;
 		LOOP_INDEX i;
 
+		/* Output every byte except the last, with space separators */
 		LOOP_SMALL( i = 0, i < hexDataLen - 1, i++ )
 			{
 			ENSURES_V( LOOP_INVARIANT_SMALL( i, 0, hexDataLen - 2 ) );
@@ -880,13 +887,14 @@ void formatHexData( OUT_BUFFER_FIXED( hexTextMaxLen ) char *hexText,
 			offset += length;
 			}
 		ENSURES_V( LOOP_BOUND_OK );
-		ENSURES_V( rangeCheck( offset, 3 * 3, hexTextMaxLen - 1 ) );
-							   /* 4 - 1 bytes, 3 chars output */
+		ENSURES_V( rangeCheck( offset, 0, hexTextMaxLen - 1 ) );
+							   /* 1 byte = 0 loop iterations */
 
+		/* Output the final byte */
 		REQUIRES_V( !checkOverflowSub( hexTextMaxLen, offset ) );
 		REQUIRES_V( isShortIntegerRangeNZ( hexTextMaxLen - offset ) );
 		length = sprintf_s( hexText + offset, hexTextMaxLen - offset, 
-							"%02X", byteToInt( hexData[ i ] ) );
+							"%02X", byteToInt( hexData[ hexDataLen - 1 ] ) );
 		ENSURES_V( rangeCheck( length, 2, \
 							   hexTextMaxLen - ( offset + 1 ) ) );
 		

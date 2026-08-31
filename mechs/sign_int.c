@@ -573,7 +573,7 @@ int createSignature( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 							   sigDataInfo->hashParam, signAlgo, buffer, 
 							   length );
 	if( cryptStatusOK( status ) )
-		*signatureLength = stell( &stream );
+		status = *signatureLength = stell( &stream );
 	sMemDisconnect( &stream );
 	CFI_CHECK_UPDATE( "writeSigFunction" );
 

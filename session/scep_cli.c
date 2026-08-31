@@ -569,9 +569,13 @@ static int getCACapabilities( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 
 		ENSURES( LOOP_INVARIANT_MED( lineCount, 0, MAX_GETCACAPS_LINES - 1 ) );
 
-		/* Read the next CA capability */
-		status = readTextLine( &stream, buffer, 512, &length, NULL, NULL, 
-							   READTEXT_NONE );
+		/* Read the next CA capability.  readTextLine() will produce an error
+		   for malformed lines of which some could be (mostly) harmless 
+		   errors that would nevertheless allow us to continue, but for now
+		   we fail closed until such time as we encounter something that
+		   genuinely needs a workaround */
+		status = readTextLine( &stream, buffer, 512, &length, NULL, 
+							   READTEXT_NONE, FALSE );
 		if( cryptStatusError( status ) )
 			{
 			sMemDisconnect( &stream );
@@ -1070,7 +1074,7 @@ static int createScepPendingRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									 OUT_LENGTH_SHORT_Z int *dataLength )
 	{
 	STREAM stream;
-	int issuerAndSubjectLen DUMMY_INIT, status;
+	int issuerAndSubjectLen DUMMY_INIT, position DUMMY_INIT, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( dataLength, sizeof( int ) ) );
@@ -1092,7 +1096,7 @@ static int createScepPendingRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 										  CRYPT_IATTRIBUTE_SUBJECT );
 		}
 	if( cryptStatusOK( status ) )
-		issuerAndSubjectLen = stell( &stream );
+		status = issuerAndSubjectLen = stell( &stream );
 	sMemClose( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -1115,10 +1119,13 @@ static int createScepPendingRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 										  CRYPT_IATTRIBUTE_SUBJECT );
 		}
 	if( cryptStatusOK( status ) )
-		*dataLength = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
+	if( cryptStatusError( status ) )
+		return( status );
+	*dataLength = position;
 
-	return( status );
+	return( CRYPT_OK );	
 	}
 
 /* Create a SCEP request message */

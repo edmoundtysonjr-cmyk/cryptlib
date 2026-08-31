@@ -851,7 +851,7 @@ static int shutdownFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr )
 			status = pkcs15Flush( stream, pkcs15info, 
 								  keysetInfoPtr->keyDataNoObjects, FALSE );
 			if( cryptStatusOK( status ) )
-				fileInfo->storageUsedSize = stell( stream );
+				status = fileInfo->storageUsedSize = stell( stream );
 			sMemDisconnect( stream );
 			}
 		else

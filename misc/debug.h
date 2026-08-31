@@ -395,6 +395,7 @@ struct ST;
   #define DEBUG_DUMP_HEX( dumpPrefix, dumpBuf, dumpLen )
   #define DEBUG_DUMP_DATA( dumpBuf, dumpLen )
   #define DEBUG_DUMP_DATA_LABEL( label, dumpBuf, dumpLen )
+  #define DEBUG_DUMP_DATA_COND( c, x )
   #define DEBUG_DUMP_STREAM( stream, position, length )
   #define DEBUG_DUMP_STACKTRACE()
   #define DEBUG_GET_STREAMBYTE( stream, position )		0
@@ -409,6 +410,7 @@ struct ST;
   #define DEBUG_DUMP_DATA	debugDumpData
   #define DEBUG_DUMP_DATA_LABEL \
 							debugDumpDataLabel
+  #define DEBUG_DUMP_DATA_COND( c, x )	if( c ) debugDumpData x
   #define DEBUG_DUMP_STREAM	debugDumpStream
   #if defined( __WIN32__ )
 	#define DEBUG_DUMP_STACKTRACE	displayBacktrace

@@ -320,7 +320,7 @@ assert( ( flags & ~( ATTR_FLAG_NONE | ATTR_FLAG_BLOB_PAYLOAD | ATTR_FLAG_CRITICA
 				ENSURES( LOOP_INVARIANT_EXT( i, 0, dataLength - 1, 
 											 MAX_ATTRIBUTE_SIZE + 1 ) );
 
-				if( !isDigit( dataPtr[ i ] ) )
+				if( !isDigit( byteToInt( dataPtr[ i ] ) ) )
 					{
 					*errorType = CRYPT_ERRTYPE_ATTR_VALUE;
 					retExt( CRYPT_ARGERROR_STR1,

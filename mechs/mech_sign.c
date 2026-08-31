@@ -429,7 +429,7 @@ static int compareHashInfo( INOUT_PTR STREAM *stream,
 	sMemOpen( &mdStream, recreatedMD, 32 + CRYPT_MAX_HASHSIZE );
 	status = writeMessageDigest( &mdStream, hashAlgo, hash, hashSize );
 	if( cryptStatusOK( status ) )
-		recreatedMdLength = stell( &mdStream );
+		status = recreatedMdLength = stell( &mdStream );
 	sMemDisconnect( &mdStream );
 	if( cryptStatusError( status ) )
 		return( status );

@@ -1111,7 +1111,7 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 
 		/* Some tokens don't implement named slots, so we also allow them to 
 		   be specified using slot counts */
-		if( tokenNameLength == 1 && isDigit( *tokenName ) )
+		if( tokenNameLength == 1 && isDigit( byteToInt( *tokenName ) ) )
 			{
 			tokenSlot = *tokenName - '0';
 			if( tokenSlot < 0 || tokenSlot > 9 )
@@ -1131,7 +1131,7 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 
 				status = C_GetTokenInfo( slotList[ tokenSlot ], &tokenInfo );
 				if( status == CKR_OK && \
-					!strCompare( tokenName, tokenInfo.label, tokenNameLength ) )
+					strSame( tokenName, tokenInfo.label, tokenNameLength ) )
 					break;
 				}
 			ENSURES( LOOP_BOUND_OK );
@@ -1180,8 +1180,8 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 		   set is accurate, although having it ignore the presence of the 
 		   clock isn't very valid */
 	if( !( tokenInfo.flags & CKF_CLOCK_ON_TOKEN ) && \
-		( !strCompare( tokenInfo.label, "Lynks Token", 11 ) || \
-		  !strCompare( tokenInfo.model, "Rosetta", 7 ) ) )
+		( strSame( tokenInfo.label, "Lynks Token", 11 ) || \
+		  strSame( tokenInfo.model, "Rosetta", 7 ) ) )
 		{
 		/* Fix buggy Spyrus PKCS #11 drivers which claim that the token
 		   doesn't have a RTC even though it does (the Rosetta (smart card) 
@@ -1230,7 +1230,7 @@ static int initFunction( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 		   them), which will (by definition) have the same time as the 
 		   system time */
 		if( !( pkcs11InfoTbl[ pkcs11Info->deviceNo ].name[ 0 ] && \
-			   !strCompare( pkcs11InfoTbl[ pkcs11Info->deviceNo ].name, 
+			   strSame( pkcs11InfoTbl[ pkcs11Info->deviceNo ].name, 
 							"Software", 8 ) ) && \
 			theTime == currentTime )
 			{
@@ -1442,7 +1442,7 @@ int initPKCS11Init( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 	   check the first device and fail if there's a problem.  If they
 	   explicitly want a secondary slot, they can specify it by name */
 	if( driverNameLength == 12 && \
-		!strnicmp( "[Autodetect]", name, driverNameLength ) )
+		strSame( "[Autodetect]", name, driverNameLength ) )
 		{
 		if( !pkcs11InfoTbl[ 0 ].name[ 0 ] )
 			return( CRYPT_ERROR_NOTFOUND );
@@ -1455,7 +1455,8 @@ int initPKCS11Init( INOUT_PTR DEVICE_INFO *deviceInfoPtr,
 			{
 			ENSURES( LOOP_INVARIANT_MED( i, 0, MAX_PKCS11_DRIVERS - 1 ) );
 
-			if( !strnicmp( pkcs11InfoTbl[ i ].name, name, driverNameLength ) )
+			if( strSame( pkcs11InfoTbl[ i ].name, name, 
+						 driverNameLength ) )
 				break;
 			}
 		ENSURES( LOOP_BOUND_OK );

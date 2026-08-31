@@ -274,7 +274,7 @@ static int readCmsSignature( INOUT_PTR STREAM *stream,
 	ALGOID_PARAMS algoIDparams DUMMY_INIT_STRUCT;
 	const int startPos = stell( stream );
 	long value;
-	int tag, length, endPos, status;
+	int tag, length, position, endPos, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( queryInfo, sizeof( QUERY_INFO ) ) );
@@ -413,7 +413,9 @@ static int readCmsSignature( INOUT_PTR STREAM *stream,
 		return( status );	/* Residual error from peekTag() */
 
 	/* Make sure that we've read everything present */
-	if( stell( stream ) != endPos )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( position != endPos )
 		return( CRYPT_ERROR_BADDATA );
 
 	return( CRYPT_OK );
@@ -692,8 +694,8 @@ static int readSignatureSubpackets( INOUT_PTR STREAM *stream,
 									IN_BOOL const BOOLEAN isAuthenticated )
 	{
 	BOOLEAN subPacketSeen[ MAX_STANDARD_SUBPACKET + 8 ] = { FALSE };
-	const int endPos = stell( stream ) + length;
 	LOOP_INDEX noSubpackets;
+	int position, endPos;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( queryInfo, sizeof( QUERY_INFO ) ) );
@@ -707,6 +709,12 @@ static int readSignatureSubpackets( INOUT_PTR STREAM *stream,
 	REQUIRES( isBufsizeRange( startPos ) );
 	REQUIRES( startPos < stell( stream ) );
 	REQUIRES( isBooleanValue( isAuthenticated ) );
+
+	/* Calculate the end position for the subpackets */
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	REQUIRES( isBufsizeRangeMin( endPos, length ) );
 
 	LOOP_MED( noSubpackets = 0, 
@@ -856,7 +864,9 @@ static int readSignatureSubpackets( INOUT_PTR STREAM *stream,
 
 	/* Make sure that we've read the exact amount of data that we were
 	   expecting */
-	if( stell( stream ) != endPos )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( position != endPos )
 		return( CRYPT_ERROR_BADDATA );
 		
 	/* Make sure that the mandatory fields are present in the subpacket 
@@ -1095,7 +1105,7 @@ static int readPgpSignature( INOUT_PTR STREAM *stream,
 							 OUT_PTR QUERY_INFO *queryInfo )
 	{
 	const int startPos = stell( stream );
-	int status;
+	int position, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( queryInfo, sizeof( QUERY_INFO ) ) );
@@ -1250,8 +1260,10 @@ static int readPgpSignature( INOUT_PTR STREAM *stream,
 	/* Make sure that we've read the entire object.  This check is necessary 
 	   to detect corrupted length values, which can result in reading past 
 	   the end of the object */
-	REQUIRES( !checkOverflowSub( stell( stream ), startPos ) );
-	if( ( stell( stream ) - startPos ) != queryInfo->size )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	REQUIRES( !checkOverflowSub( position, startPos ) );
+	if( ( position - startPos ) != queryInfo->size )
 		return( CRYPT_ERROR_BADDATA );
 
 	return( CRYPT_OK );

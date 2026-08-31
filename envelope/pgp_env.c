@@ -114,7 +114,7 @@ static int copyToEnvelopeAlt( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		};
 	ENV_COPYTOENVELOPE_FUNCTION copyToEnvelopeFunction;
 	STREAM stream;
-	int ctb DUMMY_INIT, version, packetType, contentLength, value, status;
+	int ctb DUMMY_INIT, version, packetType, value, status;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 	assert( length == 0 || isReadPtrDynamic( buffer, length ) );
@@ -139,8 +139,13 @@ static int copyToEnvelopeAlt( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	if( length > 1 )
 		{
 		sMemConnect( &stream, buffer, length );
-		status = pgpReadPacketHeaderI( &stream, &ctb, &contentLength, 1 );
+		status = pgpReadPacketHeaderI( &stream, &ctb, NULL, 1 );
 		sMemDisconnect( &stream );
+		if( status == OK_SPECIAL )
+			{
+			/* Indefinite-length encoding but the CTB is still valid */
+			status = CRYPT_OK;
+			}
 		if( cryptStatusError( status ) )
 			{
 			/* If we encountered an error (other than running out of input)
@@ -165,12 +170,27 @@ static int copyToEnvelopeAlt( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		/* There's too little data to read a full PGP header, just get the 
 		   CTB */
 		ctb = byteToInt( *buffer );
+		if( !pgpIsCTB( ctb ) )
+			{
+			/* Make sure that we fail the tests that follow by setting an 
+			   invalid PGP packet type.  This is actually quite difficult, 
+			   see the comment further down */
+			ctb = 0xFF;
+			}
 		}
 	version = pgpGetPacketVersion( ctb );
 	packetType = pgpGetPacketType( ctb );
 	if( ( version != PGP_VERSION_2 && version != PGP_VERSION_OPENPGP ) || \
 		( packetType <= PGP_PACKET_NONE || packetType >= PGP_PACKET_LAST ) )
 		{
+		/* This is actually a bit of a difficult test because almost all of 
+		   the CTB bits are used, the version is a single bit so can only be
+		   PGP_VERSION_2 or PGP_VERSION_OPENPGP so the test is there purely
+		   to document that it's being done, and the packet types are also 
+		   mostly used so almost anything reads as a valid PGP CTB.  
+		   However in essentially all cases the caller isn't pushing a single 
+		   byte as the inner content so what does the checking is 
+		   pgpReadPacketHeaderI() and not guessing at a valid CTB */
 		retExt( CRYPT_ERROR_BADDATA,
 				( CRYPT_ERROR_BADDATA, ENVELOPE_ERRINFO,
 				  "Data for envelope marked as having content type %d "
@@ -266,7 +286,14 @@ static int writeSignatureInfoPacket( INOUT_PTR STREAM *stream,
 	status = cryptlibToPgpAlgo( hashAlgo, hashParam, &pgpHashAlgo );
 	if( cryptStatusOK( status ) )
 		status = cryptlibToPgpAlgo( signAlgo, 0, &pgpCryptAlgo );
-	ENSURES( cryptStatusOK( status ) );
+	if( cryptStatusError( status ) )
+		{
+		/* This is a coding error, warn in debug mode */
+		DEBUG_DIAG(( "Attempted to write non-PGP-encodable algorithm "
+					 "information" ));
+		assert( DEBUG_WARN );
+		return( status );
+		}
 	INJECT_FAULT( ENVELOPE_PGP_CORRUPT_ONEPASS_ID, 
 				  ENVELOPE_PGP_CORRUPT_ONEPASS_ID_1 );
 
@@ -300,7 +327,7 @@ static int writeHeaderPacket( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	const ACTION_LIST *actionListPtr = \
 							DATAPTR_GET( envelopeInfoPtr->actionList );
 	STREAM stream;
-	int status = CRYPT_OK;
+	int position DUMMY_INIT, status = CRYPT_OK;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 	assert( actionListPtr == NULL || \
@@ -352,24 +379,26 @@ static int writeHeaderPacket( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	   present rather than a packet preceded by a pile of key exchange 
 	   actions) we write the appropriate PGP header based on the envelope 
 	   usage */
+	REQUIRES( envelopeInfoPtr->bufPos == 0 );
 	sMemOpen( &stream, envelopeInfoPtr->buffer, envelopeInfoPtr->bufSize );
 	switch( envelopeInfoPtr->usage )
 		{
 		case ACTION_SIGN:
 			{
-			const ACTION_LIST *postActionListPtr;
+			const ACTION_LIST *postActionListPtr, *associatedActionPtr;
 
-			REQUIRES( actionListPtr != NULL );
-			REQUIRES( DATAPTR_ISSET( envelopeInfoPtr->postActionList ) );
 			postActionListPtr = DATAPTR_GET( envelopeInfoPtr->postActionList );
 			ENSURES( postActionListPtr != NULL );
+			associatedActionPtr = \
+							DATAPTR_GET( postActionListPtr->associatedAction );
+			REQUIRES( associatedActionPtr != NULL );
 
 			if( !TEST_FLAG( envelopeInfoPtr->flags, 
 							ENVELOPE_FLAG_DETACHED_SIG ) )
 				{
 				status = writeSignatureInfoPacket( &stream, 
 										postActionListPtr->iCryptHandle,
-										actionListPtr->iCryptHandle );
+										associatedActionPtr->iCryptHandle );
 				if( cryptStatusError( status ) )
 					break;
 				}
@@ -383,7 +412,9 @@ static int writeHeaderPacket( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 
 		case ACTION_NONE:
 			/* Write the header followed by an indicator that we're using 
-			   opaque content, a zero-length filename, and no date */
+			   opaque content, a zero-length filename, and no date.  There's
+			   no inner content in this case since we've reached the lowest
+			   layer */
 			REQUIRES( !checkOverflowAdd( envelopeInfoPtr->payloadSize,
 										 PGP_DATA_HEADER_SIZE ) );
 			status = pgpWritePacketHeader( &stream, PGP_PACKET_DATA, 
@@ -421,10 +452,11 @@ static int writeHeaderPacket( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 			retIntError();
 		}
 	if( cryptStatusOK( status ) )
-		envelopeInfoPtr->bufPos = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );
+	envelopeInfoPtr->bufPos = position;
 	ENSURES( isBufsizeRange( envelopeInfoPtr->bufPos ) );
 			 /* May be zero if it's a detached signature since there's only
 			    a postable written */
@@ -585,7 +617,7 @@ static int writeEncryptedContentHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr
 		if( cryptStatusOK( status ) )
 			status = swrite( &stream, PGP_DATA_HEADER, PGP_DATA_HEADER_SIZE );
 		if( cryptStatusOK( status ) )
-			literalHeaderLen = stell( &stream );
+			status = literalHeaderLen = stell( &stream );
 		sMemClose( &stream );
 		if( cryptStatusError( status ) )
 			return( status );
@@ -652,10 +684,11 @@ static int writeEncryptedContentHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr
 		{
 		const int streamPos = stell( &stream );
 		
-		REQUIRES( !cryptStatusError( streamPos ) && \
+		REQUIRES( isBufsizeRangeNZ( streamPos ) && \
 				  !checkOverflowAdd( envelopeInfoPtr->bufPos, 
 									 streamPos ) );
 		envelopeInfoPtr->bufPos += streamPos;
+		ENSURES( isBufsizeRangeNZ( envelopeInfoPtr->bufPos ) );
 		}
 	sMemDisconnect( &stream );
 
@@ -926,13 +959,6 @@ static int preEnvelopeInit( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 			}
 		SET_FLAG( envelopeInfoPtr->dataFlags, 
 				  ENVDATA_FLAG_HASHACTIONSACTIVE );
-
-		/* Since the MDC packet is tacked onto the end of the payload, we 
-		   need to increase the effect data size by the size of the MDC
-		   packet data */
-		REQUIRES( !checkOverflowAdd( envelopeInfoPtr->segmentSize, 
-									 PGP_MDC_PACKET_SIZE ) );
-		envelopeInfoPtr->segmentSize += PGP_MDC_PACKET_SIZE;
 		}
 
 	/* Delete any orphaned actions such as automatically-added hash actions 
@@ -964,7 +990,7 @@ static int emitMDC( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	const ACTION_LIST *actionListPtr;
 	MESSAGE_DATA msgData;
 	BYTE mdcBuffer[ 2 + CRYPT_MAX_HASHSIZE + 8 ];
-	int status;
+	int length, status;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 
@@ -991,6 +1017,16 @@ static int emitMDC( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 		return( status );
 	CLEAR_FLAG( envelopeInfoPtr->dataFlags, ENVDATA_FLAG_HASHACTIONSACTIVE );
 
+	/* Since the MDC packet is tacked onto the end of the payload, we need 
+	   to increase the effect data size by the size of the MDC packet data.  
+	   This is done here rather than in preEnvelopeInit() because 
+	   segmentSize also bounds how much data the caller can push, and 
+	   reserving the space up front would let them overrun the declared 
+	   payload size by PGP_MDC_PACKET_SIZE bytes */
+	REQUIRES( !checkOverflowAdd( envelopeInfoPtr->segmentSize, 
+								 PGP_MDC_PACKET_SIZE ) );
+	envelopeInfoPtr->segmentSize += PGP_MDC_PACKET_SIZE;
+
 	/* Append the MDC packet to the payload data */
 	memcpy( mdcBuffer, "\xD3\x14", 2 );
 	setMessageData( &msgData, mdcBuffer + 2, CRYPT_MAX_HASHSIZE );
@@ -999,8 +1035,17 @@ static int emitMDC( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	if( cryptStatusError( status ) )
 		return( status );
 	INJECT_FAULT( BADSIG_HASH, ENVELOPE_BADSIG_HASH_PGP_1 );
-	return( copyToEnvelopeFunction( envelopeInfoPtr, mdcBuffer, 
-									PGP_MDC_PACKET_SIZE ) );
+	status = length = copyToEnvelopeFunction( envelopeInfoPtr, mdcBuffer, 
+											  PGP_MDC_PACKET_SIZE );
+	if( cryptStatusError( status ) )
+		return( status );
+	ENSURES( length == PGP_MDC_PACKET_SIZE );
+			 /* We've done a capacity check earlier so an inability to
+			   write the data is an internal error.  The alternative, to
+			   report CRYPT_ERROR_OVERFLOW, isn't easily possible because 
+			   restarting from halfway through the above isn't feasible */
+
+	return( CRYPT_OK );
 	}
 
 /****************************************************************************
@@ -1142,16 +1187,27 @@ static int emitPreamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 		if( cryptStatusOK( status ) )
 			{
 			const int streamPos = stell( &stream );
+			int length;
 			
 			/* Adjust the running total count by the size of the additional 
 			   header that's been prepended and copy the header to the
 			   envelope */
-			REQUIRES( !cryptStatusError( streamPos ) && \
+			REQUIRES( isBufsizeRangeNZ( streamPos ) && \
 					  !checkOverflowAdd( envelopeInfoPtr->segmentSize, 
 										 streamPos ) );
 			envelopeInfoPtr->segmentSize += streamPos;
-			status = copyToEnvelopeFunction( envelopeInfoPtr, headerBuffer, 
-											 streamPos );
+			ENSURES( isBufsizeRangeNZ( envelopeInfoPtr->segmentSize ) );
+			status = length = copyToEnvelopeFunction( envelopeInfoPtr, 
+											headerBuffer, streamPos );
+			if( cryptStatusOK( status ) )
+				{
+				/* We've done a capacity check earlier so an inability to
+				   write the data is an internal error.  The alternative, to
+				   report CRYPT_ERROR_OVERFLOW, isn't possible because the
+				   above code has changed the envelope state in a way that 
+				   isn't easily undoable */
+				ENSURES( length == streamPos );
+				}
 			}
 		sMemClose( &stream );
 		if( cryptStatusError( status ) )
@@ -1181,7 +1237,8 @@ static int emitPreamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	   exits, resets the processing function.  If it doesn't get to that 
 	   point then it's encountered an error and exits before trying to perform
 	   any content processing */
-	if( envelopeInfoPtr->contentType != CRYPT_CONTENT_DATA )
+	if( envelopeInfoPtr->contentType != CRYPT_CONTENT_DATA && \
+		envelopeInfoPtr->usage != ACTION_NONE )
 		{
 		FNPTR_SET( envelopeInfoPtr->copyToEnvelopeFunction, 
 				   copyToEnvelopeAlt );
@@ -1200,8 +1257,7 @@ static int emitPostamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	{
 	const ACTION_LIST *postActionListPtr = \
 					DATAPTR_GET( envelopeInfoPtr->postActionList );
-	const ACTION_LIST *actionListPtr = \
-					DATAPTR_GET( envelopeInfoPtr->actionList );
+	const ACTION_LIST *associatedActionPtr;
 	SIG_DATA_INFO sigDataInfo;
 	SIG_PARAMS sigParams;
 	ERROR_INFO localErrorInfo;
@@ -1210,8 +1266,6 @@ static int emitPostamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 	assert( postActionListPtr == NULL || \
 			isReadPtr( postActionListPtr, sizeof( ACTION_LIST ) ) );
-	assert( actionListPtr == NULL || \
-			isReadPtr( actionListPtr, sizeof( ACTION_LIST ) ) );
 
 	REQUIRES( sanityCheckPGPEnv( envelopeInfoPtr ) );
 
@@ -1259,8 +1313,10 @@ static int emitPostamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		return( CRYPT_OK );
 		}
 
-	REQUIRES( actionListPtr != NULL );
+	/* Get the hash action associated with the signing action */
 	REQUIRES( postActionListPtr != NULL );
+	associatedActionPtr = DATAPTR_GET( postActionListPtr->associatedAction );
+	REQUIRES( associatedActionPtr != NULL );
 
 	/* Check whether there's enough room left in the buffer to emit the 
 	   signature directly into it.  Since signatures are fairly small (a few 
@@ -1271,12 +1327,13 @@ static int emitPostamble( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	sigBufSize = min( envelopeInfoPtr->bufSize - envelopeInfoPtr->bufPos, 
 					  MAX_INTLENGTH_SHORT - 1 );
 	REQUIRES( isShortIntegerRange( sigBufSize ) );
-	if( postActionListPtr->encodedSize + 64 > sigBufSize )
+	if( checkOverflowAdd( postActionListPtr->encodedSize, 64 ) || \
+		postActionListPtr->encodedSize + 64 > sigBufSize )
 		return( CRYPT_ERROR_OVERFLOW );
 
 	/* Sign the data */
 	clearErrorInfo( &localErrorInfo );
-	setSigDataInfoHash( &sigDataInfo, actionListPtr->iCryptHandle );
+	setSigDataInfoHash( &sigDataInfo, associatedActionPtr->iCryptHandle );
 	setSigParamsPGP( &sigParams, PGP_SIG_DATA, NULL, 0 );
 	status = iCryptCreateSignature( envelopeInfoPtr->buffer + \
 										envelopeInfoPtr->bufPos, sigBufSize, 

@@ -630,6 +630,21 @@ int BN_num_bits( const BIGNUM *bignum )
 	return( ( lastWordIndex * BN_BITS2 ) + bits );
 	}
 
+CHECK_RETVAL_LENGTH_SHORT STDC_NONNULL_ARG( ( 1 ) ) \
+int BN_num_bytes( const BIGNUM *bignum )
+	{
+	int bits, status;
+	
+	assert( isReadPtr( bignum, sizeof( BIGNUM ) ) );
+
+	/* Sanity-checked in BN_num_bits() */
+	
+	status = bits = BN_num_bits( bignum );
+	if( cryptStatusError( status ) )
+		return( status );
+	return( ( bits + 7 ) / 8 );
+	}
+
 /* Bit-manipulation operations */
 
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
@@ -710,25 +725,32 @@ BOOLEAN BN_is_bit_set( const BIGNUM *bignum, /* See comment */ int bitNo )
 			TRUE : FALSE );
 	}
 
-CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
-BOOLEAN BN_high_bit( const BIGNUM *bignum )
+CHECK_RETVAL_RANGE( 0, 1 ) STDC_NONNULL_ARG( ( 1 ) ) \
+int BN_high_bit( const BIGNUM *bignum )
 	{
-	int noBytes = BN_num_bytes( bignum ) - 1;
 	BN_ULONG highWord;
-	int highByte;
+	int noBytes, highByte, shiftAmount, status;
 
 	assert( isReadPtr( bignum, sizeof( BIGNUM ) ) );
 
-	REQUIRES_B( sanityCheckBignum( bignum ) );
+	/* Sanity-checked in BN_num_bytes() */
+
+	status = noBytes = BN_num_bytes( bignum );
+	if( cryptStatusError( status ) )
+		return( status );
+	noBytes--;	/* Convert length to index of the high word */
 
 	/* Bignums with value zero are special-cased since they have a length of
 	   zero */
 	if( noBytes < 0 )
 		return( 0 );
 
-	/* Extract the topmost nonzero byte in the bignum */
+	/* Extract the topmost nonzero byte in the bignum.  The masking before 
+	   the cast to int may be required for 64-bit BN_ULONGs, which could 
+	   result in a value larger than INT_MAX */
+	shiftAmount = ( noBytes % BN_BYTES ) * 8;
 	highWord = bignum->d[ noBytes / BN_BYTES ];
-	highByte = ( int ) ( highWord >> ( ( noBytes % BN_BYTES ) * 8 ) );
+	highByte = ( int ) ( ( highWord >> shiftAmount ) & 0xFF );
 
 	return( ( highByte & 0x80 ) ? 1 : 0 );
 	}

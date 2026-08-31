@@ -141,12 +141,15 @@ static const URL_PARSE_INFO invalidUrlParseInfo[] = {
 
 	/* Bad general URI */
 	{ TEXT( "http://" ), NULL, 0, NULL },
+	{ TEXT( "http://:80" ), NULL, 0, NULL },
+	{ TEXT( "http:///a" ), NULL, 0, NULL },
 	{ TEXT( "http://xy" ), NULL, 0, NULL },
 	{ TEXT( "@www.server.com" ), NULL, 0, NULL },
 	{ TEXT( "   @www.server.com" ), NULL, 0, NULL },
 
 	/* Malicious URLs.  These are technically valid but we reject them 
 	   because no legitimate URL should look like that */
+	{ TEXT( "http://fqdn1.com?fqdn2.com" ), NULL, 0, NULL },
 	{ TEXT( "http://fqdn1.com?@fqdn2.com" ), NULL, 0, NULL },
 	{ TEXT( "http://fqdn1.com/path?@fqdn2.com" ), NULL, 0, NULL },
 
@@ -2270,6 +2273,10 @@ static int sshClientServer( const SSH_TEST_TYPE testType )
 int testSessionSSHClientServer( void )
 	{
 	return( sshClientServer( SSH_TEST_NORMAL ) );
+	}
+int testSessionSSHClientServerConfirmAuth( void )
+	{
+	return( sshClientServer( SSH_TEST_CONFIRMAUTH ) );
 	}
 int testSessionSSHClientServerDsaKey( void )
 	{

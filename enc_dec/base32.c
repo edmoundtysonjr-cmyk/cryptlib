@@ -51,7 +51,7 @@ BOOLEAN isBase32Value( IN_BUFFER( encValLength ) const char *encVal,
 
 		ENSURES_B( LOOP_INVARIANT_LARGE( i, 0, encValLength - 1 ) );
 
-		if( !isAlnum( ch ) || ch == '0' || ch == '1' || ch == '8' || \
+		if( !isAlNum( ch ) || ch == '0' || ch == '1' || ch == '8' || \
 			ch == '9' )
 			return( FALSE );
 		}
@@ -80,9 +80,11 @@ int decodeBase32Value( OUT_BUFFER( valueMaxLen, *valueLen ) BYTE *value,
 	REQUIRES( isShortIntegerRangeMin( encValLength, 16 ) && \
 			  valueMaxLen > ( ( encValLength * 5 ) / 8 ) );
 
-	/* Clear return values */
+	/* Clear return values.  We don't use the standard min( 16, maxLen ) for 
+	   the clear because partial bit amounts are or'd into the output buffer,
+	   so it has to be entirely cleared for us to work with it */
 	REQUIRES( isShortIntegerRangeNZ( valueMaxLen ) ); 
-	memset( value, 0, min( 16, valueMaxLen ) );
+	memset( value, 0, valueMaxLen );
 	*valueLen = 0;
 
 	/* Make sure that the input has a reasonable length (this should have 
@@ -97,44 +99,40 @@ int decodeBase32Value( OUT_BUFFER( valueMaxLen, *valueLen ) BYTE *value,
 		assert( DEBUG_WARN );
 		return( CRYPT_ERROR_BADDATA );
 		}
-
-	REQUIRES( isBase32Value( encVal, encValLength ) );
+	if( !isBase32Value( encVal, encValLength ) )
+		{
+		DEBUG_DIAG(( "Base32 value is invalid" ));
+		assert( DEBUG_WARN );
+		return( CRYPT_ERROR_BADDATA );
+		}
 
 	/* Decode the value into binary */
 	LOOP_LARGE( i = 0, i < encValLength, i++ )
 		{
-		int ch;
-		LOOP_INDEX_ALT chunkValue;
+		int chunkValue;
 
 		ENSURES( LOOP_INVARIANT_LARGE( i, 0, encValLength - 1 ) );
 
-		ch = toUpper( byteToInt( encVal[ i ] ) );
-		if( !isAlnum( ch ) || ch == '0' || ch == '1' || ch == '8' || \
-			ch == '9' )
-			return( CRYPT_ERROR_BADDATA );
-		LOOP_MED_ALT( chunkValue = 0, chunkValue < 0x20, chunkValue++ )
-			{
-			ENSURES( LOOP_INVARIANT_MED_ALT( chunkValue, 0, 0x1F ) );
-
-			if( codeTable[ chunkValue ] == ch )
-				break;
-			}
-		ENSURES( LOOP_BOUND_OK_ALT );
-		if( chunkValue >= 0x20 )
+		chunkValue = strFindCh( codeTable, 32,
+								toUpper( byteToInt( encVal[ i ] ) ) );
+		if( chunkValue < 0 )
 			return( CRYPT_ERROR_BADDATA );
 
-		/* Extract the next 5-bit chunk and convert it to text form */
+		REQUIRES( byteCount >= 0 && byteCount + 1 < valueMaxLen );
+				  /* Worst-case we write two bytes */
+
+		/* Extract the next 5-bit chunk and convert it to binary form */
 		if( bitCount < 3 )
 			{
 			/* Everything's present in one byte, shift it up into position */
-			value[ byteCount ] |= chunkValue << ( 3 - bitCount );
+			value[ byteCount ] |= intToByte( chunkValue << ( 3 - bitCount ) );
 			}
 		else
 			{
 			if( bitCount == 3 )
 				{
 				/* It's the 5 LSBs */
-				value[ byteCount ] |= chunkValue;
+				value[ byteCount ] |= intToByte( chunkValue );
 				}
 			else
 				{
@@ -159,7 +157,7 @@ int decodeBase32Value( OUT_BUFFER( valueMaxLen, *valueLen ) BYTE *value,
 			byteCount++;
 			}
 		ENSURES( bitCount >= 0 && bitCount < 8 );
-		ENSURES( byteCount >= 0 && byteCount < valueMaxLen );
+		ENSURES( byteCount >= 0 && byteCount + 1 < valueMaxLen );
 		}
 	ENSURES( LOOP_BOUND_OK );
 

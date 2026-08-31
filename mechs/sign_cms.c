@@ -1182,7 +1182,7 @@ int createSignatureCMS( OUT_BUFFER_OPT( sigMaxLength, *signatureLength ) \
 								 ( signature == NULL ) ? CRYPT_UNUSED : \
 														 iTspSession );
 	if( cryptStatusOK( status ) )
-		length = stell( &stream );
+		status = length = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		{

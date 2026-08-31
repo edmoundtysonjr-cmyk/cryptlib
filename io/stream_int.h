@@ -197,8 +197,12 @@
 #define STREAM_NHFLAG_GET		0x0008	/* Allow HTTP GET */
 #define STREAM_NHFLAG_POST		0x0010	/* Allow HTTP POST */
 #define STREAM_NHFLAG_POST_AS_GET 0x0020 /* Implement POST as GET */
-#define STREAM_NHFLAG_WS_UPGRADE 0x0040	/* WebSockets Upgrade */
-#define STREAM_NHFLAG_MAX		0x007F	/* Maximum possible flag value */
+#ifdef USE_WEBSOCKETS 
+  #define STREAM_NHFLAG_WS_UPGRADE 0x0040/* WebSockets Upgrade */
+  #define STREAM_NHFLAG_MAX		0x007F	/* Maximum possible flag value */
+#else
+  #define STREAM_NHFLAG_MAX		0x003F	/* Maximum possible flag value */
+#endif /* USE_WEBSOCKETS */
 
 #define STREAM_NHFLAG_REQMASK \
 		( STREAM_NHFLAG_GET | STREAM_NHFLAG_POST | \
@@ -223,7 +227,7 @@
    some SCEP URLs, which in the pathological case for EJBCA are 71 
    characters, 
    "/ejbca/publicweb/apply/scep/pkiclient.exe?operation=GetCACert&message=*",
-   with an option to be even longer by ineserting an alias component between 
+   with an option to be even longer by inserting an alias component between 
    the "scep" and the "pkiclient.exe" */
 
 #define MIN_SCHEMA_SIZE			3
@@ -318,7 +322,7 @@ typedef CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 4 ) ) \
 										const void *buffer, 
 									 IN_DATALENGTH_Z const int maxLength,
 									 OUT_DATALENGTH_Z int *length );
-typedef CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+typedef CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 		int ( *STM_TRANSPORTCONNECT_FUNCTION )( INOUT_PTR struct NS *netStream, 
 												IN_BUFFER_OPT( hostNameLen ) \
 													const char *hostName,
@@ -392,6 +396,7 @@ typedef struct NS {
 	   types */
 #ifdef USE_EAP
 	void *subTypeInfo;			/* Stream subtype-specific information */
+	BUFFER_OPT_FIXED( transportInfoPayloadSize ) \
 	void *transportInfo;		/* UDP transport-specific information */
 	int transportInfoPayloadSize;/* Size of payload for above */
 #endif /* USE_EAP */
@@ -493,6 +498,8 @@ typedef struct NS {
 #ifndef CONFIG_CONSERVE_MEMORY_EXTRA
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN sanityCheckNetStream( const NET_STREAM_INFO *netStream );
+#else
+  #define sanityCheckNetStream( x )	TRUE
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 #else
@@ -584,8 +591,6 @@ int parseURL( OUT_PTR URL_INFO *urlInfo,
 
 /* Network proxy functions in net_proxy.c */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-int connectViaSocksProxy( INOUT_PTR STREAM *stream );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int connectViaHttpProxy( INOUT_PTR STREAM *stream, 
 						 INOUT_PTR ERROR_INFO *errorInfo );

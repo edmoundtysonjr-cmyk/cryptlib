@@ -646,7 +646,11 @@ int readSNI( INOUT_PTR STREAM *stream,
 
 	/* Read the name type and length, with a special-case allowance for 
 	   "::1" as the name, which is shorter than the minimum allowed DNS 
-	   name */
+	   name.  The original SNI spec permitted multiple SNIs, thus the list
+	   rather than single entry, but when no-one could figure out why you'd 
+	   want to do this or how a client was supposed to tell which one the 
+	   server had picked it was restricted to containing only a single name
+	   (RFC 6066 section 3) */
 	if( sgetc( stream ) != 0 )	/* Name type 0 = hostname */
 		return( CRYPT_ERROR_BADDATA );
 	status = nameLen = readUint16( stream );
@@ -664,7 +668,7 @@ int readSNI( INOUT_PTR STREAM *stream,
 	status = sread( stream, nameBuffer, nameLen );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( nameLen == 3 && memcmp( nameBuffer, "::1", 3 ) )
+	if( nameLen == 3 && memcmp( nameBuffer, "::1", 3 ) != 0 )
 		{
 		/* If the name length is less than MIN_DNS_SIZE then the only 
 		   allowed value is "::1" */
@@ -795,7 +799,12 @@ int readSupportedVersions( INOUT_PTR STREAM *stream,
 			return( CRYPT_ERROR_BADDATA );
 			}
 
-		/* Get the minor version, the value that we're interested in */
+		/* Get the minor version, the value that we're interested in.  We
+		   allow a leeway of two versions ahead, given that TLS 1.3 took 
+		   ten years to arrive after TLS 1.2 and that, like SSH 2.0, it
+		   contains enough complexity to allow it to be extended 
+		   indefinitely, it's likely anything beyond that is either decades 
+		   away or an error */
 		version = value & 0xFF;
 		if( version < TLS_MINOR_VERSION_SSL || \
 			version > TLS_MINOR_VERSION_TLS13 + 2 )
@@ -880,7 +889,8 @@ int writeSupportedVersions( INOUT_PTR STREAM *stream,
 								TLS_MINOR_VERSION_TLS13 );
 		}
 #endif /* USE_TLS13 */
-	if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS12 )
+	if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS12 && \
+		minVersion <= TLS_MINOR_VERSION_TLS12 )
 		{
 		status = writeUint16( &localStream, 
 							  ( TLS_MAJOR_VERSION << 8 ) | \
@@ -894,9 +904,10 @@ int writeSupportedVersions( INOUT_PTR STREAM *stream,
 								TLS_MINOR_VERSION_TLS11 );
 		}
 	ENSURES( cryptStatusOK( status ) );
-	endPos = stell( &localStream );
+	status = endPos = stell( &localStream );
 	sMemDisconnect( &localStream );
-	ENSURES( rangeCheck( endPos, 2, 16 ) );
+	ENSURES( !cryptStatusError( status ) && \
+			 rangeCheck( endPos, 2, 16 ) );
 
 	/* Write the assembled version information */
 	sputc( stream, endPos );
@@ -1095,7 +1106,7 @@ static const SIG_HASH_INFO sigHashInfo[] = {
 	  MK_SIGHASHID( TLS_SIGALGO_ECDSA, 255 ) },
 #ifdef CONFIG_SUITEB
 	{ CRYPT_ALGO_ECDSA, CRYPT_ALGO_SHA2, 
-	  DESCRIPTION( "DSA with SHA2-384" )
+	  DESCRIPTION( "ECDSA with SHA2-384" )
 	  MK_SIGHASHID( TLS_SIGALGO_ECDSA, TLS_HASHALGO_SHA384 ) },
 #endif /* CONFIG_SUITEB */
 	{ CRYPT_ALGO_ECDSA, CRYPT_ALGO_SHA2, 
@@ -1423,9 +1434,10 @@ int writeSignatureAlgos( STREAM *stream )
 	ENSURES( LOOP_BOUND_OK );
 	ENSURES( i < FAILSAFE_ARRAYSIZE( sigHashInfo, SIG_HASH_INFO ) );
 	ENSURES( cryptStatusOK( status ) );
-	endPos = stell( &localStream );
+	status = endPos = stell( &localStream );
 	sMemDisconnect( &localStream );
-	ENSURES( rangeCheck( endPos, 2, 64 ) );
+	ENSURES( !cryptStatusError( status ) && \
+			 rangeCheck( endPos, 2, 64 ) );
 
 	/* Write the combination of hash and signature algorithms */
 	writeUint16( stream, endPos );

@@ -440,8 +440,10 @@ static int readCertInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	status = readVersion( stream, certInfoPtr, CTAG_CE_VERSION, 3 );
 	if( cryptStatusError( status ) )
@@ -531,18 +533,26 @@ static int readCertInfo( INOUT_PTR STREAM *stream,
 	   useful function in that while we always mark certificates with 
 	   extensions as v3 when we create them, there's no problem introduced
 	   by accepting extensions for any certificate version */
-	if( stell( stream ) < endPos )
+	if( ( status = stell( stream ) ) < endPos )
 		{
-		REQUIRES( !checkOverflowSub( endPos, stell( stream ) ) );
+		const int position = stell( stream );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
+
+		REQUIRES( isIntegerRangeNZ( position ) );
+		REQUIRES( !checkOverflowSub( endPos, position ) );
 		status = readAttributes( stream, &certInfoPtr->attributes,
 								 CRYPT_CERTTYPE_CERTIFICATE, 
-								 endPos - stell( stream ), 
-								 CERTIFICATE_ERRINFO, 
+								 endPos - position, CERTIFICATE_ERRINFO, 
 								 &certInfoPtr->errorLocus, 
 								 &certInfoPtr->errorType );
 		if( cryptStatusError( status ) )
 			return( status );
 		}
+	if( cryptStatusError( status ) )
+		return( status );	/* Residual error from stell() */
 
 	/* Fix up any problems in attributes */
 	return( fixAttributes( certInfoPtr ) );
@@ -602,7 +612,7 @@ static int readAttributeCertInfo( INOUT_PTR STREAM *stream,
 	{
 	CRYPT_ALGO_TYPE dummyAlgo;
 	ALGOID_PARAMS algoIDparams;
-	int tag, length, endPos, innerEndPos, status;
+	int tag, length, endPos, innerEndPos, position, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( certInfoPtr, sizeof( CERT_INFO ) ) );
@@ -613,8 +623,10 @@ static int readAttributeCertInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	status = readVersion( stream, certInfoPtr, BER_INTEGER, 2 );
 	if( cryptStatusError( status ) )
@@ -624,8 +636,10 @@ static int readAttributeCertInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	innerEndPos = stell( stream ) + length;
+	innerEndPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( innerEndPos ) );
+	REQUIRES( !checkOverflowAdd( innerEndPos, length ) );
+	innerEndPos += length;
 	ENSURES( isIntegerRangeMin( innerEndPos, length ) );
 	if( checkStatusPeekTag( stream, status, tag ) && \
 		tag == MAKE_CTAG( CTAG_AC_HOLDER_BASECERTIFICATEID ) )
@@ -657,8 +671,10 @@ static int readAttributeCertInfo( INOUT_PTR STREAM *stream,
 	status = readConstructed( stream, &length, 0 );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	innerEndPos = stell( stream ) + length;
+	innerEndPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( innerEndPos ) );
+	REQUIRES( !checkOverflowAdd( innerEndPos, length ) );
+	innerEndPos += length;
 	ENSURES( isIntegerRangeMin( innerEndPos, length ) );
 	if( checkStatusPeekTag( stream, status, tag ) && \
 		tag == BER_SEQUENCE )
@@ -730,10 +746,12 @@ static int readAttributeCertInfo( INOUT_PTR STREAM *stream,
 		return( CRYPT_OK );
 
 	/* Read the extensions */
-	REQUIRES( !checkOverflowSub( endPos, stell( stream ) ) );
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	REQUIRES( !checkOverflowSub( endPos, position ) );
 	status = readAttributes( stream, &certInfoPtr->attributes,
 							 CRYPT_CERTTYPE_ATTRIBUTE_CERT, 
-							 endPos - stell( stream ), CERTIFICATE_ERRINFO, 
+							 endPos - position, CERTIFICATE_ERRINFO, 
 							 &certInfoPtr->errorLocus, 
 							 &certInfoPtr->errorType );
 	if( cryptStatusError( status ) )
@@ -797,8 +815,10 @@ static int readCRLInfo( INOUT_PTR STREAM *stream,
 		   with it */
 		return( CRYPT_ERROR_BADDATA );
 		}
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	status = readVersion( stream, certInfoPtr, BER_INTEGER, 2 );
 	if( cryptStatusError( status ) )
@@ -858,18 +878,26 @@ static int readCRLInfo( INOUT_PTR STREAM *stream,
 	   supposed to accept extensions if the CRL is marked as v2 (RFC 3280
 	   section 5.1.2.7), but see the comment in readCertInfo() for why we
 	   read them unconditionally */
-	if( stell( stream ) < endPos )
+	if( ( status = stell( stream ) ) < endPos )
 		{
-		REQUIRES( !checkOverflowSub( endPos, stell( stream ) ) );
+		const int position = stell( stream );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
+
+		REQUIRES( isIntegerRangeNZ( position ) );
+		REQUIRES( !checkOverflowSub( endPos, position ) );
 		status = readAttributes( stream, &certInfoPtr->attributes,
 								 CRYPT_CERTTYPE_CRL, 
-								 endPos - stell( stream ),
-								 CERTIFICATE_ERRINFO, 
+								 endPos - position, CERTIFICATE_ERRINFO, 
 								 &certInfoPtr->errorLocus, 
 								 &certInfoPtr->errorType );
 		if( cryptStatusError( status ) )
 			return( status );
 		}
+	if( cryptStatusError( status ) )
+		return( status );	/* Residual error from stell() */
 
 	/* Fix up any problems in attributes */
 	return( fixAttributes( certInfoPtr ) );
@@ -908,8 +936,10 @@ static int readCertRequestInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	status = readVersion( stream, certInfoPtr, DEFAULT_TAG, 1 );
 	if( cryptStatusError( status ) )
@@ -998,6 +1028,7 @@ static int skipCrmfJunk( INOUT_PTR STREAM *stream,
 						 IN_TAG_ENCODED const int optTerminatorTag2 )
 	{
 	LOOP_INDEX fieldsProcessed;
+	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
@@ -1021,13 +1052,17 @@ static int skipCrmfJunk( INOUT_PTR STREAM *stream,
 
 	/* Skip any junk until we get to a field that we're interested in */
 	LOOP_SMALL( fieldsProcessed = 0,
-				stell( stream ) < endPos - MIN_ATTRIBUTE_SIZE && \
+				( status = stell( stream ) ) < endPos - MIN_ATTRIBUTE_SIZE && \
 					fieldsProcessed < 8, 
 				fieldsProcessed++ )
 		{
-		int tag, status;
+		int tag;
 
 		ENSURES( LOOP_INVARIANT_SMALL( fieldsProcessed, 0, 7 ) );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		/* Check whether we've reached any of the requested terminator 
 		   tags */
@@ -1078,7 +1113,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int readCrmfRequestInfo( INOUT_PTR STREAM *stream, 
 								INOUT_PTR CERT_INFO *certInfoPtr )
 	{
-	int tag, length, endPos, status;
+	int tag, length, endPos, position, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( certInfoPtr, sizeof( CERT_INFO ) ) );
@@ -1091,8 +1126,10 @@ static int readCrmfRequestInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	readUniversal( stream );
 	status = readSequence( stream, NULL );
@@ -1177,7 +1214,9 @@ static int readCrmfRequestInfo( INOUT_PTR STREAM *stream,
 	   including encoding CMP protocol data inside fields in the issuer 
 	   certificate(!!)).  Because we can't do anything with this 
 	   information, we just skip it if it's present */
-	if( stell( stream ) < endPos )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( position < endPos )
 		{
 		status = readUniversal( stream );	/* Skip request management information */
 		if( cryptStatusError( status ) )
@@ -1242,8 +1281,10 @@ static int readRevRequestInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 
 	/* Skip any junk before the serial number and read the serial number */
@@ -1322,7 +1363,7 @@ static int readRtcsRequestInfo( INOUT_PTR STREAM *stream,
 								INOUT_PTR CERT_INFO *certInfoPtr )
 	{
 	CERT_VAL_INFO *certValInfo = certInfoPtr->cCertVal;
-	int length, endPos, status;
+	int length, endPos, position, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( certInfoPtr, sizeof( CERT_INFO ) ) );
@@ -1333,8 +1374,10 @@ static int readRtcsRequestInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 
 	/* Read the request information and make the currently selected one the 
@@ -1346,13 +1389,14 @@ static int readRtcsRequestInfo( INOUT_PTR STREAM *stream,
 	certValInfo->currentValidity = certValInfo->validityInfo;
 
 	/* Read the extensions if there are any present */
-	if( stell( stream ) < endPos )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( position < endPos )
 		{
-		REQUIRES( !checkOverflowSub( endPos, stell( stream ) ) );
+		REQUIRES( !checkOverflowSub( endPos, position ) );
 		status = readAttributes( stream, &certInfoPtr->attributes,
 								 CRYPT_CERTTYPE_RTCS_REQUEST, 
-								 endPos - stell( stream ),
-								 CERTIFICATE_ERRINFO, 
+								 endPos - position, CERTIFICATE_ERRINFO, 
 								 &certInfoPtr->errorLocus, 
 								 &certInfoPtr->errorType );
 		if( cryptStatusError( status ) )
@@ -1432,7 +1476,7 @@ static int readOcspRequestInfo( INOUT_PTR STREAM *stream,
 								INOUT_PTR CERT_INFO *certInfoPtr )
 	{
 	CERT_REV_INFO *certRevInfo = certInfoPtr->cCertRev;
-	int tag, length, endPos, status;
+	int tag, length, position, endPos, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( certInfoPtr, sizeof( CERT_INFO ) ) );
@@ -1443,8 +1487,10 @@ static int readOcspRequestInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	status = readVersion( stream, certInfoPtr, CTAG_OR_VERSION, 1 );
 	if( cryptStatusError( status ) )
@@ -1468,13 +1514,14 @@ static int readOcspRequestInfo( INOUT_PTR STREAM *stream,
 	certRevInfo->currentRevocation = certRevInfo->revocations;
 
 	/* Read the extensions if there are any present */
-	if( stell( stream ) < endPos )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( position < endPos )
 		{
-		REQUIRES( !checkOverflowSub( endPos, stell( stream ) ) );
+		REQUIRES( !checkOverflowSub( endPos, position ) );
 		status = readAttributes( stream, &certInfoPtr->attributes,
 								 CRYPT_CERTTYPE_OCSP_REQUEST, 
-								 endPos - stell( stream ), 
-								 CERTIFICATE_ERRINFO,
+								 endPos - position, CERTIFICATE_ERRINFO,
 								 &certInfoPtr->errorLocus, 
 								 &certInfoPtr->errorType );
 		if( cryptStatusError( status ) )
@@ -1500,7 +1547,7 @@ static int readOcspResponseInfo( INOUT_PTR STREAM *stream,
 								 INOUT_PTR CERT_INFO *certInfoPtr )
 	{
 	CERT_REV_INFO *certRevInfo = certInfoPtr->cCertRev;
-	int tag, length, endPos, status;
+	int tag, length, endPos, position, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( certInfoPtr, sizeof( CERT_INFO ) ) );
@@ -1511,8 +1558,10 @@ static int readOcspResponseInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	status = readVersion( stream, certInfoPtr, CTAG_OP_VERSION, 2 );
 	if( cryptStatusError( status ) )
@@ -1552,13 +1601,14 @@ static int readOcspResponseInfo( INOUT_PTR STREAM *stream,
 	certRevInfo->currentRevocation = certRevInfo->revocations;
 
 	/* Read the extensions if there are any present */
-	if( stell( stream ) < endPos )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( position < endPos )
 		{
-		REQUIRES( !checkOverflowSub( endPos, stell( stream ) ) );
+		REQUIRES( !checkOverflowSub( endPos, position ) );
 		status = readAttributes( stream, &certInfoPtr->attributes,
 								 CRYPT_CERTTYPE_OCSP_RESPONSE, 
-								 endPos - stell( stream ), 
-								 CERTIFICATE_ERRINFO,
+								 endPos - position, CERTIFICATE_ERRINFO,
 								 &certInfoPtr->errorLocus, 
 								 &certInfoPtr->errorType );
 		if( cryptStatusError( status ) )

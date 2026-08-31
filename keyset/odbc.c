@@ -659,7 +659,7 @@ static int convertQuery( INOUT_PTR DBMS_STATE_INFO *dbmsInfo,
 
 	/* If it's a CREATE TABLE command rewrite the blob and date types to the 
 	   appropriate values for the database back-end */
-	if( !strCompare( command, "CREATE TABLE", 12 ) )
+	if( strSame( command, "CREATE TABLE", 12 ) )
 		{
 		offset = strFindStr( query, currentLength, " BLOB", 5 );
 		if( offset > 0 )
@@ -680,7 +680,7 @@ static int convertQuery( INOUT_PTR DBMS_STATE_INFO *dbmsInfo,
 		offset = strFindStr( query, currentLength, " DATETIME", 9 );
 		if( offset > 0 && \
 			!( dbmsInfo->dateTimeNameLength == 8 && \
-			   !strCompare( dbmsInfo->dateTimeName, "DATETIME", 8 ) ) )
+			   strSame( dbmsInfo->dateTimeName, "DATETIME", 8 ) ) )
 			{
 			offset++;	/* Skip space before date/time name */
 			REQUIRES( !checkOverflowSub( queryMaxLen, offset ) );
@@ -703,8 +703,8 @@ static int convertQuery( INOUT_PTR DBMS_STATE_INFO *dbmsInfo,
 		case DBMS_ACCESS:
 			/* If it's not a SELECT/DELETE with wildcards used, there's 
 			   nothing to do */
-			if( ( strCompare( query, "SELECT", 6 ) && \
-				  strCompare( query, "DELETE", 6 ) ) || \
+			if( ( !strSame( query, "SELECT", 6 ) && \
+				  !strSame( query, "DELETE", 6 ) ) || \
 				  strFindStr( query, currentLength, " LIKE ", 6 ) <= 7 )
 				{
 				*queryLength = currentLength;
@@ -715,10 +715,10 @@ static int convertQuery( INOUT_PTR DBMS_STATE_INFO *dbmsInfo,
 		case DBMS_INTERBASE:
 			/* If it's not a CREATE TABLE/INSERT/DELETE/SELECT with the 
 			   'type' column involved, there's nothing to do */
-			if( strCompare( query, "CREATE TABLE", 12 ) && \
-				strCompare( query, "SELECT", 6 ) && \
-				strCompare( query, "DELETE", 6 ) && \
-				strCompare( query, "INSERT", 6 ) )
+			if( !strSame( query, "CREATE TABLE", 12 ) && \
+				!strSame( query, "SELECT", 6 ) && \
+				!strSame( query, "DELETE", 6 ) && \
+				!strSame( query, "INSERT", 6 ) )
 				{
 				*queryLength = currentLength;
 				return( CRYPT_OK );
@@ -1309,15 +1309,15 @@ static int getBackendInfo( INOUT_PTR DBMS_STATE_INFO *dbmsInfo )
 	buffer[ min( bufLen, 128 - 1 ) ] = '\0';
 			/* Keep static code analysis tools happy, taking into account 
 			   the non-orthogonal SQL_SUCCESS_WITH_INFO length reporting */
-	if( !strCompare( buffer, "MySQL", 5 ) )
+	if( strSame( buffer, "MySQL", 5 ) )
 		dbmsInfo->backendType = DBMS_MYSQL;
-	if( bufLen >= 6 && !strCompare( buffer, "Access", 6 ) )
+	if( bufLen >= 6 && strSame( buffer, "Access", 6 ) )
 		dbmsInfo->backendType = DBMS_ACCESS;
-	if( bufLen >= 6 && !strCompare( buffer, "SQLite", 6 ) )
+	if( bufLen >= 6 && strSame( buffer, "SQLite", 6 ) )
 		dbmsInfo->backendType = DBMS_SQLITE;
-	if( bufLen >= 9 && !strCompare( buffer, "Interbase", 9 ) )
+	if( bufLen >= 9 && strSame( buffer, "Interbase", 9 ) )
 		dbmsInfo->backendType = DBMS_INTERBASE;
-	if( bufLen >= 10 && !strCompare( buffer, "PostgreSQL", 10 ) )
+	if( bufLen >= 10 && strSame( buffer, "PostgreSQL", 10 ) )
 		dbmsInfo->backendType = DBMS_POSTGRES;
 
 	return( CRYPT_OK );
@@ -2022,7 +2022,7 @@ static int performUpdate( INOUT_PTR DBMS_STATE_INFO *dbmsInfo,
 		   need to continue */
 		if( sqlStatus == SQL_NO_DATA && \
 			command != NULL && commandLength >= 6 && \
-			!strCompare( command, "DELETE", 6 ) )
+			strSame( command, "DELETE", 6 ) )
 			{
 			status = CRYPT_ERROR_NOTFOUND;
 			if( updateType != DBMS_UPDATE_COMMIT )
@@ -2040,9 +2040,9 @@ static int performUpdate( INOUT_PTR DBMS_STATE_INFO *dbmsInfo,
 			if( sqlStatus == SQL_NO_DATA && \
 				dbmsInfo->backendType == DBMS_SQLITE && \
 				command != NULL && commandLength >= 13 && \
-				( !strCompare( command, "CREATE TABLE ", 13 ) || \
-				  !strCompare( command, "CREATE INDEX ", 13 ) || \
-				  !strCompare( command, "CREATE UNIQUE", 13 ) ) )
+				( strSame( command, "CREATE TABLE ", 13 ) || \
+				  strSame( command, "CREATE INDEX ", 13 ) || \
+				  strSame( command, "CREATE UNIQUE", 13 ) ) )
 				{
 				DEBUG_DIAG(( "SQLite reported result of '%s' as SQL_NO_DATA, "
 							 "assuming that this is really SQL_SUCCESS",
@@ -2066,7 +2066,7 @@ static int performUpdate( INOUT_PTR DBMS_STATE_INFO *dbmsInfo,
 		   though nothing was found to delete so we make sure that we
 		   actually changed something */
 		if( command != NULL && commandLength >= 6 && \
-			!strCompare( command, "DELETE", 6 ) )
+			strSame( command, "DELETE", 6 ) )
 			{
 			SQLLEN rowCount;
 

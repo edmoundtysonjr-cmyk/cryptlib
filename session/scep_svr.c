@@ -267,6 +267,7 @@ static int processAdditionalScepRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	if( operationType == SCEP_OPERATION_GETCACAPS )
 		{
 		STREAM stream;
+		int position DUMMY_INIT;
 
 		sMemOpen( &stream, sessionInfoPtr->receiveBuffer, 
 				  min( 1024, sessionInfoPtr->receiveBufSize ) );
@@ -288,10 +289,11 @@ static int processAdditionalScepRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		if( algoAvailable( CRYPT_ALGO_SHAng ) )
 			status = swrite( &stream, "SHAng\n", 6 );
 		if( cryptStatusOK( status ) )
-			sessionInfoPtr->receiveBufEnd = stell( &stream );
+			status = position = stell( &stream );
 		sMemDisconnect( &stream );
-		ENSURES( cryptStatusOK( status ) );
-		ENSURES( isShortIntegerRangeNZ( sessionInfoPtr->receiveBufEnd ) );
+		ENSURES( !cryptStatusError( status ) );
+		ENSURES( isShortIntegerRangeNZ( position ) );
+		sessionInfoPtr->receiveBufEnd = position;
 		return( writePkiDatagram( sessionInfoPtr, SCEP_CONTENTTYPE, 
 								  SCEP_CONTENTTYPE_LEN,
 								  MK_ERRTEXT( "Couldn't send SCEP CA "

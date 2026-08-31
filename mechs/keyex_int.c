@@ -110,7 +110,7 @@ int exportConventionalKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 		sMemOpenOpt( &stream, encryptedKey, encryptedKeyMaxLength );
 		status = writeKeyexFunction( &stream, iExportContext, NULL, 0 );
 		if( cryptStatusOK( status ) )
-			*encryptedKeyLength = stell( &stream );
+			status = *encryptedKeyLength = stell( &stream );
 		sMemDisconnect( &stream );
 		if( cryptStatusError( status ) )
 			{
@@ -212,7 +212,7 @@ int exportConventionalKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 								 mechanismInfo.wrappedData,
 								 mechanismInfo.wrappedDataLength );
 	if( cryptStatusOK( status ) )
-		*encryptedKeyLength = stell( &stream );
+		status = *encryptedKeyLength = stell( &stream );
 	sMemDisconnect( &stream );
 	INJECT_FAULT( MECH_CORRUPT_SALT, MECH_CORRUPT_SALT_1 );
 	INJECT_FAULT( MECH_CORRUPT_ITERATIONS, MECH_CORRUPT_ITERATIONS_1 );
@@ -405,7 +405,7 @@ int exportPublicKey( OUT_BUFFER_OPT( encryptedKeyMaxLength, \
 									mechanismInfo.wrappedDataLength,
 									auxInfo, auxInfoLength );
 	if( cryptStatusOK( status ) )
-		*encryptedKeyLength = stell( &stream );
+		status = *encryptedKeyLength = stell( &stream );
 	sMemDisconnect( &stream );
 	clearMechanismInfo( &mechanismInfo );
 	CFI_CHECK_UPDATE( "writeKeytransFunction" );

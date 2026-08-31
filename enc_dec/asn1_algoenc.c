@@ -44,7 +44,7 @@
    written as blobs consisting of an OCTET STRING SIZE(0) + INTEGER(1).
    
    These are internal functions for which the caller applies sSetError()
-   to the return value */
+   to the return value if required */
 
 #define FIXEDPARAM_DATA			MKDATA( "\x04\x00\x02\x01\x01" )
 #define FIXEDPARAM_DATA_SIZE	5
@@ -188,6 +188,8 @@ static int readGenericSecretParams( INOUT_PTR STREAM *stream,
 										   &objectSize );
 		if( cryptStatusError( status ) )
 			return( status );
+		if( objectSize >= AUTHENCPARAM_MAX_SIZE ) 
+			return( CRYPT_ERROR_OVERFLOW );	/* Make sure difference is > 0 */
 		REQUIRES( !checkOverflowSub( AUTHENCPARAM_MAX_SIZE, objectSize ) );
 		status = readAuthEncParamData( stream,
 							&queryInfo->kdfParamStart, 
@@ -238,8 +240,8 @@ static int readGenericSecretParams( INOUT_PTR STREAM *stream,
 	status = streamOffsetFromPosition( stream, startOffset, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( length <= 16 || length > AUTHENCPARAM_MAX_SIZE )
-		return( CRYPT_ERROR_OVERFLOW );
+	if( length < AUTHENCPARAM_MIN_SIZE || length > AUTHENCPARAM_MAX_SIZE )
+		return( CRYPT_ERROR_BADDATA );
 	status = sseek( stream, startOffset );
 	if( cryptStatusOK( status ) )
 		{
@@ -303,6 +305,14 @@ static int writeGenericSecretParams( INOUT_PTR STREAM *stream,
 		return( status );
 	macAlgoDataSize = msgData.length;
 
+	/* Round-trip check to make sure that readGenericSecretParams() can read
+	   what we've written in case future changes make the param data much
+	   larger */
+	REQUIRES( oidSize + \
+			  sizeofShortObject( kdfDataSize + \
+								 encAlgoDataSize + \
+								 macAlgoDataSize ) <= AUTHENCPARAM_MAX_SIZE );
+
 	/* Write the pre-encoded AuthEnc parameter data */
 	writeSequence( stream, oidSize + \
 						   sizeofShortObject( kdfDataSize + \
@@ -365,7 +375,7 @@ static int setKDFParams( IN_HANDLE const CRYPT_CONTEXT iGenericSecret,
 	swrite( &stream, FIXEDPARAM_DATA, FIXEDPARAM_DATA_SIZE );
 	status = writeAlgoID( &stream, kdfAlgo );
 	if( cryptStatusOK( status ) )
-		kdfParamDataSize = stell( &stream );
+		status = kdfParamDataSize = stell( &stream );
 	sMemDisconnect( &stream );
 #else
 	writeConstructed( &stream, sizeofOID( OID_PBKDF2 ) + \
@@ -376,7 +386,7 @@ static int setKDFParams( IN_HANDLE const CRYPT_CONTEXT iGenericSecret,
 	swrite( &stream, FIXEDPARAM_DATA, FIXEDPARAM_DATA_SIZE );
 	status = writeAlgoID( &stream, kdfAlgo, DEFAULT_TAG );
 	if( cryptStatusOK( status ) )
-		kdfParamDataSize = stell( &stream );
+		status = kdfParamDataSize = stell( &stream );
 	sMemDisconnect( &stream );
 #endif /* 0 */
 	if( cryptStatusError( status ) )
@@ -420,9 +430,9 @@ int setGenericSecretParams( IN_HANDLE const CRYPT_CONTEXT iGenericSecret,
 	sMemOpen( &stream, algorithmParamData, CRYPT_MAX_TEXTSIZE );
 	status = writeCryptContextAlgoID( &stream, iCryptContext );
 	if( cryptStatusOK( status ) )
-		algorithmParamDataSize = stell( &stream );
+		status = algorithmParamDataSize = stell( &stream );
 	sMemDisconnect( &stream );
-	if( cryptStatusOK( status ) )
+	if( !cryptStatusError( status ) )
 		{
 		setMessageData( &msgData, algorithmParamData, 
 						algorithmParamDataSize );
@@ -450,9 +460,9 @@ int setGenericSecretParams( IN_HANDLE const CRYPT_CONTEXT iGenericSecret,
 		status = writeContextAlgoIDex( &stream, iMacContext, &algoIDparams );
 		}
 	if( cryptStatusOK( status ) )
-		algorithmParamDataSize = stell( &stream );
+		status = algorithmParamDataSize = stell( &stream );
 	sMemDisconnect( &stream );
-	if( cryptStatusOK( status ) )
+	if( !cryptStatusError( status ) )
 		{
 		setMessageData( &msgData, algorithmParamData, 
 						algorithmParamDataSize );
@@ -487,7 +497,7 @@ int getGenericSecretParams( IN_HANDLE const CRYPT_CONTEXT iGenericContext,
 
 	REQUIRES( isHandleRangeValid( iGenericContext ) );
 	REQUIRES( rangeCheck( queryInfo->authEncParamLength, 
-						  16, AUTHENCPARAM_MAX_SIZE ) );
+						  AUTHENCPARAM_MIN_SIZE, AUTHENCPARAM_MAX_SIZE ) );
 			  /* Guaranteed by readGenericSecretParams() */
 
 	/* Clear return values */

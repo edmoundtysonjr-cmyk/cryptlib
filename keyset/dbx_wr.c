@@ -428,7 +428,7 @@ static int extractCertNameData( IN_HANDLE const CRYPT_CERTIFICATE iCryptHandle,
 		ENSURES( LOOP_INVARIANT_LARGE( i, 0, certIdData->uriLength - 1 ) );
 
 		certIdData->uri[ i ] = \
-					intToByte( toLower( certIdData->uri[ i ] ) );
+				intToByte( toLower( byteToInt( certIdData->uri[ i ] ) ) );
 		}
 	ENSURES( LOOP_BOUND_OK );
 	

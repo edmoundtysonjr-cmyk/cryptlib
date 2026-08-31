@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					  cryptlib Datagram Encoding Routines					*
-*						Copyright Peter Gutmann 1996-2016					*
+*						Copyright Peter Gutmann 1996-2025					*
 *																			*
 ****************************************************************************/
 
@@ -430,9 +430,15 @@ static int encodeSegmentHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 
 		/* If the block-size quantisation has moved the quantised length
 		   across a length-of-length encoding boundary, adjust hdrLen to
-		   account for this */
+		   account for this.  This can only happen for the indefinite-length
+		   encoding, for the definite length there's no segment header.
+		   
+		   Note that in the following the check for 
+		   quantisedTotalLen <= threshold is always true, it's present to
+		   match the values in the diagram above */
 		threshold = findThreshold( quantisedTotalLen );
-		if( quantisedTotalLen <= threshold && dataLen > threshold )
+		if( hdrLen > 0 && \
+			quantisedTotalLen <= threshold && dataLen > threshold )
 			{
 			REQUIRES( !checkOverflowDec( hdrLen ) );
 			hdrLen--;
@@ -577,8 +583,8 @@ static int encodeSegmentHeader( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	sMemOpen( &stream, envelopeInfoPtr->buffer + \
 					   envelopeInfoPtr->segmentStart, hdrLen );
 	status = writeOctetStringHole( &stream, dataLen, DEFAULT_TAG );
-	ENSURES( cryptStatusOK( status ) && stell( &stream ) == hdrLen );
 	sMemDisconnect( &stream );
+	ENSURES( cryptStatusOK( status ) );
 
 	ENSURES( sanityCheckEnvEncode( envelopeInfoPtr ) );
 	return( CRYPT_OK );
@@ -830,10 +836,11 @@ static int flushEnvelopeData( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr )
 	return( hashEnvelopeData( envelopeInfoPtr, "", 0 ) );
 	}
 
-/* Copy data into the envelope.  Returns the number of bytes copied or an
-   overflow error if we're trying to flush data and there isn't room to
-   perform the flush (this somewhat peculiar case is because the caller
-   expects to have 0 bytes copied in this case) */
+/* Copy data into the envelope.  Returns the number of bytes copied, which
+   may be less than the amount requested if the envelope buffer has filled
+   up, or an overflow error if we're trying to flush data and there isn't 
+   room to perform the flush (this somewhat peculiar case is because the 
+   caller expects to have 0 bytes copied in this case) */
 
 CHECK_RETVAL_LENGTH STDC_NONNULL_ARG( ( 1 ) ) \
 static int copyToEnvelope( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,

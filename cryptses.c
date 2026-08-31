@@ -85,6 +85,11 @@ BOOLEAN sanityCheckSession( const SESSION_INFO *sessionInfoPtr )
 		DEBUG_PUTS(( "sanityCheckSession: Auth response" ));
 		return( FALSE );
 		}
+	if( !isBooleanValue( sessionInfoPtr->authComplete ) )
+		{
+		DEBUG_PUTS(( "sanityCheckSession: Auth complete value" ));
+		return( FALSE );
+		}
 	if( !isFlagRangeZ( sessionInfoPtr->clientReqAttrFlags, SESSION_NEEDS ) || \
 		!isFlagRangeZ( sessionInfoPtr->serverReqAttrFlags, SESSION_NEEDS ) )
 		{
@@ -355,7 +360,8 @@ static int sessionMessageFunction( INOUT_PTR TYPECAST( SESSION_INFO * ) \
 			REQUIRES( isIntegerRangeNZ( sessionInfoPtr->sendBufSize ) ); 
 			zeroise( sessionInfoPtr->sendBuffer,
 					 sessionInfoPtr->sendBufSize );
-			safeBufferFree( sessionInfoPtr->sendBuffer );
+			safeBufferFree( sessionInfoPtr->sendBuffer,
+							sessionInfoPtr->sendBufSize );
 			sessionInfoPtr->sendBuffer = NULL;
 			}
 		if( sessionInfoPtr->receiveBuffer != NULL )
@@ -363,7 +369,8 @@ static int sessionMessageFunction( INOUT_PTR TYPECAST( SESSION_INFO * ) \
 			REQUIRES( isIntegerRangeNZ( sessionInfoPtr->receiveBufSize ) ); 
 			zeroise( sessionInfoPtr->receiveBuffer,
 					 sessionInfoPtr->receiveBufSize );
-			safeBufferFree( sessionInfoPtr->receiveBuffer );
+			safeBufferFree( sessionInfoPtr->receiveBuffer,
+							sessionInfoPtr->receiveBufSize );
 			sessionInfoPtr->receiveBuffer = NULL;
 			}
 
@@ -577,6 +584,20 @@ static int sessionMessageFunction( INOUT_PTR TYPECAST( SESSION_INFO * ) \
 		if( cryptStatusError( sessionInfoPtr->writeErrorState ) )
 			return( sessionInfoPtr->writeErrorState );
 
+		/* Check the safety interlock to make sure that we can't send data
+		   over a session for which the authentication process hasn't been
+		   completed */
+		if( sessionInfoPtr->authComplete != TRUE )
+			{
+			DEBUG_DIAG(( "Attempt to send data without the authentication "
+						 "recorded as having completed" ));
+			assert( DEBUG_WARN );
+			retExt( CRYPT_ERROR_PERMISSION, 
+					( CRYPT_ERROR_PERMISSION, SESSION_ERRINFO, 
+					  "Attempt to send data without the authentication "
+					  "recorded as having completed" ) );
+			}
+
 		/* Write the data */
 		clearObjectErrorInfo( sessionInfoPtr );
 		clearErrorInfo( &sessionInfoPtr->errorInfo );
@@ -605,6 +626,20 @@ static int sessionMessageFunction( INOUT_PTR TYPECAST( SESSION_INFO * ) \
 		/* Make sure that everything is in order */
 		if( cryptStatusError( sessionInfoPtr->readErrorState ) )
 			return( sessionInfoPtr->readErrorState );
+
+		/* Check the safety interlock to make sure that we can't receive data
+		   over a session for which the authentication process hasn't been
+		   completed */
+		if( sessionInfoPtr->authComplete != TRUE )
+			{
+			DEBUG_DIAG(( "Attempt to receive data without the "
+						 "authentication recorded as having completed" ));
+			assert( DEBUG_WARN );
+			retExt( CRYPT_ERROR_PERMISSION, 
+					( CRYPT_ERROR_PERMISSION, SESSION_ERRINFO, 
+					  "Attempt to receive data without the authentication "
+					  "recorded as having completed" ) );
+			}
 
 		/* Read the data */
 		clearObjectErrorInfo( sessionInfoPtr );

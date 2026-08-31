@@ -618,7 +618,7 @@ static int initIAndSTemplate( OUT_ARRAY_C( 4 ) CK_ATTRIBUTE *iAndSTemplate,
 				 iAndSTemplateAlt[ 3 ].ulValueLen );
 	cryptStatus = readGenericHole( &stream, &length, 1, BER_INTEGER );
 	if( cryptStatusOK( cryptStatus ) )
-		offset = stell( &stream );
+		cryptStatus = offset = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( cryptStatus ) )
 		return( cryptStatus );
@@ -1166,7 +1166,7 @@ static int matchID( IN_HANDLE CRYPT_CERTIFICATE iCryptCert,
 			if( cryptStatusError( cryptStatus ) )
 				return( cryptStatus );
 			if( msgData.length != keyIDlength || \
-				strCompare( msgData.data, keyID, keyIDlength ) )
+				!strSame( msgData.data, keyID, keyIDlength ) )
 				return( CRYPT_ERROR_NOTFOUND );
 			return( CRYPT_OK );
 
@@ -1178,7 +1178,7 @@ static int matchID( IN_HANDLE CRYPT_CERTIFICATE iCryptCert,
 			if( cryptStatusError( cryptStatus ) )
 				return( cryptStatus );
 			if( msgData.length != keyIDlength || \
-				strCompare( msgData.data, keyID, keyIDlength ) )
+				!strSame( msgData.data, keyID, keyIDlength ) )
 				return( CRYPT_ERROR_NOTFOUND );
 			return( CRYPT_OK );
 

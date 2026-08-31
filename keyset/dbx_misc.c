@@ -266,7 +266,7 @@ int makeKeyID( OUT_BUFFER( keyIdMaxLen, *keyIdLen ) char *keyID,
 				{
 				ENSURES( LOOP_INVARIANT_LARGE( i, 0, idLength - 1 ) );
 
-				keyID[ i ] = intToByte( toLower( keyID[ i ] ) );
+				keyID[ i ] = intToByte( toLower( byteToInt( keyID[ i ] ) ) );
 				}
 			ENSURES( LOOP_BOUND_OK );
 			}

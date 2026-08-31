@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *						Network Stream Transport Functions					*
-*						Copyright Peter Gutmann 1993-2017					*
+*						Copyright Peter Gutmann 1993-2025					*
 *																			*
 ****************************************************************************/
 
@@ -41,8 +41,8 @@ static int transportDirectReadFunction( INOUT_PTR STREAM *stream,
 	REQUIRES_S( netStream != NULL && sanityCheckNetStream( netStream ) );
 	REQUIRES_S( isBufsizeRangeNZ( maxLength ) );
 
-	/* Set up the function pointers.  We have to do this after the netStream
-	   check otherwise we'd potentially be dereferencing a NULL pointer */
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
 	transportReadFunction = ( STM_TRANSPORTREAD_FUNCTION ) \
 							FNPTR_GET( netStream->transportReadFunction );
 	REQUIRES_S( transportReadFunction != NULL );
@@ -68,8 +68,8 @@ static int transportDirectWriteFunction( INOUT_PTR STREAM *stream,
 	REQUIRES_S( netStream != NULL && sanityCheckNetStream( netStream ) );
 	REQUIRES_S( isBufsizeRangeNZ( maxLength ) );
 
-	/* Set up the function pointers.  We have to do this after the netStream
-	   check otherwise we'd potentially be dereferencing a NULL pointer */
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
 	transportWriteFunction = ( STM_TRANSPORTWRITE_FUNCTION ) \
 							 FNPTR_GET( netStream->transportWriteFunction );
 	REQUIRES_S( transportWriteFunction != NULL );
@@ -107,7 +107,7 @@ static int transportVirtualConnectFunction( INOUT_PTR NET_STREAM_INFO *netStream
 	REQUIRES( ( host == NULL && hostNameLen == 0 ) || \
 			  ( host != NULL && \
 			    hostNameLen > 0 && hostNameLen <= MAX_DNS_SIZE ) );
-	REQUIRES( port >= MIN_PORT_NUMBER && port < MAX_DEST_PORT_NUMBER );
+	REQUIRES( port >= MIN_PORT_NUMBER && port <= MAX_DEST_PORT_NUMBER );
 
 	/* This is a virtual stream so there's nothing to connect to */
 	return( CRYPT_OK );
@@ -222,8 +222,8 @@ static int transportVirtualReadFunction( INOUT_PTR NET_STREAM_INFO *netStream,
 	if( flags == TRANSPORT_FLAG_NONBLOCKING )
 		return( CRYPT_OK );
 
-	/* Set up the function pointers.  We have to do this after the netStream
-	   check otherwise we'd potentially be dereferencing a NULL pointer */
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
 	virtualGetDataFunction = ( STM_READ_FUNCTION ) \
 							 FNPTR_GET( netStream->virtualGetDataFunction );
 	ENSURES( virtualGetDataFunction != NULL );
@@ -264,8 +264,8 @@ static int transportVirtualWriteFunction( INOUT_PTR NET_STREAM_INFO *netStream,
 	/* Clear return value */
 	*length = 0;
 
-	/* Set up the function pointers.  We have to do this after the netStream
-	   check otherwise we'd potentially be dereferencing a NULL pointer */
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
 	virtualPutDataFunction = ( STM_WRITE_FUNCTION ) \
 							 FNPTR_GET( netStream->virtualPutDataFunction );
 	ENSURES( virtualPutDataFunction != NULL );
@@ -276,15 +276,9 @@ static int transportVirtualWriteFunction( INOUT_PTR NET_STREAM_INFO *netStream,
 									 length );
 	if( cryptStatusOK( status ) && flags == TRANSPORT_FLAG_FLUSH )
 		{
-		int flushBytesCopied;
+		int dummy;
 
-		status = virtualPutDataFunction( virtualStateInfo, NULL, 0, 
-										 &flushBytesCopied );
-		if( cryptStatusOK( status ) )
-			{
-			REQUIRES( !checkOverflowAdd( *length, flushBytesCopied ) );
-			*length += flushBytesCopied;
-			}
+		status = virtualPutDataFunction( virtualStateInfo, NULL, 0, &dummy );
 		}
 	if( cryptStatusError( status ) )
 		{
@@ -295,6 +289,7 @@ static int transportVirtualWriteFunction( INOUT_PTR NET_STREAM_INFO *netStream,
 	return( CRYPT_OK );
 	}
 
+STDC_NONNULL_ARG( ( 1 ) ) \
 void setAccessMethodTransportVirtual( INOUT_PTR NET_STREAM_INFO *netStream )
 	{
 	assert( isWritePtr( netStream, sizeof( NET_STREAM_INFO ) ) );
@@ -356,8 +351,7 @@ int bufferedTransportRead( INOUT_PTR STREAM *stream,
 	{
 	NET_STREAM_INFO *netStream = DATAPTR_GET( stream->netStream );
 	STM_TRANSPORTREAD_FUNCTION transportReadFunction;
-	const int bytesLeft = stream->bufEnd - stream->bufPos;
-	int bufferBytesRead, bytesRead, status;
+	int bytesLeft, bufferBytesRead, bytesRead, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtrDynamic( buffer, maxLength ) );
@@ -366,15 +360,18 @@ int bufferedTransportRead( INOUT_PTR STREAM *stream,
 
 	REQUIRES_S( netStream != NULL && sanityCheckNetStream( netStream ) );
 	REQUIRES_S( isBufsizeRangeNZ( maxLength ) );
-	REQUIRES_S( !checkOverflowSub( stream->bufEnd, stream->bufPos ) );
-	REQUIRES_S( isShortIntegerRange( bytesLeft ) );
 	REQUIRES_S( isFlagRangeZ( flags, TRANSPORT ) );
+				/* Present because all the read functions take flags, but not
+				   used in this one */
 
-	/* Set up the function pointers.  We have to do this after the netStream
-	   check otherwise we'd potentially be dereferencing a NULL pointer */
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
 	transportReadFunction = ( STM_TRANSPORTREAD_FUNCTION ) \
 							FNPTR_GET( netStream->transportReadFunction );
 	REQUIRES_S( transportReadFunction != NULL );
+	REQUIRES_S( !checkOverflowSub( stream->bufEnd, stream->bufPos ) );
+	bytesLeft = stream->bufEnd - stream->bufPos;
+	REQUIRES_S( isShortIntegerRange( bytesLeft ) );
 
 	/* Clear return value */
 	*length = 0;
@@ -386,7 +383,7 @@ int bufferedTransportRead( INOUT_PTR STREAM *stream,
 		if( maxLength == 1 )
 			{
 			/* Optimisation for char-at-a-time HTTP header reads */
-			REQUIRES( !checkOverflowInc( stream->bufPos ) );
+			REQUIRES_S( !checkOverflowInc( stream->bufPos ) );
 			*buffer = stream->buffer[ stream->bufPos++ ];
 			}
 		else
@@ -399,7 +396,10 @@ int bufferedTransportRead( INOUT_PTR STREAM *stream,
 			}
 		*length = maxLength;
 
-		ENSURES_S( sanityCheckNetStream( netStream ) );
+		/* The entire read has been satisfied from the internal buffer, 
+		   there's no need to sanityCheckNetStream() and the overall stream
+		   state will be sanity-checked by the higher-level code that we're
+		   called from */
 
 		return( CRYPT_OK );
 		}
@@ -425,17 +425,28 @@ int bufferedTransportRead( INOUT_PTR STREAM *stream,
 	/* If there's more room in the buffer, refill it */
 	if( stream->bufEnd < stream->bufSize )
 		{
-		int bytesToRead;
+		int remainingMaxLen, bytesToRead;
 
 		/* Calculate how many bytes we still need to read from the network into 
 		   the buffer and how much room there is in it.  If the read count is 
 		   less than the available buffer space we only read that much, any 
 		   further space will be filled (if possible) by the opportunistic 
-		   read that follows */
+		   read that follows:
+		   
+				 bufPos				 bufEnd		 bufSize
+					v<--- bytesLeft --->v			v
+			+-------+-------------------+-----------+
+			|		|					|			|
+			+-------+-------------------+-----------+
+					|					|<- bToRd-->|
+					|------ maxLength ------> 
+										|<->| remMaxLen */
+		REQUIRES_S( !checkOverflowSub( maxLength, bytesLeft ) );
+		remainingMaxLen = maxLength - bytesLeft;
 		REQUIRES_S( !checkOverflowSub( stream->bufSize, stream->bufEnd ) );
 		bytesToRead = stream->bufSize - stream->bufEnd;
-		if( bytesToRead > maxLength )
-			bytesToRead = maxLength;
+		if( bytesToRead > remainingMaxLen )
+			bytesToRead = remainingMaxLen;
 
 		/* Perform an explicitly blocking read of as many bytes as we can/are
 		   asked for.  Since there may be data already present from an
@@ -494,8 +505,8 @@ int bufferedTransportRead( INOUT_PTR STREAM *stream,
 	   there's a failure at this point is a bit tricky since we can 
 	   successfully return some data from the internal buffer but then fail 
 	   when we try and replenish the buffer from the network.  For now we 
-	   simply force the operation to be atomic since we're reading datagrams 
-	   that have to be read in their entirety */
+	   simply force the operation to be atomic by making the read blocking 
+	   since we're reading datagrams that have to be read in their entirety */
 	REQUIRES_S( !checkOverflowSub( maxLength, bufferBytesRead ) );
 	REQUIRES_S( boundsCheck( bufferBytesRead, maxLength - bufferBytesRead, 
 							 maxLength ) );
@@ -567,19 +578,28 @@ static int processIncompleteWrite( INOUT_PTR NET_STREAM_INFO *netStream,
 								   IN_DATALENGTH_Z const int newDataToWrite,
 								   OUT_DATALENGTH_Z int *newDataWritten )
 	{
-	const int bytesLeftToWrite = netStream->writeBufEnd - bytesWritten;
+	int bytesLeftToWrite;
 
 	assert( isWritePtr( netStream, sizeof( NET_STREAM_INFO ) ) );
 
-	REQUIRES( isBufsizeRangeNZ( bytesWritten ) && \
+	REQUIRES( isBufsizeRange( bytesWritten ) && \
 			  bytesWritten < netStream->writeBufEnd );
 	REQUIRES( isBufsizeRange( newDataToWrite ) );
 			  /* May be zero if the write buffer was already full */
-	REQUIRES( !checkOverflowSub( netStream->writeBufEnd, bytesWritten ) );
-	REQUIRES( isBufsizeRange( bytesLeftToWrite ) );
 
 	/* Clear return value */
 	*newDataWritten = 0;
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	REQUIRES( !checkOverflowSub( netStream->writeBufEnd, bytesWritten ) );
+	bytesLeftToWrite = netStream->writeBufEnd - bytesWritten;
+	REQUIRES( isBufsizeRange( bytesLeftToWrite ) );
+
+	/* We may ended up writing zero bytes due to something like a soft 
+	   timeout, in which case there's nothing to do */
+	if( bytesWritten <= 0 )
+		return( CRYPT_OK );
 
 	/* Determine how much was written from what the user gave us.  This is
 	   complicated by the fact that the write buffer may already contain 
@@ -638,8 +658,8 @@ int bufferedTransportWrite( INOUT_PTR STREAM *stream,
 	REQUIRES_S( flags == TRANSPORT_FLAG_NONE || \
 				flags == TRANSPORT_FLAG_FLUSH );
 
-	/* Set up the function pointers.  We have to do this after the netStream
-	   check otherwise we'd potentially be dereferencing a NULL pointer */
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
 	transportWriteFunction = ( STM_TRANSPORTWRITE_FUNCTION ) \
 							 FNPTR_GET( netStream->transportWriteFunction );
 	REQUIRES_S( transportWriteFunction != NULL );
@@ -657,8 +677,7 @@ int bufferedTransportWrite( INOUT_PTR STREAM *stream,
 								  netStream->writeBufSize ) );
 		memcpy( netStream->writeBuffer + netStream->writeBufEnd, buffer, 
 				byteCount );
-		REQUIRES_S( !checkOverflowAdd( netStream->writeBufEnd, byteCount ) );
-		netStream->writeBufEnd += byteCount;
+		netStream->writeBufEnd += byteCount;	/* Checked earlier */
 		*length = byteCount;
 
 		ENSURES_S( sanityCheckNetStream( netStream ) );

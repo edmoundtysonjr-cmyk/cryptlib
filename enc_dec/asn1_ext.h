@@ -287,12 +287,12 @@ BOOLEAN checkEncodeOverflow( IN_LENGTH const int length,
 
 CHECK_RETVAL_BOOL \
 BOOLEAN checkAlgoID( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
-					 IN_MODE_OPT const CRYPT_MODE_TYPE cryptMode );
+					 IN_RANGE( 0, 100 ) const int cryptParam );
 CHECK_RETVAL_LENGTH_SHORT \
 int sizeofAlgoID( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo );
 CHECK_RETVAL_LENGTH_SHORT STDC_NONNULL_ARG( ( 2 ) ) \
 int sizeofAlgoIDex( IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
-					const ALGOID_PARAMS *algoIDparams );
+					IN_PTR const ALGOID_PARAMS *algoIDparams );
 RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int writeAlgoID( INOUT_PTR STREAM *stream, 
 				 IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
@@ -300,7 +300,7 @@ int writeAlgoID( INOUT_PTR STREAM *stream,
 RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int writeAlgoIDex( INOUT_PTR STREAM *stream, 
 				   IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo,
-				   const ALGOID_PARAMS *algoIDparams,
+				   IN_PTR const ALGOID_PARAMS *algoIDparams,
 				   IN_TAG const int tag );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2) ) \
 int readAlgoID( INOUT_PTR STREAM *stream, 
@@ -324,7 +324,7 @@ CHECK_RETVAL_LENGTH \
 int sizeofContextAlgoID( IN_HANDLE const CRYPT_CONTEXT iCryptContext );
 CHECK_RETVAL_LENGTH STDC_NONNULL_ARG( ( 2 ) ) \
 int sizeofContextAlgoIDex( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
-						   const ALGOID_PARAMS *algoIDparams );
+						   IN_PTR const ALGOID_PARAMS *algoIDparams );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int readContextAlgoID( INOUT_PTR STREAM *stream, 
 					   OUT_OPT_HANDLE_OPT CRYPT_CONTEXT *iCryptContext,
@@ -337,7 +337,7 @@ int writeContextAlgoID( INOUT_PTR STREAM *stream,
 RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int writeContextAlgoIDex( INOUT_PTR STREAM *stream, 
 						  IN_HANDLE const CRYPT_CONTEXT iCryptContext,
-						  const ALGOID_PARAMS *algoIDparams );
+						  IN_PTR const ALGOID_PARAMS *algoIDparams );
 CHECK_RETVAL_LENGTH \
 int sizeofCryptContextAlgoID( IN_HANDLE const CRYPT_CONTEXT iCryptContext );
 RETVAL STDC_NONNULL_ARG( ( 1 ) ) \

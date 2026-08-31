@@ -53,16 +53,16 @@
    certificates is somewhat suspicious, in fact a limit of 4 or 5 would
    probably be sufficient for any chains seen in the wild.
    
-   The built-in bounds value FAILSAFE_ITERATIONS_MED is used as a safety 
+   The built-in bounds value FAILSAFE_ITERATIONS_SMALL is used as a safety 
    check for an upper limit on chain lengths (that is, if we hit 
-   FAILSAFE_ITERATIONS_MED on processing a certificate chain it's an 
+   FAILSAFE_ITERATIONS_SMALL on processing a certificate chain it's an 
    internal error), so it has to be larger than MAX_CHAINLENGTH */
 
 #define MAX_CHAINLENGTH			8
 
-#if MAX_CHAINLENGTH >= FAILSAFE_ITERATIONS_MED
-  #error The maximum certificate chain length must be less than FAILSAFE_ITERATIONS_MED
-#endif /* MAX_CHAINLENGTH > FAILSAFE_ITERATIONS_MED */
+#if MAX_CHAINLENGTH >= FAILSAFE_ITERATIONS_SMALL
+  #error The maximum certificate chain length must be less than FAILSAFE_ITERATIONS_SMALL
+#endif /* MAX_CHAINLENGTH > FAILSAFE_ITERATIONS_SMALL */
 
 /* The maximum number of entries in a CRL.  With real-world CRL sizes going
    to 150MB or more there's no obviously sane value to bound this with, the

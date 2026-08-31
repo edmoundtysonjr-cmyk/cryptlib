@@ -137,12 +137,12 @@ static int createHkdfLabel( OUT_BUFFER( dataMaxLength, *dataLength ) \
 								int *dataLength,
 							IN_LENGTH_SHORT_MIN( 8 ) const int hkdfOutputLength,
 							IN_BUFFER( labelLength ) const void *label,
-							IN_LENGTH_SHORT_MIN( 2 ) const int labelLength,
+							IN_RANGE( 2, 32 ) const int labelLength,
 							IN_BUFFER_OPT( hashLength ) const void *hash,
 							IN_LENGTH_SHORT_Z const int hashLength )
 	{
 	STREAM stream;
-	int status;
+	int position DUMMY_INIT, status;
 
 	assert( isWritePtrDynamic( data, dataMaxLength ) );
 	assert( isWritePtr( dataLength, sizeof( int ) ) );
@@ -154,7 +154,7 @@ static int createHkdfLabel( OUT_BUFFER( dataMaxLength, *dataLength ) \
 
 	REQUIRES( isShortIntegerRangeMin( hkdfOutputLength, 8 ) );
 	REQUIRES( isShortIntegerRangeMin( dataMaxLength, 32 ) );
-	REQUIRES( isShortIntegerRangeMin( labelLength, 2 ) );
+	REQUIRES( rangeCheck( labelLength, 2, 32 ) );
 	REQUIRES( ( hash == NULL && hashLength == 0 ) || \
 			  ( hashLength == bitsToBytes( 256 ) || \
 				hashLength == bitsToBytes( 384 ) || \
@@ -222,11 +222,13 @@ static int createHkdfLabel( OUT_BUFFER( dataMaxLength, *dataLength ) \
 			}
 		ENSURES( LOOP_BOUND_OK );
 		ENSURES( i < FAILSAFE_ARRAYSIZE( fixedHashInfo, FIXED_HASH_INFO ) );
+		ENSURES( hash != NULL );
 		}
 
 	sMemOpen( &stream, data, dataMaxLength );
 
-	/* Write the HKDF Label structure */
+	/* Write the HKDF Label structure.  The length field is a single-byte 
+	   value, with labelLength range-checked earlier */
 	writeUint16( &stream, hkdfOutputLength );
 	sputc( &stream, 6 + labelLength );
 	swrite( &stream, "tls13 ", 6 );
@@ -239,10 +241,13 @@ static int createHkdfLabel( OUT_BUFFER( dataMaxLength, *dataLength ) \
 	   a single call to HKDF */
 	status = sputc( &stream, 0x01 );
 	if( cryptStatusOK( status ) )
-		*dataLength = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
+	if( cryptStatusError( status ) )
+		return( status );
+	*dataLength = position;
 
-	return( status );
+	return( CRYPT_OK );
 	}
 
 /****************************************************************************
@@ -303,6 +308,8 @@ int initCryptGCMTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		ivPtr = tlsInfo->aeadWriteSalt;
 		iCryptContext = sessionInfoPtr->iCryptOutContext;
 		}
+
+	REQUIRES( tlsInfo->aeadSaltSize == GCM_IV_SIZE );
 
 	/* Assemble the TLS 1.3 GCM IV */
 	sMemOpen( &stream, ivBuffer, CRYPT_MAX_IVSIZE );
@@ -396,6 +403,8 @@ int createSessionHashTLS13( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 		}
 #endif /* USE_ED25519 */
 
+	REQUIRES( handshakeInfo->sessionHashContext == CRYPT_ERROR );
+
 	/* Hash the prefix string and the transcript hash to get the hash value
 	   that's actually signed/verified */
 	setMessageCreateObjectInfo( &createInfo, 
@@ -459,7 +468,7 @@ int createFinishedTLS13( OUT_BUFFER( finishedValueMaxLen, \
 							const int finishedValueMaxLen,
 						 OUT_LENGTH_BOUNDED_SHORT_Z( finishedValueMaxLen ) \
 							 int *finishedValueLen,
-						 IN_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
+						 INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo,
 						 IN_HANDLE const CRYPT_CONTEXT iHashContext,
 						 IN_BOOL const BOOLEAN isServerFinished )
 	{
@@ -468,15 +477,13 @@ int createFinishedTLS13( OUT_BUFFER( finishedValueMaxLen, \
 	BYTE hkdfLabel[ ( CRYPT_MAX_HASHSIZE * 2 ) + 8 ];
 	BYTE hkdfValue[ CRYPT_MAX_HASHSIZE + 8 ];
 	BYTE hashValue[ CRYPT_MAX_HASHSIZE + 8 ];
-	const int hashParam = handshakeInfo->integrityAlgoParam;
-	int hkdfLabelLength, hashValueLength, status;
+	int hkdfLabelLength, hashValueLength, hashParam, status;
 
 	assert( isWritePtrDynamic( finishedValue, finishedValueMaxLen ) );
 	assert( isWritePtr( finishedValueLen, sizeof( int ) ) );
 	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 
 	REQUIRES( isShortIntegerRangeMin( finishedValueMaxLen, 20 ) );
-	REQUIRES( finishedValueMaxLen >= hashParam );
 	REQUIRES( sanityCheckTLSHandshakeInfo( handshakeInfo ) );
 	REQUIRES( isHandleRangeValid( iHashContext ) );
 	REQUIRES( isBooleanValue( isServerFinished ) );
@@ -486,6 +493,10 @@ int createFinishedTLS13( OUT_BUFFER( finishedValueMaxLen, \
 	memset( finishedValue, 0, min( 16, finishedValueMaxLen ) );
 	*finishedValueLen = 0;
 
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	hashParam = handshakeInfo->integrityAlgoParam;
+	REQUIRES( finishedValueMaxLen >= hashParam );
 	getMacAtomicFunction( CRYPT_ALGO_HMAC_SHA2, &macFunctionAtomic );
 
 	/* Get the transcript hash value */
@@ -573,7 +584,7 @@ static int createHandshakeSecret( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo )
 							  &hkdfLabelLength, hashParam, "derived", 7, 
 							  NULL, hashParam );
 	if( cryptStatusError( status ) )
-		return( status );
+		return( status );	/* hkdfValue is non-secret data here */
 	macFunctionAtomic( hkdfValue, CRYPT_MAX_HASHSIZE, hashParam,
 					   hkdfValue, hashParam, hkdfLabel, hkdfLabelLength );
 
@@ -674,7 +685,10 @@ static int createAppdataSecret( INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo )
 							  &hkdfLabelLength, hashParam, "derived", 7, 
 							  NULL, hashParam );
 	if( cryptStatusError( status ) )
+		{
+		zeroise( hkdfValue, CRYPT_MAX_HASHSIZE );
 		return( status );
+		}
 	macFunctionAtomic( hkdfValue, CRYPT_MAX_HASHSIZE, hashParam,
 					   hkdfValue, hashParam, hkdfLabel, hkdfLabelLength );
 
@@ -856,7 +870,7 @@ static int recreateSecurityContexts( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int loadKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
-					 INOUT_PTR TLS_HANDSHAKE_INFO *handshakeInfo )
+					 IN_PTR const TLS_HANDSHAKE_INFO *handshakeInfo )
 	{
 	TLS_INFO *tlsInfo = sessionInfoPtr->sessionTLS;
 	MAC_FUNCTION_ATOMIC macFunctionAtomic;
@@ -869,6 +883,10 @@ static int loadKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isReadPtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
+
+	REQUIRES( handshakeInfo->cryptKeysize <= hashParam );
+			  /* Guaranteed by the TLS 1.3 suites, no key is larger than the
+			     SHA-2 output size */
 
 	getMacAtomicFunction( CRYPT_ALGO_HMAC_SHA2, &macFunctionAtomic );
 
@@ -963,14 +981,16 @@ static int loadKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	memcpy( isClient ? tlsInfo->aeadReadSalt : tlsInfo->aeadWriteSalt, 
 			hkdfValue, GCM_IV_SIZE );
 	tlsInfo->aeadSaltSize = GCM_IV_SIZE;
-	DEBUG_DUMP_DATA_LABEL( isServer( sessionInfoPtr ) ? \
-								"Client write IV (server):" : \
-								"Client write IV (client):", 
-						   tlsInfo->aeadWriteSalt, GCM_IV_SIZE );
-	DEBUG_DUMP_DATA_LABEL( isServer( sessionInfoPtr ) ? \
-								"Server write IV (server):" : \
-								"Server write IV (client):", 
-						   tlsInfo->aeadReadSalt, GCM_IV_SIZE );
+	DEBUG_DUMP_DATA_LABEL( isClient ? \
+								"Client write IV (client):" : \
+								"Client write IV (server):",
+						   isClient ? tlsInfo->aeadWriteSalt : \
+									  tlsInfo->aeadReadSalt, GCM_IV_SIZE );
+	DEBUG_DUMP_DATA_LABEL( isClient ? \
+								"Server write IV (client):" : \
+								"Server write IV (server):",
+						   isClient ? tlsInfo->aeadReadSalt : \
+									  tlsInfo->aeadWriteSalt, GCM_IV_SIZE );
 
 	zeroise( hkdfValue, CRYPT_MAX_HASHSIZE );
 
@@ -989,7 +1009,7 @@ int loadHSKeysTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	int status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
-	assert( isReadPtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
+	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 
 	REQUIRES( sanityCheckSessionTLS( sessionInfoPtr ) );
 	REQUIRES( sanityCheckTLSHandshakeInfo( handshakeInfo ) );
@@ -1020,7 +1040,7 @@ int loadAppdataKeysTLS13( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	int status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
-	assert( isReadPtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
+	assert( isWritePtr( handshakeInfo, sizeof( TLS_HANDSHAKE_INFO ) ) );
 
 	REQUIRES( sanityCheckSessionTLS( sessionInfoPtr ) );
 	REQUIRES( sanityCheckTLSHandshakeInfo( handshakeInfo ) );

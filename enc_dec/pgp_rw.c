@@ -137,7 +137,7 @@ static int readPGP2Length( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( length, sizeof( int ) ) );
 
-	REQUIRES_S( ctb >= 0 && ctb <= 0xFF );
+	REQUIRES_S( rangeCheck( ctb, 0, 0xFF ) );
 
 	/* Clear return value */
 	*length = 0;
@@ -193,6 +193,7 @@ static int pgpReadLength( INOUT_PTR STREAM *stream,
 
 	REQUIRES_S( isShortIntegerRange( minLength ) && \
 				minLength < maxLength && maxLength < MAX_INTLENGTH );
+	REQUIRES_S( rangeCheck( ctb, 0, 0xFF ) );
 	REQUIRES_S( isBooleanValue( indefOK ) );
 
 	/* Clear return value */
@@ -278,7 +279,10 @@ static int readPacketHeader( INOUT_PTR STREAM *stream,
 		   To deal with this we return a fake length equal to minLength, 
 		   which means that we stick to the contract, and which will be 
 		   ignored by any caller that can process compressed data since, by 
-		   definition, the length value is meaningless */
+		   definition, the length value is meaningless.
+		   
+		   Note that a few callers have already checked the CTB before 
+		   calling this function so pass in NULL for the ctb value */
 		if( ctb != NULL )
 			*ctb = localCTB;
 		if( length != NULL )
@@ -328,6 +332,8 @@ int pgpReadShortLength( INOUT_PTR STREAM *stream,
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( length, sizeof( int ) ) );
 
+	REQUIRES_S( rangeCheck( ctb, 0, 0xFF ) );
+
 	/* Clear return value */
 	*length = 0;
 
@@ -337,7 +343,7 @@ int pgpReadShortLength( INOUT_PTR STREAM *stream,
 		return( status );
 	if( !isShortIntegerRange( localLength ) )
 		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
-	*length = ( int ) localLength;
+	*length = localLength;
 
 	return( CRYPT_OK );
 	}
@@ -368,8 +374,14 @@ int pgpReadPacketHeaderI( INOUT_PTR STREAM *stream, OUT_OPT_BYTE int *ctb,
 	assert( ctb == NULL || isWritePtr( ctb, sizeof( int ) ) );
 	assert( length == NULL || isWritePtr( length, sizeof( int ) ) );
 	
-	REQUIRES_S( isShortIntegerRange( minLength ) );
+	REQUIRES_S( isShortIntegerRangeNZ( minLength ) );
 
+	/* The length enforcement here is slightly different from what's 
+	   expected, we're matching { min, max } against the partial segment 
+	   size rather than the full packet size, but we're only called with 
+	   very short lengths to read headers and the like and the standard 
+	   requires (RFC 4880 section 4.2.2.4) at least 512 bytes in the first
+	   partial length so this is never an issue */
 	return( readPacketHeader( stream, ctb, length, minLength, 
 							  MAX_INTLENGTH - 1, TRUE ) );
 	}
@@ -397,11 +409,10 @@ int pgpWriteLength( INOUT_PTR STREAM *stream,
 	
 	REQUIRES_S( isIntegerRangeNZ( length ) );
 
-	/* A second check for systems with 64-bit longs, for which values over 
-	   4GB would get truncated, as well as 32-bit longs, for which shifting
-	   sign bits causes gcc to throw a wobbly.  Since we should never get
-	   lengths of this size we make it a REQUIRES() rather than a parameter 
-	   check */
+	/* A second check for systems with 64-bit ints, for which values over 
+	   4GB (which would pass the isIntegerRangeNZ() above) would then get 
+	   truncated.  Since we should never get lengths of this size we make it 
+	   a REQUIRES() rather than a parameter check */
 	REQUIRES_S( length < 0x7FFFFFFFL );
 
 	if( length <= 191 )
@@ -410,8 +421,8 @@ int pgpWriteLength( INOUT_PTR STREAM *stream,
 		{
 		const int adjustedLength = length - 192;
 
-		sputc( stream, ( ( adjustedLength >> 8 ) & 0xFF ) + 192 );
-		return( sputc( stream, ( adjustedLength & 0xFF ) ) );
+		sputc( stream, intToByte( ( adjustedLength >> 8 ) + 192 ) );
+		return( sputc( stream, intToByte( adjustedLength ) ) );
 		}
 	sputc( stream, 0xFF );
 	sputc( stream, intToByte( length >> 24 ) );
@@ -427,7 +438,10 @@ int pgpWritePacketHeader( INOUT_PTR STREAM *stream,
 	{
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	
-	REQUIRES_S( isEnumRange( packetType, PGP_PACKET ) );
+	REQUIRES_S( isEnumRange( packetType, PGP_PACKET ) && \
+				packetType != PGP_PACKET_MARKER && \
+				packetType != PGP_PACKET_DUMMY1 && \
+				packetType != PGP_PACKET_DUMMY2 );
 	REQUIRES_S( isIntegerRangeNZ( length ) );
 
 	sputc( stream, PGP_CTB_OPENPGP | packetType );

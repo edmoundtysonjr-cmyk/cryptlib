@@ -126,8 +126,10 @@ static int readKeyDerivationInfo( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	readOctetString( stream, queryInfo->salt, &queryInfo->saltLength, 
 					 2, CRYPT_MAX_HASHSIZE );
@@ -202,10 +204,11 @@ static int writeKeyDerivationInfo( INOUT_PTR STREAM *stream,
 	if( cryptStatusOK( status ) && isParameterisedMacAlgo( prfAlgo ) )
 		{
 #if 0	/* In theory this could be controlled by the 
-		   CRYPT_OPTION_ENCR_HASHPARAM option but it's unclear whether this
-		   should affect the keying setup, or how it would get across to a
-		   context as a hypothetical CRYPT_CTXINFO_KEYING_ALGO_XXXX, so for 
-		   now we assume that a configured SHA2 means SHA2-256 */
+		   CRYPT_OPTION_ENCR_HASHPARAM option but it's unclear whether 
+		   something for hash contexts should affect them when they're used
+		   for keying setup or how it would get across to a context as a 
+		   hypothetical CRYPT_CTXINFO_KEYING_ALGO_XXXX, so for now we assume 
+		   that a configured SHA2 means SHA2-256 */
 		status = krnlSendMessage( iCryptContext, IMESSAGE_GETATTRIBUTE,
 								  &prfAlgoSize, 
 								  CRYPT_CTXINFO_KEYING_ALGO_XXXX );
@@ -340,7 +343,7 @@ static int writeCmsKek( INOUT_PTR STREAM *stream,
 	writeOID( &localStream, OID_PWRIKEK );
 	status = writeContextCryptAlgoID( &localStream, iCryptContext );
 	if( cryptStatusOK( status ) )
-		kekInfoSize = stell( &localStream );
+		status = kekInfoSize = stell( &localStream );
 	sMemDisconnect( &localStream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -522,7 +525,7 @@ static int writeCryptlibKek( STREAM *stream,
 		sMemOpen( &localStream, derivationInfo, 64 + CRYPT_MAX_HASHSIZE );
 		status = writeKeyDerivationInfo( &localStream, iCryptContext );
 		if( cryptStatusOK( status ) )
-			derivationInfoSize = stell( &localStream );
+			status = derivationInfoSize = stell( &localStream );
 		sMemDisconnect( &localStream );
 		if( cryptStatusError( status ) )
 			return( status );
@@ -533,7 +536,7 @@ static int writeCryptlibKek( STREAM *stream,
 	writeOID( &localStream, OID_PWRIKEK );
 	status = writeCryptContextAlgoID( &localStream, iCryptContext );
 	if( cryptStatusOK( status ) )
-		kekInfoSize = stell( &localStream );
+		status = kekInfoSize = stell( &localStream );
 	sMemDisconnect( &localStream );
 	if( cryptStatusError( status ) )
 		return( status );

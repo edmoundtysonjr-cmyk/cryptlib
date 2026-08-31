@@ -69,21 +69,21 @@ static int getServiceType( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				  "Missing channel type for channel activation" ) );
 		}
 	if( typeLen == 9 && \
-		!strCompare( typeString, "subsystem", 9 ) )
+		strSame( typeString, "subsystem", 9 ) )
 		{
 		*serviceType = SERVICE_SUBSYSTEM;
 		return( CRYPT_OK );
 		}
 	if( ( typeLen == 12 && \
-		  !strCompare( typeString, "direct-tcpip", 12 ) ) || \
+		  strSame( typeString, "direct-tcpip", 12 ) ) || \
 		( typeLen == 15 && \
-		  !strCompare( typeString, "forwarded-tcpip", 15 ) ) )
+		  strSame( typeString, "forwarded-tcpip", 15 ) ) )
 		{
 		*serviceType = SERVICE_PORTFORWARD;
 		return( CRYPT_OK );
 		}
 	if( typeLen == 4 && \
-		!strCompare( typeString, "exec", 4 ) )
+		strSame( typeString, "exec", 4 ) )
 		{
 		*serviceType = SERVICE_EXEC;
 		return( CRYPT_OK );
@@ -95,6 +95,9 @@ static int getServiceType( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	return( CRYPT_OK );
 	}
 #else
+  /* The somewhat unusual form is necessary because it's invoked as
+     'value = getServiceType( ... ).  We hardcode SERVICE_SHELL because it's
+     the only one possible outside of USE_SSH_EXTENDED */
   #define getServiceType( sessionInfoPtr, serviceType ) \
 		  CRYPT_OK; \
 		  *( serviceType ) = SERVICE_SHELL
@@ -120,7 +123,7 @@ static int getOpenFailInfo( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		uint32	recipient_channel
 		uint32	reason_code
 		string	additional_text */
-	readUint32( stream );		/* Skip channel number */
+	( void ) readUint32( stream );	/* Skip channel number */
 	status = errorCode = readUint32( stream );
 	if( cryptStatusError( status ) )
 		errorCode = 0;	/* Convert to a no-op value so that we can continue */
@@ -198,12 +201,11 @@ static int createOpenRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							  OUT_ENUM_OPT( OPENREQUEST ) \
 									OPENREQUEST_TYPE *requestType )
 	{
-	const long channelNo = getCurrentChannelNo( sessionInfoPtr,
-												CHANNEL_WRITE );
 	const int maxPacketSize = sessionInfoPtr->sendBufSize - \
 							  EXTRA_PACKET_SIZE;
 	URL_INFO urlInfo DUMMY_INIT_STRUCT;
 	BYTE arg1String[ CRYPT_MAX_TEXTSIZE + 8 ];
+	long channelNo;
 	int arg1Len DUMMY_INIT, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -219,6 +221,10 @@ static int createOpenRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	/* Clear return values */
 	memset( stream, 0, sizeof( STREAM ) );
 	*requestType = OPENREQUEST_NONE;
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	channelNo = getCurrentChannelNo( sessionInfoPtr, CHANNEL_WRITE );
 
 	/* If it's not a generic tunnel, get any additional parameters 
 	   required */
@@ -389,10 +395,9 @@ static int createOpenRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							  OUT_ENUM_OPT( OPENREQUEST ) \
 									OPENREQUEST_TYPE *requestType )
 	{
-	const long channelNo = getCurrentChannelNo( sessionInfoPtr,
-												CHANNEL_WRITE );
 	const int maxPacketSize = sessionInfoPtr->sendBufSize - \
 							  EXTRA_PACKET_SIZE;
+	long channelNo;
 	int status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -404,6 +409,10 @@ static int createOpenRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	REQUIRES( !checkOverflowSub( sessionInfoPtr->sendBufSize,
 								 EXTRA_PACKET_SIZE ) );
 	REQUIRES( isIntegerRangeNZ( maxPacketSize ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	channelNo = getCurrentChannelNo( sessionInfoPtr, CHANNEL_WRITE );
 
 	/* Set the request type to tell the caller what to do after they've sent 
 	   the initial channel open */
@@ -457,8 +466,7 @@ static int createSessionOpenRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									 IN_ENUM( SERVICE ) \
 										const SERVICE_TYPE serviceType )
 	{
-	const long channelNo = getCurrentChannelNo( sessionInfoPtr,
-												CHANNEL_WRITE );
+	long channelNo;
 	int packetOffset, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -466,6 +474,10 @@ static int createSessionOpenRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
 	REQUIRES( isEnumRange( serviceType, SERVICE ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	channelNo = getCurrentChannelNo( sessionInfoPtr, CHANNEL_WRITE );
 
 #ifdef USE_SSH_EXTENDED
 	/* If the caller has requested the use of a custom subsystem (and at the
@@ -625,14 +637,16 @@ int sendChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	OPENREQUEST_TYPE requestType;
 	BOOLEAN waitforWindow = FALSE;
 	BYTE buffer[ UINT32_SIZE + 8 ];
-	const long channelNo = getCurrentChannelNo( sessionInfoPtr,
-												CHANNEL_READ );
-	long currentChannelNo; 
+	long channelNo, currentChannelNo; 
 	int windowSize, length, value, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
 	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	channelNo = getCurrentChannelNo( sessionInfoPtr, CHANNEL_WRITE );
 
 	/* Make sure that there's channel data available to activate and
 	   that it doesn't correspond to an already-active channel */
@@ -648,6 +662,8 @@ int sendChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 								  &value );
 	if( cryptStatusError( status ) || value )
 		{
+		/* This is a should-never-fail all so we don't bother breaking out
+		   the error status into its own handling code */
 		retExt( CRYPT_ERROR_INITED,
 				( CRYPT_ERROR_INITED, SESSION_ERRINFO, 
 				  "Current channel has already been activated" ) );
@@ -687,11 +703,11 @@ int sendChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 
 	/* Wait for the server's ack of the channel open request:
 
-		byte	SSH_MSG_CHANNEL_OPEN_CONFIRMATION
-		uint32	recipient_channel
-		uint32	sender_channel
-		uint32	initial_window_size
-		uint32	maximum_packet_size
+		byte	SSH_MSG_CHANNEL_OPEN_CONFIRMATION	SSH_MSG_CHANNEL_OPEN_FAILURE
+		uint32	recipient_channel					uint32	recipient_channel
+		uint32	sender_channel						uint32	reason_code
+		uint32	initial_window_size					string	description
+		uint32	maximum_packet_size					string	language tag
 		... 
 		
 	   Quite a number of implementations use the same approach that we do to 
@@ -729,8 +745,8 @@ int sendChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 				  "Invalid channel information in channel open "
 				  "confirmation for channel %lX", channelNo ) );
 		}
-	status = sread( &stream, buffer, UINT32_SIZE );
-	if( !cryptStatusError( status ) && \
+	status = length = sread( &stream, buffer, UINT32_SIZE );
+	if( !cryptStatusError( status ) && length == UINT32_SIZE && \
 		!memcmp( buffer, "\x00\x00\x00\x00", UINT32_SIZE ) )
 		{
 		/* Some bizarro implementations send a zero-length initial window 
@@ -759,9 +775,19 @@ int sendChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 		/* It's unclear why anyone would want to use different channel
 		   numbers for different directions since it's the same channel that 
 		   the data is moving across, but Cisco do it anyway */
-		status = setChannelExtAttribute( sessionInfoPtr, 
-										 SSH_ATTRIBUTE_ALTCHANNELNO,
-										 currentChannelNo );
+		if( getChannelStatusByChannelNo( sessionInfoPtr, \
+										 currentChannelNo ) != CHANNEL_NONE )
+			{
+			/* This channel number is already in use, we can't select it as 
+			   a new channel */
+			status = CRYPT_ERROR_PERMISSION;
+			}
+		else
+			{
+			status = setChannelExtAttribute( sessionInfoPtr, 
+											 SSH_ATTRIBUTE_ALTCHANNELNO,
+											 currentChannelNo );
+			}
 		}
 	if( cryptStatusOK( status ) )
 		{
@@ -784,8 +810,7 @@ int sendChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 		/* The activation failed, make sure the channel doesn't remain 
 		   marked as active.  This is more a hygiene thing than anything 
 		   else since the session can't continue without an open channel */
-		( void ) setChannelExtAttribute( sessionInfoPtr, SSH_ATTRIBUTE_ACTIVE, 
-										 FALSE );
+		clearChannelAttributes( sessionInfoPtr );
 		return( status );
 		}
 
@@ -811,8 +836,7 @@ int sendChannelOpen( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 		}
 	if( cryptStatusError( status ) )
 		{
-		( void ) setChannelExtAttribute( sessionInfoPtr, 
-										 SSH_ATTRIBUTE_ACTIVE, FALSE );
+		clearChannelAttributes( sessionInfoPtr );
 		return( status );
 		}
 	

@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *					cryptlib Session Write Support Routines					*
-*					  Copyright Peter Gutmann 1998-2019						*
+*					  Copyright Peter Gutmann 1998-2025						*
 *																			*
 ****************************************************************************/
 
@@ -100,10 +100,15 @@ BOOLEAN sanityCheckSessionWrite( const SESSION_INFO *sessionInfoPtr )
 		DEBUG_PUTS(( "sanityCheckSessionWrite: Send buffer offset" ));
 		return( FALSE );
 		}
-	if( sessionInfoPtr->partialWrite != TRUE && \
-		sessionInfoPtr->partialWrite != FALSE )
+	if( !isBooleanValue( sessionInfoPtr->partialWrite ) )
 		{
 		DEBUG_PUTS(( "sanityCheckSessionWrite: Partial write" ));
+		return( FALSE );
+		}
+	if( !sessionInfoPtr->partialWrite && \
+		sessionInfoPtr->sendBufPartialBufPos != 0 )
+		{
+		DEBUG_PUTS(( "sanityCheckSessionWrite: Partial write state" ));
 		return( FALSE );
 		}
 
@@ -151,8 +156,8 @@ BOOLEAN sanityCheckSessionWrite( const SESSION_INFO *sessionInfoPtr )
 			|<----- maxPacket ----->|
 						|<- remain->| */
 
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-static int getRemainingBufferSpace( const SESSION_INFO *sessionInfoPtr )
+CHECK_RETVAL_LENGTH STDC_NONNULL_ARG( ( 1 ) ) \
+static int getRemainingBufferSpace( IN_PTR const SESSION_INFO *sessionInfoPtr )
 	{
 	const int currentByteCount = sessionInfoPtr->sendBufPos - \
 								 sessionInfoPtr->sendBufStartOfs;
@@ -229,7 +234,7 @@ static int getRemainingBufferSpace( const SESSION_INFO *sessionInfoPtr )
    remains to be written */
 
 CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1 ) ) \
-static int flushData( SESSION_INFO *sessionInfoPtr )
+static int flushData( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
 	SES_PREPAREPACKET_FUNCTION preparePacketFunction;
 	int bytesToWrite, length, status;
@@ -298,7 +303,7 @@ static int flushData( SESSION_INFO *sessionInfoPtr )
 		   size */
 		sessionInfoPtr->sendBufPos = length;
 		ENSURES( sessionInfoPtr->sendBufPos > 0 && \
-				 sessionInfoPtr->sendBufPos <= sessionInfoPtr->sendBufSize );
+				 sessionInfoPtr->sendBufPos < sessionInfoPtr->sendBufSize );
 		}
 	REQUIRES( !checkOverflowSub( sessionInfoPtr->sendBufPos,
 								 sessionInfoPtr->sendBufPartialBufPos ) );
@@ -413,8 +418,9 @@ int putSessionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					IN_DATALENGTH_Z const int dataLength, 
 					OUT_DATALENGTH_Z int *bytesCopied )
 	{
-	BYTE *dataPtr = ( BYTE * ) data;
-	int length = dataLength, availableBuffer, status, LOOP_ITERATOR;
+	const BYTE *dataPtr = ( const BYTE * ) data;
+	int length = dataLength, availableBuffer, packetCount = 0;
+	int status, LOOP_ITERATOR;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( data == NULL || isReadPtrDynamic( data, dataLength ) );
@@ -433,8 +439,6 @@ int putSessionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   to the pending state and return */
 	if( cryptStatusError( sessionInfoPtr->pendingWriteErrorState ) )
 		{
-		REQUIRES( sessionInfoPtr->receiveBufPos == 0 );
-
 		status = sessionInfoPtr->writeErrorState = \
 						sessionInfoPtr->pendingWriteErrorState;
 		sessionInfoPtr->pendingWriteErrorState = CRYPT_OK;
@@ -566,6 +570,21 @@ int putSessionData( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		status = availableBuffer = getRemainingBufferSpace( sessionInfoPtr );
 		if( cryptStatusError( status ) )
 			return( status );
+
+		/* In theory a determined caller can override the default buffer 
+		   size, allocate an enormous buffer, and then fill it completely
+		   before handing it to use to write, which would eventually trigger 
+		   the LOOP_LARGE() limit.  To deal with this we exit before we get 
+		   anywhere near the loop limit, making it the same as the partial
+		   write from above */
+		REQUIRES( !checkOverflowInc( packetCount ) );
+		packetCount++;
+		if( packetCount > 500 )
+			{
+			ENSURES( sanityCheckSessionWrite( sessionInfoPtr ) );
+
+			return( CRYPT_OK );
+			}
 		}
 	ENSURES( LOOP_BOUND_OK );
 
@@ -642,7 +661,7 @@ int writePkiDatagram( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				     "%s", errorMessage ) );
 				   /* Redundant %s needed for gcc */
 		}
-	sessionInfoPtr->receiveBufEnd = 0;
+	sessionInfoPtr->receiveBufEnd = sessionInfoPtr->receiveBufPos = 0;
 
 	return( CRYPT_OK );
 	}

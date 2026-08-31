@@ -203,7 +203,7 @@ static int findEntry( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 					  IN_ENUM( SCOREBOARD_KEY ) \
 							const SCOREBOARD_KEY_TYPE keyType,
 					  IN_BUFFER( keyLength ) const void *key, 
-					  IN_RANGE( SCOREBOARD_KEY_MIN, SCOREBOARD_KEY_SIZE ) \
+					  IN_RANGE( SCOREBOARD_KEY_MIN, MAX_DNS_SIZE ) \
 							const int keyLength, 
 					  const time_t currentTime, 
 					  OUT_INT_SHORT_Z int *position )
@@ -599,7 +599,7 @@ static int lookupScoreboard( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 							 IN_ENUM( SCOREBOARD_KEY ) \
 								const SCOREBOARD_KEY_TYPE keyType,
 							 IN_BUFFER( keyLength ) const void *key, 
-							 IN_RANGE( SCOREBOARD_KEY_MIN, SCOREBOARD_KEY_SIZE ) \
+							 IN_LENGTH_SHORT_MIN( SCOREBOARD_KEY_MIN ) \
 								const int keyLength, 
 						     OUT_PTR SCOREBOARD_ENTRY_INFO *scoreboardEntryInfo,
 							 OUT_INT_Z int *uniqueID )
@@ -615,8 +615,9 @@ static int lookupScoreboard( INOUT_PTR SCOREBOARD_INFO *scoreboardInfo,
 	assert( isWritePtr( uniqueID, sizeof( int ) ) );
 
 	REQUIRES( isEnumRange( keyType, SCOREBOARD_KEY ) );
-	REQUIRES( rangeCheck( keyLength, SCOREBOARD_KEY_MIN, 
-						  SCOREBOARD_KEY_SIZE ) );
+	REQUIRES( isShortIntegerRangeMin( keyLength, SCOREBOARD_KEY_MIN ) );
+			  /* This can be a fixed-length session ID or a variable-length 
+			     FQDN */
 	REQUIRES( sanityCheckScoreboard( scoreboardInfo ) );
 
 	/* Clear return values */
@@ -688,8 +689,7 @@ int lookupScoreboardEntry( INOUT_PTR TYPECAST( SCOREBOARD_INFO * ) \
 						   IN_ENUM( SCOREBOARD_KEY ) \
 								const SCOREBOARD_KEY_TYPE keyType,
 						   IN_BUFFER( keyLength ) const void *key, 
-						   IN_RANGE( 4, MAX_SESSIONID_SIZE ) \
-								const int keyLength, 
+						   IN_LENGTH_SHORT_MIN( 4 ) const int keyLength, 
 						   OUT_PTR \
 								SCOREBOARD_ENTRY_INFO *scoreboardEntryInfo )
 	{
@@ -706,8 +706,9 @@ int lookupScoreboardEntry( INOUT_PTR TYPECAST( SCOREBOARD_INFO * ) \
 
 	REQUIRES( sanityCheckScoreboard( scoreboardInfo ) );
 	REQUIRES( isEnumRange( keyType, SCOREBOARD_KEY ) );
-	REQUIRES( rangeCheck( keyLength, SCOREBOARD_KEY_MIN, 
-						  SCOREBOARD_KEY_SIZE ) );
+	REQUIRES( isShortIntegerRangeMin( keyLength, SCOREBOARD_KEY_MIN ) );
+			  /* This can be a fixed-length session ID or a variable-length 
+			     FQDN */
 
 	/* Clear return values */
 	memset( scoreboardEntryInfo, 0, sizeof( SCOREBOARD_ENTRY_INFO ) );

@@ -5,8 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <ctype.h>
-#include <stdio.h>
 #if defined( INC_ALL )
   #include "crypt.h"
   #include "http.h"
@@ -58,7 +56,7 @@ static int encodeRFC1866( INOUT_PTR STREAM *headerStream,
 		ENSURES( LOOP_INVARIANT_MAX( index, 0, stringLength - 1 ) );
 
 		ch = byteToInt( string[ index ] );
-		if( isAlnum( ch ) )
+		if( isAlNum( ch ) )
 			{
 			status = sputc( headerStream, ch );
 			if( cryptStatusError( status ) )
@@ -443,9 +441,9 @@ int writeRequestHeader( INOUT_PTR STREAM *stream,
 			}
 		}
 	if( cryptStatusOK( status ) )
-		headerLength = stell( &headerStream );
+		status = headerLength = stell( &headerStream );
 	sMemDisconnect( &headerStream );
-	ENSURES( cryptStatusOK( status ) );
+	ENSURES( !cryptStatusError( status ) );
 	ENSURES( isShortIntegerRangeNZ( headerLength ) );
 
 	/* Send everything to the other side */
@@ -578,9 +576,9 @@ static int writeResponseHeader( INOUT_PTR STREAM *stream,
 			status = swrite( &headerStream, "\r\n", 2 );
 		}
 	if( cryptStatusOK( status ) )
-		headerLength = stell( &headerStream );
+		status = headerLength = stell( &headerStream );
 	sMemDisconnect( &headerStream );
-	ENSURES( cryptStatusOK( status ) );
+	ENSURES( !cryptStatusError( status ) );
 	ENSURES( isShortIntegerRangeNZ( headerLength ) );
 	return( sendHTTPData( stream, headerBuffer, headerLength, 
 						  transportFlag ) );
@@ -716,9 +714,9 @@ static int writeFunction( INOUT_PTR STREAM *stream,
 		ENSURES( cryptStatusOK( status ) );
 		status = swrite( &headerStream, "\r\n", 2 );
 		if( cryptStatusOK( status ) )
-			headerLength = stell( &headerStream );
+			status = headerLength = stell( &headerStream );
 		sMemDisconnect( &headerStream );
-		ENSURES( cryptStatusOK( status ) );
+		ENSURES( !cryptStatusError( status ) );
 		ENSURES( isShortIntegerRangeNZ( headerLength ) );
 		status = sendHTTPData( stream, headerBuffer, headerLength, 
 							   TRANSPORT_FLAG_FLUSH );

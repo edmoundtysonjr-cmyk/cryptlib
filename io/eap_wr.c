@@ -731,7 +731,7 @@ static int writeRADIUSEAP( INOUT_PTR STREAM *stream,
 	if( cryptStatusOK( status ) && hasParams )
 		status = sputc( &headerStream, eapParams->paramOpt );
 	if( cryptStatusOK( status ) )
-		headerLength = stell( &headerStream );
+		status = headerLength = stell( &headerStream );
 	sMemDisconnect( &headerStream );
 	if( cryptStatusError( status ) )
 		return( status );

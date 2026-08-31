@@ -461,7 +461,8 @@ static int readPkcs12header( INOUT_PTR STREAM *stream,
 
 	/* Make sure that the length information is sensible */
 	currentPos = stell( stream );
-	if( currentPos < 16 || endPos < 16 + MIN_P12_OBJECT_SIZE || \
+	if( cryptStatusError( currentPos ) || \
+		currentPos < 16 || endPos < 16 + MIN_P12_OBJECT_SIZE || \
 		checkOverflowAdd( currentPos, endPos ) || \
 		currentPos + endPos >= MAX_INTLENGTH_SHORT )
 		{

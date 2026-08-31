@@ -4495,14 +4495,16 @@ static int checkURLString( IN_BUFFER( urlLength ) const char *url,
 				/* It's a URL, not a DNS name */
 				return( CRYPT_ERRTYPE_ATTR_VALUE );
 				}
-			if( ( isDigit( url[ 0 ] ) && isDigit( url[ 1 ] ) ) || \
+			if( ( isDigit( byteToInt( url[ 0 ] ) ) && \
+				  isDigit( byteToInt( url[ 1 ] ) ) ) || \
 				( url[ 0 ] == '[' && \
-				  ( url[ 1 ] == ':' || isDigit( url[ 1 ] ) ) ) )
+				  ( url[ 1 ] == ':' || \
+				    isDigit( byteToInt( url[ 1 ] ) ) ) ) )
 				{
 				/* It's an IPv4 or IPv6 address, not a DNS name */
 				return( CRYPT_ERRTYPE_ATTR_VALUE );
 				}
-			if( !strCompare( url, "*.", 2 ) )
+			if( strSame( url, "*.", 2 ) )
 				{
 				url += 2;	/* Skip wildcard */
 				REQUIRES( !checkOverflowSub( length, 2 ) );
@@ -4518,7 +4520,7 @@ static int checkURLString( IN_BUFFER( urlLength ) const char *url,
 				/* Catch erroneous use of URL */
 				return( CRYPT_ERRTYPE_ATTR_VALUE );
 				}
-			if( !strCompare( url, "*@", 2 ) )
+			if( strSame( url, "*@", 2 ) )
 				{
 				url += 2;	/* Skip wildcard */
 				REQUIRES( !checkOverflowSub( length, 2 ) );
@@ -4530,10 +4532,10 @@ static int checkURLString( IN_BUFFER( urlLength ) const char *url,
 			if( urlLength < MIN_URL_SIZE || urlLength > MAX_URL_SIZE )
 				return( CRYPT_ERRTYPE_ATTR_SIZE );
 			if( schema == NULL || \
-				( strCompare( schema, "http://", 7 ) && \
-				  strCompare( schema, "https://", 8 ) ) )
+				( !strSame( schema, "http://", 7 ) && \
+				  !strSame( schema, "https://", 8 ) ) )
 				return( CRYPT_ERRTYPE_ATTR_VALUE );
-			if( !strCompare( url, "*.", 2 ) )
+			if( strSame( url, "*.", 2 ) )
 				{
 				url += 2;	/* Skip wildcard */
 				REQUIRES( !checkOverflowSub( length, 2 ) );

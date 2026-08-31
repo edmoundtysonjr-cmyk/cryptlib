@@ -96,7 +96,9 @@ static int processKeyFingerprint( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	return( CRYPT_OK );
 	}
 
-/* Handle a negotiated-parameters DH key exchange */
+/* Handle a negotiated-parameters DH key exchange.  Note that this 
+   disconnects and reconnects the stream in order to handle the exchange, 
+   and exits with the stream disconnected */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
 static int processDHE( INOUT_PTR SESSION_INFO *sessionInfoPtr,
@@ -480,8 +482,8 @@ static int beginClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   negotiated DH key value, in which case we have to request the keyex 
 	   key from the server.  This additional negotiation requires 
 	   disconnecting and re-connecting the data packet stream since it 
-	   exchanges further data with the server, so if there's an error return 
-	   we don't disconnect the stream before we exit */
+	   exchanges further data with the server, returning with the stream
+	   disconnected */
 	if( handshakeInfo->isFixedDH )
 		{
 		REQUIRES( !handshakeInfo->isECDH );
@@ -510,7 +512,10 @@ static int beginClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			status = processDHE( sessionInfoPtr, handshakeInfo, &stream );
 			if( cryptStatusError( status ) )
 				{
-				/* processDHE() has already disconnected the stream */
+				/* processDHE() sets SESSION_ERRINFO and also disconnects
+				   the stream as part of the DHE exchange so we need to exit 
+				   now rather than through the generic error handler further 
+				   down */
 				return( status );
 				}
 			}
@@ -525,7 +530,11 @@ static int beginClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 	if( cryptStatusError( status ) )
 		{
-		sMemDisconnect( &stream );
+		/* Fixed DH and ECDH are pure context-init functions while 
+		   processDHE() carries out a negotiation with the server that
+		   end with the stream already disconnected */
+		if( handshakeInfo->isFixedDH || handshakeInfo->isECDH )
+			sMemDisconnect( &stream );
 		retExt( status,
 				( status, SESSION_ERRINFO, 
 				  "Couldn't create %s ephemeral key data",
@@ -931,11 +940,24 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{
 		int fixedSigLength DUMMY_INIT;
 
+		/* RFC 4253 SSH DSA signatures use a fixed-length format (section 
+		   6.6) 'uint32 || r || s' where r and s are both around 20 bytes, 
+		   being for SHA1 + 1024-bit DSA keys (enforced by 
+		   context/key_rdpub.c:decodeDLValuesFunction()).  In theory an 
+		   attacker could send a large signature blob so that we're reading/
+		   writing overlapping memory regions which is technically UB but
+		   they're far enough apart that it doesn't matter.  However just to
+		   be sure we check that the signature blob isn't suspiciously 
+		   large.  This is an exception to an exception to an exception so 
+		   we don't bother with detailed error reporting */
+		if( sigLength > LENGTH_SIZE + 20 + 20 + 8 )
+			return( CRYPT_ERROR_BADDATA );
+
 		/* Rewrite the signature to fix up the overall length at the start 
 		   and insert the algorithm name and signature length.  We can 
 		   safely reuse the receive buffer for this because the start 
 		   contains the complete server key/certificate and keyex value 
-		   which is far longer than the 12 bytes of header plus signature 
+		   which is far longer than the 15 bytes of header plus signature 
 		   that we'll be writing there */
 		REQUIRES( !checkOverflowAdd( LENGTH_SIZE + sizeofString32( 7 ),
 									 sigLength ) );
@@ -945,7 +967,7 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		writeString32( &stream, "ssh-dss", 7 );
 		status = swrite( &stream, sigPtr, sigLength );
 		if( cryptStatusOK( status ) )
-			fixedSigLength = stell( &stream );
+			status = fixedSigLength = stell( &stream );
 		sMemDisconnect( &stream );
 		if( cryptStatusError( status ) )
 			return( status );
@@ -1002,6 +1024,12 @@ static int exchangeClientKeys( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	ENSURES( CFI_CHECK_SEQUENCE_4( "SSH_MSG_KEXDH_REPLY", "completeKeyex", 
 								   "iCryptCheckSignature", "cleanup" ) );
 	handshakeInfo->completedHSstate = HANDSHAKE_STATE_KEYEX;
+
+	/* Set the authentication-complete check value that enables data to be 
+	   exchanged over the SSH link.  Note that this means that we've 
+	   finished authenticating the server and can send data to it, not that
+	   we've been authenticated to the server which is an unrelated issue */
+	sessionInfoPtr->authComplete = TRUE;
 
 	return( CRYPT_OK );
 	}
@@ -1201,7 +1229,9 @@ static int completeClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			{
 			/* This is the first message after the change cipherspec, a 
 			   basic packet format error is more likely to be due to an 
-			   incorrect key than an actual format error */
+			   incorrect key than an actual format error.  Note that we
+			   pass in SESSION_ERRINFO twice since we're taking the existing
+			   error information and extending it with the new text string */
 			retExtErr( CRYPT_ERROR_WRONGKEY,
 					   ( CRYPT_ERROR_WRONGKEY, SESSION_ERRINFO, 
 						 SESSION_ERRINFO, 
@@ -1234,7 +1264,9 @@ static int completeClientHandshake( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			{
 			/* This is the first message after the change cipherspec, a 
 			   basic packet format error is more likely to be due to an 
-			   incorrect key than an actual format error */
+			   incorrect key than an actual format error.  As before we
+			   pass in SESSION_ERRINFO twice since we're augmenting the
+			   existing error information */
 			retExtErr( CRYPT_ERROR_WRONGKEY,
 					   ( CRYPT_ERROR_WRONGKEY, SESSION_ERRINFO, 
 						 SESSION_ERRINFO, 

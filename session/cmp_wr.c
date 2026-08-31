@@ -461,7 +461,7 @@ static int writePkiHeader( INOUT_PTR STREAM *stream,
 									   &algoIDparams );
 		}
 	if( cryptStatusOK( status ) )
-		protInfoLength = stell( &nullStream );
+		status = protInfoLength = stell( &nullStream );
 	sMemClose( &nullStream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -680,7 +680,7 @@ int writePkiMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	WRITEMESSAGE_FUNCTION writeMessageFunction;
 	BYTE protInfo[ 64 + MAX_PKCENCRYPTED_SIZE + 8 ], headerBuffer[ 8 + 8 ];
 	STREAM stream;
-	int headerSize DUMMY_INIT, protInfoSize, status;
+	int headerSize DUMMY_INIT, protInfoSize, position, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( protocolInfo, sizeof( CMP_PROTOCOL_INFO ) ) );
@@ -714,19 +714,21 @@ int writePkiMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* Generate the MAC or signature as appropriate */
+	position = stell( &stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
 	if( protocolInfo->useMACsend )
 		{
 		status = writeMacProtinfo( protocolInfo->iMacContext,
-						sessionInfoPtr->receiveBuffer, stell( &stream ),
-						protInfo, 64 + MAX_PKCENCRYPTED_SIZE, &protInfoSize,
+						sessionInfoPtr->receiveBuffer, position, protInfo, 
+						64 + MAX_PKCENCRYPTED_SIZE, &protInfoSize,
 						SESSION_ERRINFO );
 		}
 	else
 		{
 		status = writeSignedProtinfo( protocolInfo->authContext, 
 						protocolInfo->hashAlgo, protocolInfo->hashParam,
-						sessionInfoPtr->receiveBuffer, stell( &stream ),
-						protInfo, 64 + MAX_PKCENCRYPTED_SIZE, &protInfoSize,
+						sessionInfoPtr->receiveBuffer, position, protInfo, 
+						64 + MAX_PKCENCRYPTED_SIZE, &protInfoSize,
 						SESSION_ERRINFO );
 		}
 	if( cryptStatusError( status ) )
@@ -774,9 +776,10 @@ int writePkiMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	/* We've written the entire message, determine how long it is so that we 
 	   can add the header */
-	sessionInfoPtr->receiveBufEnd = stell( &stream );
+	position = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( isBufsizeRangeNZ( sessionInfoPtr->receiveBufEnd ) );
+	ENSURES( isBufsizeRangeNZ( position ) );
+	sessionInfoPtr->receiveBufEnd = position;
 
 	/* Write the wrapper and move it onto the front of the message:
 
@@ -796,9 +799,9 @@ int writePkiMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	sMemOpen( &stream, headerBuffer, 8 );
 	status = writeSequence( &stream, sessionInfoPtr->receiveBufEnd );
 	if( cryptStatusOK( status ) )
-		headerSize = stell( &stream );
+		status = headerSize = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( cryptStatusOK( status ) );
+	ENSURES( !cryptStatusError( status ) );
 	ENSURES( isShortIntegerRangeNZ( headerSize ) );
 	REQUIRES( boundsCheck( headerSize, sessionInfoPtr->receiveBufEnd,
 						   sessionInfoPtr->receiveBufSize ) );

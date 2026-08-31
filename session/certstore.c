@@ -92,7 +92,7 @@ int processCertQuery( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					  OUT_OPT_LENGTH_SHORT_Z int *attributeLen )
 	{
 	const CERTSTORE_READ_INFO *queryInfoPtr = NULL;
-	const int firstChar = toLower( httpReqInfo->attribute[ 0 ] );
+	const int firstChar = toLower( byteToInt( httpReqInfo->attribute[ 0 ] ) );
 	LOOP_INDEX i;
 	int status;
 
@@ -131,9 +131,9 @@ int processCertQuery( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 		if( httpReqInfo->attributeLen == queryReqInfo[ i ].attrNameLen && \
 			queryReqInfo[ i ].attrName[ 0 ] == firstChar && \
-			!strCompare( httpReqInfo->attribute, \
-						 queryReqInfo[ i ].attrName, \
-						 queryReqInfo[ i ].attrNameLen ) )
+			strSame( httpReqInfo->attribute, \
+					 queryReqInfo[ i ].attrName, \
+					 queryReqInfo[ i ].attrNameLen ) )
 			{
 			queryInfoPtr = &queryReqInfo[ i ];
 			break;

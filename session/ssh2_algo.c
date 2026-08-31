@@ -332,6 +332,8 @@ static int checkSignalAlgo( IN_BUFFER( nameLength ) const void *name,
 		if( signalAlgoInfoPtr->nameLen == nameLength && \
 			!memcmp( signalAlgoInfoPtr->name, name, nameLength ) )
 			{
+			REQUIRES( isEnumRange( signalAlgoInfoPtr->parameter,
+								   SIGNAL_INDICATOR ) );
 			*indicatorType = signalAlgoInfoPtr->parameter;
 
 			/* Let the caller know that we've found a match */
@@ -551,8 +553,10 @@ static int readAlgoStringEx( INOUT_PTR STREAM *stream,
 		if( substringLen < SSH2_MIN_ALGOID_SIZE || \
 			substringLen >= MAX_SUBSTRING_SIZE )
 			{
-			retExt( CRYPT_ERROR_OVERFLOW,
-					( CRYPT_ERROR_OVERFLOW, errorInfo, 
+			status = ( substringLen < SSH2_MIN_ALGOID_SIZE ) ? \
+					 CRYPT_ERROR_UNDERFLOW : CRYPT_ERROR_OVERFLOW;
+			retExt( status,
+					( status, errorInfo, 
 					  "Invalid (%d characters) SSH algorithm string "
 					  "encountered", substringLen ) );
 			}
@@ -733,8 +737,12 @@ static int readAlgoStringEx( INOUT_PTR STREAM *stream,
 			break;	
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( noStrings >= MAX_NO_SUBSTRINGS )
+	if( noStrings >= MAX_NO_SUBSTRINGS && \
+		stringPos <= stringLen - SSH2_MIN_ALGOID_SIZE )
 		{
+		/* We only exit if there's more string data left to process, 
+		   otherwise an exit at exactly MAX_NO_SUBSTRINGS would lead to a 
+		   FP error report */
 		retExt( CRYPT_ERROR_OVERFLOW,
 				( CRYPT_ERROR_OVERFLOW, errorInfo, 
 				  "Excessive number (more than %d) of SSH algorithm "
@@ -752,6 +760,8 @@ static int readAlgoStringEx( INOUT_PTR STREAM *stream,
 		}
 
 	/* We found a more-preferred algorithm than the default, go with that */
+	REQUIRES( rangeCheck( algoIndex, 0, \
+						  algoStringInfo->noAlgoInfoEntries - 1 ) );
 	algoInfoPtr = &algoStringInfo->algoInfo[ algoIndex ];
 	algoStringInfo->algo = algoInfoPtr->algo;
 	algoStringInfo->subAlgo = algoInfoPtr->subAlgo;
@@ -806,10 +816,12 @@ int readAlgoString( INOUT_PTR STREAM *stream,
 	}
 
 /* Algorithms used to protect data packets are used in pairs, one for
-   incoming and the other for outgoing data.  To keep things simple we
-   always force these to be the same, first reading the algorithm for one
-   direction and then making sure that the one for the other direction
-   matches this.  All implementations seem to do this anyway, many aren't
+   incoming and the other for outgoing data (no-one knows why, possibly
+   cargo-culting IPsec).  These algorithms are encryption, MAC, and also 
+   data compression for which we only allow "none".  To keep things simple 
+   we always force these to be the same, first reading the algorithm for one 
+   direction and then making sure that the one for the other direction 
+   matches this.  All implementations seem to do this anyway, many aren't 
    even capable of supporting asymmetric algorithm choices */
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4, 5, 6, 9 ) ) \
@@ -839,16 +851,29 @@ static int readAlgoStringPair( INOUT_PTR STREAM *stream,
 	REQUIRES( noAlgoStringEntries >= 1 && noAlgoStringEntries <= 16 );
 	REQUIRES( isBooleanValue( isServer ) );
 	REQUIRES( isBooleanValue( allowAsymmetricAlgos ) );
+			  /* This is currently unused, it's to allow for asymmetric
+			     compression algorithms in old implementations of some
+			     libraries (see session/ssh2_id.c), however we currently
+			     don't allow any compression algorithm other than "none" so 
+			     the algorithm string will get rejected before we get to 
+			     performing the check.  Without access to anything that 
+			     exhibits the bug it's not possible to test this, but a
+			     workaround would be to either add dummy entries for the
+			     algorithm names that then get ignored, or to just no-op 
+			     out the compression-algorithm read with readUniversal32() 
+			     and auto-reply with our own "none" */
 
 	/* Clear return values */
 	*algo = CRYPT_ALGO_NONE;
 	*mode = CRYPT_MODE_NONE;
 	*parameter = 0;
 
-	/* Get the first algorithm */
+	/* Get the first algorithm.  If we're the client then we look for a 
+	   best-match for the parameters the server has offered, if we're the 
+	   server then we look for the first matching set of parameters from
+	   our offering echoed back to us by the client */
 	setAlgoStringInfo( &algoStringInfo, algoInfo, noAlgoStringEntries, 
-					   isServer ? GETALGO_FIRST_MATCH : \
-								  GETALGO_BEST_MATCH );
+					   isServer ? GETALGO_FIRST_MATCH : GETALGO_BEST_MATCH );
 	status = readAlgoStringEx( stream, &algoStringInfo, errorInfo );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -859,17 +884,62 @@ static int readAlgoStringPair( INOUT_PTR STREAM *stream,
 	   algorithms) but have no problems in accepting the same algorithm in 
 	   both directions, so if we're talking to one of these then we ignore 
 	   an algorithm mismatch */
-	setAlgoStringInfoEx( &algoStringInfo, algoInfo, noAlgoStringEntries,
-						 pairPreferredAlgo, GETALGO_FIRST_MATCH );
+	if( isServer )
+		{
+		/* We're the server, get the first (preferred) match from the 
+		   client */
+		setAlgoStringInfoEx( &algoStringInfo, algoInfo, noAlgoStringEntries,
+							 pairPreferredAlgo, GETALGO_FIRST_MATCH );
+		}
+	else
+		{
+		/* We're the client matching the server, repeat the same match 
+		   process that we applied the first time */
+		setAlgoStringInfo( &algoStringInfo, algoInfo, noAlgoStringEntries, 
+						   GETALGO_BEST_MATCH );
+		}
 	status = readAlgoStringEx( stream, &algoStringInfo, errorInfo );
 	if( cryptStatusError( status ) )
 		return( status );
-	if( pairPreferredAlgo != algoStringInfo.algo && !allowAsymmetricAlgos )
+
+	/* Check for a mismatch.  This is just a minimal sanity check that the
+	   basic algorithms, but not any associated parameters, match.  The 
+	   problem with checking all of the parameters as well is that it gets
+	   extremely complicated, all for a problem that doesn't seem to exist 
+	   (see the comment for the function as a whole).
+	   
+	   For example if the first algorithm string seen by the server is 
+	   "aes256-cbc,aes128-cbc" then the chosen parameters will be 
+	   { AES, keysize = 32 }.  If the second string is then 
+	   "aes128-cbc,aes256-cbc" then the parameters will be 
+	   { AES, keysize = 16 }, leading to a mismatch (the problem is still 
+	   present but slightly different on the client side, which uses 
+	   GETALGO_BEST_MATCH rather than GETALGO_FIRST_MATCH).
+	   
+	   Leaving aside the argument over whether an implementation doing that 
+	   is broken (it is), resolving this would require building a set of
+	   everything offered in the first string and matching it to what's
+	   offered in the second one to create an intersection of the two lists, 
+	   a complex and potentially error-prone way to catch something that's 
+	   never occurred in practice (cryptlib can't do asymmetric algorithms
+	   across an algorithm pair and nobody's ever reported a problem with 
+	   this).
+	   
+	   A safer middle path is to only compare the algorithm and warn about
+	   a mismatch on that, if there really is something out there that 
+	   switches algorithms then this will be caught a few messages later 
+	   after the change-cipherspec message, however we also assert in debug
+	   mode in case this is ever triggered */
+	if( pairPreferredAlgo != algoStringInfo.algo )
 		{
+		DEBUG_DIAG(( "Peer sent mismatched algorithms in encryption/MAC "
+					 "algorithm pair" ));
+		assert_nofuzz( DEBUG_WARN );
 		retExt( CRYPT_ERROR_BADDATA,
 				( CRYPT_ERROR_BADDATA, errorInfo, 
-				  "Client algorithm %s doesn't match server algorithm %s "
-				  "in algorithm pair", getAlgoName( pairPreferredAlgo ), 
+				  "Algorithm %s in first half of algorithm pair doesn't "
+				  "match algorithm %s in second half", 
+				  getAlgoName( pairPreferredAlgo ), 
 				  getAlgoName( algoStringInfo.algo ) ) );
 		}
 	*algo = algoStringInfo.algo;
@@ -973,6 +1043,7 @@ int writeAlgoStringEx( INOUT_PTR STREAM *stream,
 														   ALGO_STRING_INFO ) && \
 								algoStringMapTbl[ algoIndex ].name != NULL && \
 								algoStringMapTbl[ algoIndex ].algo == algo && \
+								algoStringMapTbl[ algoIndex ].subAlgo == subAlgo && \
 								algoStringMapTbl[ algoIndex ].parameter != parameter,
 						   algoIndex++ )
 			{
@@ -984,6 +1055,7 @@ int writeAlgoStringEx( INOUT_PTR STREAM *stream,
 		ENSURES( algoIndex < FAILSAFE_ARRAYSIZE( algoStringMapTbl, \
 												 ALGO_STRING_INFO ) );
 		ENSURES( algoStringMapTbl[ algoIndex ].algo == algo && \
+				 algoStringMapTbl[ algoIndex ].subAlgo == subAlgo && \
 				 algoStringMapTbl[ algoIndex ].parameter == parameter );
 		}
 
@@ -1113,8 +1185,8 @@ static int writeAlgoListEx( INOUT_PTR STREAM *stream,
 										 signalAlgoInfo->nameLen + 1 ) );
 			length += signalAlgoInfo->nameLen + 1;
 			}		  /* Room for comma delimiter */
+		ENSURES( LOOP_BOUND_OK );
 		}
-	ENSURES( LOOP_BOUND_OK );
 
 	/* Encode the list of available algorithms into a comma-separated string */
 	status = writeUint32( stream, length );
@@ -1550,9 +1622,9 @@ int checkReadPublicKey( INOUT_PTR STREAM *stream,
 	int algoParam DUMMY_INIT, dummy, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
+	assert( isWritePtr( pubkeyAlgo, sizeof( CRYPT_ALGO_TYPE ) ) );
 	assert( isWritePtr( keyDataStart, sizeof( int ) ) );
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
-	assert( isWritePtr( keyDataStart, sizeof( int ) ) );
 
 	/* Clear return values */
 	*pubkeyAlgo = CRYPT_ALGO_NONE;

@@ -55,11 +55,43 @@ static int checkPgpUsage( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 	REQUIRES( DATAPTR_ISVALID( envelopeInfoPtr->preActionList ) );
 
-	/* PGP doesn't support both PKC and conventional key exchange actions in 
-	   the same envelope since the session key is encrypted for the PKC 
-	   action but derived from the password for the conventional action */
-	if( findPreAction( envelopeInfoPtr, ACTION_KEYEXCHANGE ) != NULL )
-		return( CRYPT_ERROR_INITED );
+	/* PGP doesn't support both PKC and conventional key exchange actions in
+	   the same envelope since the session key is encrypted for the PKC
+	   action but derived from the password for the conventional action.
+	   Since PGP derives the session key directly from the password, the
+	   resulting context is added directly to the main action list as the
+	   session key, so we can detect a conflict between a PKC and password
+	   (leading to a session key) by checking for the presence of one when
+	   the other is being added.
+
+	   In theory this would also trigger for a PKC action alongside an
+	   explicitly-supplied session key, but CRYPT_ENVINFO_SESSIONKEY and
+	   CRYPT_ENVINFO_KEY are both restricted to the non-PGP formats (see
+	   envelopes/env_attr.c:setEnvelopeAttribute() and checkTable[]) so for
+	   PGP the only way to have a session key present is via a password.
+	   
+	   This check is specific to the point at which enveloping information 
+	   is being added, so at this point a session key can only have come 
+	   from a password.  The same check isn't applied in 
+	   envelope/res_action.c:checkActions() because this runs at a later 
+	   time when a session key generated for the PKC action is legitimately 
+	   present alongside it */
+	if( envInfo == CRYPT_ENVINFO_PUBLICKEY || \
+		envInfo == CRYPT_ENVINFO_PRIVATEKEY )
+		{
+		/* We're adding a PKC key exchange action, there can't already be a
+		   session key (from a password) present */
+		if( findAction( envelopeInfoPtr, ACTION_CRYPT ) != NULL )
+			return( CRYPT_ERROR_INITED );
+		}
+	if( envInfo == CRYPT_ENVINFO_SESSIONKEY )
+		{
+		/* We're adding a session key (from a password), there can't already
+		   be a PKC key exchange action present */
+		if( findPreAction( envelopeInfoPtr, ACTION_KEYEXCHANGE_PKC ) != NULL )
+			return( CRYPT_ERROR_INITED );
+		}
+	REQUIRES( envInfo != CRYPT_ENVINFO_KEY );
 
 	/* PGP handles multiple signers by nesting signed data rather than 
 	   attaching multiple signatures so we can only apply a single 
@@ -289,6 +321,10 @@ static int checkMissingInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	   present */
 	switch( envelopeInfoPtr->usage )
 		{
+		case ACTION_NONE:
+			/* Nothing to check */
+			break;
+		
 		case ACTION_COMPRESS:
 			REQUIRES( TEST_FLAG( envelopeInfoPtr->flags, 
 								 ENVELOPE_FLAG_ZSTREAMINITED ) );
@@ -369,6 +405,9 @@ static int checkMissingInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 					}
 				}
 			break;
+			
+		default:
+			retIntError();
 		}
 
 	REQUIRES( signingKeyPresent || \
@@ -419,6 +458,7 @@ int addKeysetInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 				   IN_HANDLE const CRYPT_KEYSET keyset )
 	{
 	CRYPT_KEYSET *iKeysetPtr;
+	int status;
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 
@@ -456,8 +496,10 @@ int addKeysetInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		}
 
 	/* Remember the new keyset and increment its reference count */
-	*iKeysetPtr = keyset;
-	return( krnlSendNotifier( keyset, IMESSAGE_INCREFCOUNT ) );
+	status = krnlSendNotifier( keyset, IMESSAGE_INCREFCOUNT );
+	if( cryptStatusOK( status ) )
+		*iKeysetPtr = keyset;
+	return( status );
 	}
 
 /* Add an encryption password */
@@ -496,10 +538,7 @@ static int addPasswordInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 		cryptAlgo = DEFAULT_CRYPT_ALGO;
 	else
 		{
-		ALGOID_PARAMS algoIDparams;
-
-		initAlgoIDparamsCrypt( &algoIDparams, CRYPT_MODE_CBC, 0 );
-		if( cryptStatusError( sizeofAlgoIDex( cryptAlgo, &algoIDparams ) ) )
+		if( !checkAlgoID( cryptAlgo, CRYPT_MODE_CBC ) )
 			cryptAlgo = DEFAULT_CRYPT_ALGO;
 		}
 	setMessageCreateObjectInfo( &createInfo, cryptAlgo );
@@ -553,8 +592,8 @@ static int addPgpPasswordInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 	{
 	CRYPT_ALGO_TYPE cryptAlgo = envelopeInfoPtr->defaultAlgo;
 	CRYPT_CONTEXT iCryptContext;
-	const ACTION_LIST *preActionListPtr = \
-					DATAPTR_GET( envelopeInfoPtr->preActionList );
+	const ACTION_LIST *actionListPtr = \
+					DATAPTR_GET( envelopeInfoPtr->actionList );
 	MESSAGE_CREATEOBJECT_INFO createInfo;
 	MESSAGE_DATA msgData;
 	BYTE salt[ PGP_SALTSIZE + 8 ];
@@ -563,15 +602,14 @@ static int addPgpPasswordInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 
 	assert( isWritePtr( envelopeInfoPtr, sizeof( ENVELOPE_INFO ) ) );
 	assert( isReadPtrDynamic( password, passwordLength ) );
-	assert( preActionListPtr == NULL || \
-			isReadPtr( preActionListPtr, sizeof( ACTION_LIST ) ) );
 
 	REQUIRES( passwordLength > 0 && passwordLength <= CRYPT_MAX_TEXTSIZE );
 	REQUIRES( envelopeInfoPtr->type == CRYPT_FORMAT_PGP );
+	REQUIRES( DATAPTR_ISVALID( envelopeInfoPtr->actionList ) );
 	REQUIRES( DATAPTR_ISVALID( envelopeInfoPtr->preActionList ) );
 
 	/* Make sure that we can still add another attribute */
-	if( !moreActionsPossible( preActionListPtr ) )
+	if( !moreActionsPossible( actionListPtr ) )
 		return( CRYPT_ERROR_OVERFLOW );
 
 	/* PGP doesn't support both PKC and conventional key exchange actions or 
@@ -1097,16 +1135,20 @@ static int addEnvelopeInfo( INOUT_PTR ENVELOPE_INFO *envelopeInfoPtr,
 									cryptHandle, ACTION_KEYEXCHANGE_PKC ) );
 
 		case CRYPT_ENVINFO_KEY:
-			/* PGP doesn't allow KEK-based encryption so if it's a PGP
-			   envelope we drop through and treat it as a session key */
-			if( envelopeInfoPtr->type != CRYPT_FORMAT_PGP )
-				{
-				return( addContextInfo( envelopeInfoPtr, ACTIONLIST_PREACTION,
-										cryptHandle, ACTION_KEYEXCHANGE ) );
-				}
-			STDC_FALLTHROUGH;
+			/* PGP doesn't allow KEK-based encryption and higher-level 
+			   checks mean that we can never get here for a PGP envelope */
+			ENSURES( envelopeInfoPtr->type != CRYPT_FORMAT_PGP );
+
+			return( addContextInfo( envelopeInfoPtr, ACTIONLIST_PREACTION,
+									cryptHandle, ACTION_KEYEXCHANGE ) );
 
 		case CRYPT_ENVINFO_SESSIONKEY:
+			/* PGP doesn't allow raw session-key-based encryption (the 
+			   session key is derived from the password, not set directly) 
+			   and higher-level checks mean that we can never get here for a 
+			   PGP envelope */
+			ENSURES( envelopeInfoPtr->type != CRYPT_FORMAT_PGP );
+
 			/* We can't add more than one session key */
 			if( DATAPTR_ISSET( envelopeInfoPtr->actionList ) )
 				{

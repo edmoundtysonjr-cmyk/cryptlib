@@ -380,9 +380,19 @@ typedef enum {
    universally a password even though you're supposed to pretend that it 
    isn't */
 
-typedef enum { URL_TYPE_NONE, URL_TYPE_HTTP, URL_TYPE_HTTPS, 
-			   URL_TYPE_WEBSOCKET, URL_TYPE_SSH, URL_TYPE_CMP, URL_TYPE_TSP, 
-			   URL_TYPE_LDAP, URL_TYPE_LAST } URL_TYPE;
+typedef enum { 
+	URL_TYPE_NONE,					/* Nonspecific URL type */
+	URL_TYPE_HTTP,					/* HTTP URL */
+	URL_TYPE_HTTPS,					/* HTTPS URL */
+	URL_TYPE_WEBSOCKET,				/* WebSockets URL */
+	URL_TYPE_SSH,					/* SSH URL */
+	URL_TYPE_CMP,					/* CMP URL */
+	URL_TYPE_TSP,					/* TSP URL */
+	URL_TYPE_LDAP,					/* LDAP URL */
+	URL_TYPE_TEMPLATE,				/* URL template string, e.g. from a 
+									   wildcard certificate */
+	URL_TYPE_LAST					/* Last possible URL type */
+	} URL_TYPE;
 
 typedef struct {
 	URL_TYPE type;
@@ -614,7 +624,7 @@ CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int sflush( INOUT_PTR STREAM *stream );
 RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int sseek( INOUT_PTR STREAM *stream, IN_LENGTH_Z const int position );
-CHECK_RETVAL_RANGE_NOERROR( 0, MAX_BUFFER_SIZE ) STDC_NONNULL_ARG( ( 1 ) ) \
+CHECK_RETVAL_RANGE( 0, MAX_BUFFER_SIZE ) STDC_NONNULL_ARG( ( 1 ) ) \
 int stell( const STREAM *stream );
 RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int sioctlSet( INOUT_PTR STREAM *stream, 
@@ -760,14 +770,6 @@ int sFileOpen( OUT_PTR STREAM *stream,
 RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int sFileClose( INOUT_PTR STREAM *stream );
 
-/* Convert a file stream to a memory stream */
-
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 3 ) ) \
-int sFileToMemStream( OUT_PTR STREAM *memStream, 
-					  INOUT_PTR STREAM *fileStream,
-					  OUT_BUFFER_ALLOC_OPT( length ) void **bufPtrPtr, 
-					  IN_DATALENGTH const int length );
-
 /* Special-case file I/O calls.  fileBuildCryptlibPath() both returns a 
    length and null-terminates the path for use with low-level file 
    functions */
@@ -827,7 +829,7 @@ void sNetGetErrorInfo( INOUT_PTR STREAM *stream,
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int streamOffsetFromPosition( INOUT_PTR STREAM *stream,
 							  IN_DATALENGTH_Z const int startOffset,
-							  OUT_DATALENGTH_Z int *length );
+							  OUT_DATALENGTH int *length );
 
 /* Initialisation/shutdown functions for network stream interfaces */
 

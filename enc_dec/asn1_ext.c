@@ -37,7 +37,8 @@ int sizeofMessageDigest( IN_ALGO const CRYPT_ALGO_TYPE hashAlgo,
 
 	initAlgoIDparamsHash( &algoIDparams, hashAlgo, hashSize );
 	status = algoInfoSize = sizeofAlgoIDex( hashAlgo, &algoIDparams );
-	ENSURES( !cryptStatusError( status ) );
+	if( cryptStatusError( status ) )
+		return( status );
 	ENSURES( isShortIntegerRangeMin( algoInfoSize, 8 ) );
 	hashInfoSize = sizeofShortObject( hashSize );
 	ENSURES( isShortIntegerRangeMin( hashInfoSize, hashSize ) );
@@ -62,7 +63,8 @@ int writeMessageDigest( INOUT_PTR STREAM *stream,
 
 	initAlgoIDparamsHash( &algoIDparams, hashAlgo, hashSize );
 	status = algoInfoSize = sizeofAlgoIDex( hashAlgo, &algoIDparams );
-	ENSURES_S( !cryptStatusError( status ) );
+	if( cryptStatusError( status ) )
+		return( sSetError( stream, status ) );
 	writeSequence( stream, algoInfoSize + sizeofShortObject( hashSize ) );
 	status = writeAlgoIDex( stream, hashAlgo, &algoIDparams, DEFAULT_TAG );
 	if( cryptStatusOK( status ) )
@@ -176,6 +178,11 @@ int readCMSheader( INOUT_PTR STREAM *stream,
 	status = readOIDEx( stream, oidInfo, noOidInfoEntries, &oidInfoPtr );
 	if( cryptStatusError( status ) )
 		return( status );
+
+	/* Make sure that we haven't matched on a wildcard OID, which won't
+	   match any of the entries below */
+	ENSURES_S( !matchOID( oidInfoPtr->oid, sizeofOID( oidInfoPtr->oid ),
+						  WILDCARD_OID ) );
 
 	/* If the content type is data then the content is an OCTET STRING 
 	   rather than a SEQUENCE so we remember the type for later */
@@ -395,10 +402,7 @@ int writeCMSheader( INOUT_PTR STREAM *stream,
 					IN_LENGTH_INDEF const int dataSize, 
 					IN_BOOL const BOOLEAN isInnerHeader )
 	{
-	BOOLEAN isOctetString = ( isInnerHeader || \
-							  ( contentOIDlength == 11 && \
-							  !memcmp( contentOID, OID_CMS_DATA, 11 ) ) ) ? \
-							TRUE : FALSE;
+	BOOLEAN isOctetString;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtrDynamic( contentOID, contentOIDlength ) && \
@@ -410,6 +414,13 @@ int writeCMSheader( INOUT_PTR STREAM *stream,
 	REQUIRES_S( dataSize == CRYPT_UNUSED || isIntegerRange( dataSize ) );
 				/* May be zero for degenerate (detached) signatures */
 	REQUIRES_S( isBooleanValue( isInnerHeader ) );
+
+	/* Now that we've checked everything, set up the various values that
+	   we'll need */
+	isOctetString = ( isInnerHeader || \
+					  ( contentOIDlength == 11 && \
+					  !memcmp( contentOID, OID_CMS_DATA, 11 ) ) ) ? \
+					TRUE : FALSE;
 
 	/* The handling of the wrapper type for the content is rather complex.
 	   If it's an outer header, it's an OCTET STRING for data and a SEQUENCE
@@ -440,7 +451,7 @@ int writeCMSheader( INOUT_PTR STREAM *stream,
 		int status;
 
 		if( checkEncodeOverflow( dataSize, 2, contentOIDlength, 0 ) )
-			return( CRYPT_ERROR_OVERFLOW );
+			return( sSetError( stream, CRYPT_ERROR_OVERFLOW ) );
 		writeSequence( stream, contentOIDlength + ( ( dataSize > 0 ) ? \
 					   sizeofObject( sizeofObject( dataSize ) ) : 0 ) );
 		status = swrite( stream, contentOID, contentOIDlength );
@@ -484,7 +495,7 @@ int sizeofCMSencrHeader( IN_BUFFER( contentOIDlength ) const BYTE *contentOID,
 	sMemNullOpen( &nullStream );
 	status = writeCryptContextAlgoID( &nullStream, iCryptContext );
 	if( cryptStatusOK( status ) )
-		cryptInfoSize = stell( &nullStream );
+		status = cryptInfoSize = stell( &nullStream );
 	sMemClose( &nullStream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -494,12 +505,14 @@ int sizeofCMSencrHeader( IN_BUFFER( contentOIDlength ) const BYTE *contentOID,
 	   the definite or indefinite forms */
 	if( dataSize == CRYPT_UNUSED )
 		{
-		/* The size 2 is for the tag + 0x80 indefinite-length indicator and 
-		   the EOC octets at the end */
+		/* The first size 2 is for the tag + 0x80 indefinite-length 
+		   indicator, the second for the inner header [0] + 0x80 indefinite-
+		   length indicator */
 		return( 2 + contentOIDlength + cryptInfoSize + 2 );
 		}
-	if( checkEncodeOverflow( dataSize, 1, 
-							 contentOIDlength + cryptInfoSize, 0 ) )
+	if( checkOverflowAdd( contentOIDlength, cryptInfoSize ) || \
+		checkEncodeOverflow( dataSize, 1, 
+							 contentOIDlength + cryptInfoSize, 1 ) )
 		return( CRYPT_ERROR_OVERFLOW );
 	length = sizeofObject( contentOIDlength + cryptInfoSize + \
 						   sizeofObject( dataSize ) ) - dataSize;
@@ -571,16 +584,16 @@ int readCMSencrHeader( INOUT_PTR STREAM *stream,
 		return( status );
 		}
 	ANALYSER_HINT( isValidTag( tag ) );	/* Guaranteed by peekTag() */
+	if( tag != MAKE_CTAG( 0 ) && tag != MAKE_CTAG_PRIMITIVE( 0 ) )
+		{
+		/* The inner content type has an incorrect tag */
+		if( iCryptContext != NULL )
+			krnlSendNotifier( *iCryptContext, IMESSAGE_DECREFCOUNT );
+		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
+		}
 	status = readLongGenericHole( stream, &length, tag );
 	if( cryptStatusOK( status ) )
 		{
-		/* Make sure that the inner content type has the correct tag */
-		if( tag != MAKE_CTAG( 0 ) && tag != MAKE_CTAG_PRIMITIVE( 0 ) )
-			{
-			sSetError( stream, CRYPT_ERROR_BADDATA );
-			status = CRYPT_ERROR_BADDATA;
-			}
-
 		/* If we've been asked to provide a definite length but there's none 
 		   available, return an error */
 		if( ( flags & READCMS_FLAG_DEFINITELENGTH ) && \
@@ -627,18 +640,19 @@ int writeCMSencrHeader( INOUT_PTR STREAM *stream,
 	sMemNullOpen( &nullStream );
 	status = writeCryptContextAlgoID( &nullStream, iCryptContext );
 	if( cryptStatusOK( status ) )
-		cryptInfoSize = stell( &nullStream );
+		status = cryptInfoSize = stell( &nullStream );
 	sMemClose( &nullStream );
 	if( cryptStatusError( status ) )
-		return( status );
+		return( sSetError( stream, status ) );
 	ENSURES_S( isIntegerRangeNZ( cryptInfoSize ) );
 
 	/* If a size is given, write the definite form */
 	if( dataSize != CRYPT_UNUSED )
 		{
-		if( checkEncodeOverflow( dataSize, 1, 
+		if( checkOverflowAdd( contentOIDlength, cryptInfoSize ) || \
+			checkEncodeOverflow( dataSize, 1, 
 								 contentOIDlength + cryptInfoSize, 0 ) )
-			return( CRYPT_ERROR_OVERFLOW );
+			return( sSetError( stream, CRYPT_ERROR_OVERFLOW ) );
 		writeSequence( stream, contentOIDlength + cryptInfoSize + \
 					   sizeofObject( dataSize ) );
 		swrite( stream, contentOID, contentOIDlength );

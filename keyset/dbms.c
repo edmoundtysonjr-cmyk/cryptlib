@@ -435,7 +435,7 @@ int dbmsFormatQuery( OUT_BUFFER( outMaxLength, *outLength ) char *output,
 		{
 		ENSURES( LOOP_INVARIANT_MAX( inPos, 0, inputLength - 1 ) );
 
-		if( !isPrint( input[ inPos ] ) )
+		if( !isPrint( byteToInt( input[ inPos ] ) ) )
 			return( CRYPT_ERROR_BADDATA );
 		}
 	ENSURES( LOOP_BOUND_OK );
@@ -474,7 +474,7 @@ int dbmsFormatQuery( OUT_BUFFER( outMaxLength, *outLength ) char *output,
 			/* Extract the field name and translate it into the table
 			   column name */
 			LOOP_LARGE_CHECKINC_ALT( inPos < inputLength && \
-										isAlpha( input[ inPos ] ), 
+										isAlpha( byteToInt( input[ inPos ] ) ), 
 									 inPos++ )
 				{
 				ENSURES( LOOP_INVARIANT_LARGE_XXX_ALT( inPos, 0, 
@@ -498,8 +498,8 @@ int dbmsFormatQuery( OUT_BUFFER( outMaxLength, *outLength ) char *output,
 																	 NAMEMAP_INFO ) - 1 ) );
 
 				if( length == nameMapTbl[ i ].sourceLength && \
-					!strCompare( fieldName, nameMapTbl[ i ].sourceName, \
-								 length ) )
+					strSame( fieldName, nameMapTbl[ i ].sourceName, \
+							 length ) )
 					break;
 				}
 			ENSURES( LOOP_BOUND_OK_ALT );

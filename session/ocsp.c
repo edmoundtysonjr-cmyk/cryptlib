@@ -112,7 +112,10 @@ static int checkNonce( IN_HANDLE const CRYPT_CERTIFICATE iCertResponse,
 	   OCTET STRING.  In theory this means that we might need to check for 
 	   the INTEGER-encoding alternatives that arise due to sign bits, but 
 	   this doesn't seem to be required in practice since everyone uses a de 
-	   facto encoding of OCTET STRING */
+	   facto encoding of OCTET STRING.
+	   
+	   We use a memcmp() rather than compareDataConstTime() because the 
+	   nonce is a public value */
 	if( requestNonceLength != responseMsgData.length || \
 		memcmp( requestNonce, responseMsgData.data, requestNonceLength ) )
 		return( CRYPT_ERROR_SIGNATURE );
@@ -187,7 +190,7 @@ static int readServerResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	const char *errorString = NULL;
 #endif /* USE_ERRMSGS */
 	CFI_CHECK_TYPE CFI_CHECK_VALUE = CFI_CHECK_INIT;
-	int errorCode, responseType, length, status;
+	int errorCode, responseType, length DUMMY_INIT, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
@@ -327,9 +330,11 @@ static int readServerResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	clearErrorInfo( &localErrorInfo );
 	readConstructed( &stream, NULL, 0 );		/* responseBytes */
 	readSequence( &stream, NULL );
-	readOID( &stream, ocspOIDinfo,				/* responseType */
-			 FAILSAFE_ARRAYSIZE( ocspOIDinfo, OID_INFO ), &responseType );
-	status = readGenericHole( &stream, &length, 16, DEFAULT_TAG );
+	status = readOID( &stream, ocspOIDinfo,		/* responseType */
+					  FAILSAFE_ARRAYSIZE( ocspOIDinfo, OID_INFO ), 
+					  &responseType );
+	if( cryptStatusOK( status ) )
+		status = readGenericHole( &stream, &length, 16, DEFAULT_TAG );
 	if( cryptStatusError( status ) )
 		{
 		sMemDisconnect( &stream );
@@ -569,7 +574,7 @@ static int sendServerResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	{
 	MESSAGE_DATA msgData;
 	STREAM stream;
-	int responseLength, responseDataLength, status;
+	int responseLength, responseDataLength, position DUMMY_INIT, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
@@ -617,6 +622,8 @@ static int sendServerResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	responseDataLength = msgData.length;
 
 	/* Write the wrapper for the response */
+	REQUIRES( !checkOverflowAdd( sizeofOID( OID_OCSP_RESPONSE_OCSP ),
+								 sizeofObject( responseDataLength ) ) );
 	sMemOpen( &stream, sessionInfoPtr->receiveBuffer,
 			  sessionInfoPtr->receiveBufSize );
 	responseLength = sizeofOID( OID_OCSP_RESPONSE_OCSP ) + \
@@ -640,7 +647,7 @@ static int sendServerResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	status = exportCertToStream( &stream, sessionInfoPtr->iCertResponse,
 								 CRYPT_CERTFORMAT_CERTIFICATE );
 	if( cryptStatusOK( status ) )
-		sessionInfoPtr->receiveBufEnd = stell( &stream );
+		status = position = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		{
@@ -648,6 +655,7 @@ static int sendServerResponse( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 		sendErrorResponse( sessionInfoPtr, respIntError, RESPONSE_SIZE );
 		return( status );
 		}
+	sessionInfoPtr->receiveBufEnd = position;
 	ENSURES( isBufsizeRangeNZ( sessionInfoPtr->receiveBufEnd ) );
 	DEBUG_DUMP_FILE( "ocsp_sresp", sessionInfoPtr->receiveBuffer,
 					 sessionInfoPtr->receiveBufEnd );
@@ -722,6 +730,10 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isReadPtr( data, sizeof( int ) ) );
 
 	REQUIRES( type == CRYPT_SESSINFO_REQUEST );
+
+	/* Make sure that there aren't any conflicts with existing attributes */
+	if( !checkAttributesConsistent( sessionInfoPtr, type ) )
+		return( CRYPT_ERROR_INITED );
 
 	/* Make sure that everything is set up ready to go.  Since OCSP requests
 	   aren't (usually) signed like normal certificate objects we can't just 

@@ -1491,10 +1491,16 @@ int mqx_select( int socket_range, rtcs_fd_set *read_bits,
 
 /* The generic sockaddr struct used to reserve storage for protocol-specific
    sockaddr structs.  The IPv4 equivalent is given below in the IPv6-
-   emulation definitions */
+   emulation definitions.
+   
+   Alongside the size we also give an alignment size for the struct.  This 
+   is an annoying issue that requires unnecessary knowledge of the internals 
+   of SOCKADDR_STORAGE, which typically has some kludgery in it to force
+   alignment to 64-bit boundaries.  We make it 128 bits just in case */
 
 #ifdef USE_IPv6
   #define SOCKADDR_STORAGE			struct sockaddr_storage
+  #define SOCKADDR_STORAGE_ALIGNSIZE 16
 #endif /* IPv6 */
 
 /* IPv6 emulation functions used to provide a single consistent interface.
@@ -1562,6 +1568,7 @@ int mqx_select( int socket_range, rtcs_fd_set *read_bits,
 	 we're using it for is to reserve storage (we never actually look
 	 inside it) it's OK to use here  */
   typedef char SOCKADDR_STORAGE[ 128 ];
+  #define SOCKADDR_STORAGE_ALIGNSIZE 8
 
   /* getnameinfo() flags and values.  Windows uses different values for 
      these than anyone else, and even if we're not on an explicitly IPv6-

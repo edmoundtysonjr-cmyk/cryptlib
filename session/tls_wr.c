@@ -116,6 +116,7 @@ int openPacketStreamTLS( OUT_PTR STREAM *stream,
 	const int streamSize = ( bufferSize == CRYPT_USE_DEFAULT ) ? \
 						   sessionInfoPtr->sendBufSize - EXTRA_PACKET_SIZE : \
 						   bufferSize + sessionInfoPtr->sendBufStartOfs;
+	int status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isReadPtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) && \
@@ -138,7 +139,14 @@ int openPacketStreamTLS( OUT_PTR STREAM *stream,
 
 	/* Create the stream */
 	sMemOpen( stream, sessionInfoPtr->sendBuffer, streamSize );
-	return( startPacketStream( stream, sessionInfoPtr, packetType ) );
+	status = startPacketStream( stream, sessionInfoPtr, packetType );
+	if( cryptStatusError( status ) )
+		{
+		sMemClose( stream );
+		return( status );
+		}
+		
+	return( CRYPT_OK );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
@@ -180,12 +188,12 @@ int completePacketStreamTLS( INOUT_PTR STREAM *stream,
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	
+	REQUIRES( isShortIntegerRangeMin( packetEndOffset, TLS_HEADER_SIZE ) );
 	REQUIRES( !checkOverflowSub( packetEndOffset, \
 								 ID_SIZE + VERSIONINFO_SIZE ) );
 	REQUIRES( ( offset == 0 ) || \
 			  ( offset >= TLS_HEADER_SIZE && \
 				offset <= packetEndOffset - ( ID_SIZE + VERSIONINFO_SIZE ) ) );
-	REQUIRES( isShortIntegerRangeMin( packetEndOffset, TLS_HEADER_SIZE ) );
 
 	/* Update the length field at the start of the packet */
 	REQUIRES( !checkOverflowAdd( offset, ID_SIZE + VERSIONINFO_SIZE ) );
@@ -248,13 +256,13 @@ int completeHSPacketStream( INOUT_PTR STREAM *stream,
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 
+	REQUIRES( isShortIntegerRangeMin( packetEndOffset, TLS_HEADER_SIZE ) );
 	REQUIRES( offset >= TLS_HEADER_SIZE && \
 			  !checkOverflowSub( packetEndOffset, \
 								 ID_SIZE + LENGTH_SIZE ) && \
 			  offset <= packetEndOffset - ( ID_SIZE + LENGTH_SIZE ) );
 			  /* HELLO_DONE has size zero so 
 			     offset == packetEndOffset - HDR_SIZE */
-	REQUIRES( isShortIntegerRangeMin( packetEndOffset, TLS_HEADER_SIZE ) );
 
 	/* Update the length field at the start of the packet */
 	REQUIRES( !checkOverflowAdd( offset, ID_SIZE + LENGTH_SIZE ) );
@@ -351,7 +359,7 @@ static int wrapPacketTLSStd( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	REQUIRES( packetType >= TLS_MSG_FIRST && packetType <= TLS_MSG_LAST );
 	REQUIRES( bufMaxLen > 0 && bufMaxLen <= sessionInfoPtr->sendBufSize );
-	REQUIRES( dataLength >= 0 && dataLength <= MAX_PACKET_SIZE );
+	REQUIRES( dataLength > 0 && dataLength <= MAX_PACKET_SIZE );
 
 	/* Clear return values */
 	*length = 0;
@@ -435,7 +443,7 @@ static int wrapPacketTLSMAC( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	REQUIRES( packetType >= TLS_MSG_FIRST && packetType <= TLS_MSG_LAST );
 	REQUIRES( bufMaxLen > 0 && bufMaxLen <= sessionInfoPtr->sendBufSize );
-	REQUIRES( dataLength >= 0 && \
+	REQUIRES( dataLength > 0 && \
 			  dataLength <= MAX_PACKET_SIZE + \
 					( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 ? \
 					  1 : 0 ) );
@@ -492,14 +500,15 @@ static int wrapPacketTLSMAC( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 #ifdef USE_POLY1305
 	if( isBernsteinSuite )
 		{
-		status = createMacTLSBernstein( sessionInfoPtr, dataPtr, bufMaxLen, 
+		status = createMacTLSBernstein( sessionInfoPtr, dataPtr, 
+										effectiveBufMaxLen, 
 										&payloadLength, payloadLength, 
 										packetType );
 		}
 	else
 #endif /* USE_POLY1305 */
 		{
-		status = createMacTLS( sessionInfoPtr, dataPtr, bufMaxLen, 
+		status = createMacTLS( sessionInfoPtr, dataPtr, effectiveBufMaxLen, 
 							   &payloadLength, payloadLength, packetType );
 		}
 	if( cryptStatusError( status ) )
@@ -611,7 +620,7 @@ static int wrapPacketTLSGCM( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 	REQUIRES( packetType >= TLS_MSG_FIRST && packetType <= TLS_MSG_LAST );
 	REQUIRES( bufMaxLen > 0 && bufMaxLen <= sessionInfoPtr->sendBufSize );
-	REQUIRES( dataLength >= 0 && \
+	REQUIRES( dataLength > 0 && \
 			  dataLength <= MAX_PACKET_SIZE + \
 					( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 ? \
 					  1 : 0 ) );
@@ -685,7 +694,7 @@ int wrapPacketTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	STREAM lengthStream;
 	BYTE lengthBuffer[ UINT16_SIZE + 8 ];
 	BYTE *dataPtr, *headerPtr;
-	int packetType, length, payloadLength, bufMaxLen, status;
+	int packetType, length, payloadLength, bufMaxLen, position, status;
 
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
@@ -719,10 +728,12 @@ int wrapPacketTLS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	bufMaxLen = payloadLength + sMemDataLeft( stream );
 
 	/* Continue the previous checks on the calculated length values */
-	REQUIRES( offset <= stell( stream ) - \
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	REQUIRES( offset <= position - \
 							( payloadLength + \
 							  sessionInfoPtr->sendBufStartOfs ) );
-	REQUIRES( payloadLength >= 0 && \
+	REQUIRES( payloadLength > 0 && \
 			  payloadLength <= MAX_PACKET_SIZE +
 					( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 ? \
 					  1 : 0 ) && \
@@ -938,35 +949,35 @@ static void sendAlert( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		{
 		sputc( &stream, alertLevel );
 		status = sputc( &stream, alertType );
-		}
-	if( cryptStatusOK( status ) )
-		{
-		if( TEST_FLAG( sessionInfoPtr->flags, 
-					   SESSION_FLAG_ISSECURE_WRITE ) )
+		if( cryptStatusOK( status ) )
 			{
-#ifdef USE_TLS13
-			if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 )
+			if( TEST_FLAG( sessionInfoPtr->flags, 
+						   SESSION_FLAG_ISSECURE_WRITE ) )
 				{
-				status = wrapPacketTLS13( sessionInfoPtr, &stream, 0,
-										  TLS_MSG_ALERT );
+#ifdef USE_TLS13
+				if( sessionInfoPtr->version >= TLS_MINOR_VERSION_TLS13 )
+					{
+					status = wrapPacketTLS13( sessionInfoPtr, &stream, 0,
+											  TLS_MSG_ALERT );
+					}
+				else
+#endif /* USE_TLS13 */
+				status = wrapPacketTLS( sessionInfoPtr, &stream, 0 );
+				assert( cryptStatusOK( status ) || \
+						status == CRYPT_ERROR_PERMISSION );
 				}
 			else
-#endif /* USE_TLS13 */
-			status = wrapPacketTLS( sessionInfoPtr, &stream, 0 );
-			assert( cryptStatusOK( status ) || \
-					status == CRYPT_ERROR_PERMISSION );
+				status = completePacketStreamTLS( &stream, 0 );
+			if( cryptStatusOK( status ) )
+				status = length = stell( &stream );
 			}
-		else
-			status = completePacketStreamTLS( &stream, 0 );
-		if( cryptStatusOK( status ) )
-			length = stell( &stream );
 		sMemDisconnect( &stream );
 		}
 	/* Fall through with status passed on to the following code */
 
 	/* Send the alert, or if there was an error at least perform a clean 
 	   shutdown */
-	if( cryptStatusOK( status ) )
+	if( !cryptStatusError( status ) )
 		{
 		ENSURES_V( isBufsizeRangeNZ( length ) );
 		status = sendCloseNotification( sessionInfoPtr, 
@@ -1032,8 +1043,10 @@ void sendHandshakeFailAlert( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 
 	REQUIRES_V( sanityCheckSessionTLS( sessionInfoPtr ) );
-	REQUIRES_V( alertType >= TLS_ALERT_FIRST && \
-				alertType <= TLS_ALERT_LAST );
+	REQUIRES_V( alertType == TLS_ALERT_HANDSHAKE_FAILURE || \
+				alertType == TLS_ALERT_INAPPROPRIATE_FALLBACK );
+				/* We send a generic handshake failure for everything
+				   except a single instance of inappropriate-fallback */
 
 	/* We set the alertReceived flag to true when sending a handshake
 	   failure alert to avoid waiting to get back an ack, since this 

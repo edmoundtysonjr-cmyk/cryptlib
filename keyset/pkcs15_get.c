@@ -315,7 +315,7 @@ static int getItemFunction( INOUT_PTR KEYSET_INFO *keysetInfoPtr,
 	   sure that the components that we need are present: Either a public 
 	   key or a certificate for any type of read, and a private key as well 
 	   for a private-key read */
-	if( keyIDlength == 6 && !strCompare( keyID, "[none]", 6 ) )
+	if( keyIDlength == 6 && strSame( keyID, "[none]", 6 ) )
 		{
 		/* It's a wildcard read, locate the first private-key object */
 		pkcs15infoPtr = findEntry( pkcs15info, 
@@ -619,7 +619,7 @@ static int getItem( INOUT_ARRAY( noPkcs15objects ) PKCS15_INFO *pkcs15info,
 
 	/* Find the appropriate entry based on the ID */
 	if( keyIDtype != CRYPT_IKEYID_SUBJECTID && \
-		keyIDlength == 6 && !strCompare( keyID, "[none]", 6 ) )
+		keyIDlength == 6 && strSame( keyID, "[none]", 6 ) )
 		{
 		/* It's a findFirst() called (findNext() always uses 
 		   CRYPT_IKEYID_SUBJECTID as the ID) and it's a wildcard read, 

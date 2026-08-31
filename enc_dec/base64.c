@@ -1,7 +1,7 @@
 /****************************************************************************
 *																			*
 *							cryptlib Base64 Routines						*
-*						Copyright Peter Gutmann 1992-2024					*
+*						Copyright Peter Gutmann 1992-2025					*
 *																			*
 ****************************************************************************/
 
@@ -257,8 +257,8 @@ static int checkPEMHeader( INOUT_PTR STREAM *stream,
 
 	/* Check for the initial 5 dashes and 'BEGIN ' (unless we're SSH, in
 	   which case we use 4 dashes, a space, and 'BEGIN ') */
-	status = readTextLine( stream, buffer, LINEBUFFER_SIZE, &length, 
-						   NULL, NULL, READTEXT_NONE );
+	status = readTextLine( stream, buffer, LINEBUFFER_SIZE, &length, NULL, 
+						   READTEXT_NONE, FALSE );
 	if( cryptStatusError( status ) )
 		return( status );
 	if( length < 5 + 6 + 5 + 5 )
@@ -275,11 +275,11 @@ static int checkPEMHeader( INOUT_PTR STREAM *stream,
 
 	/* Skip the object name.  We know that we have enough data present for 
 	   the compare because we've just checked it above */
-	if( !strCompare( bufPtr, "SSH2 ", 5 ) )
+	if( strSame( bufPtr, "SSH2 ", 5 ) )
 		isSSH = TRUE;
 	else
 		{
-		if( !strCompare( bufPtr, "PGP ", 4 ) )
+		if( strSame( bufPtr, "PGP ", 4 ) )
 			isPGP = TRUE;
 		}
 	LOOP_EXT_REV_CHECKINC( length >= 4, length--, LINEBUFFER_SIZE + 1 )
@@ -296,15 +296,16 @@ static int checkPEMHeader( INOUT_PTR STREAM *stream,
 		return( CRYPT_ERROR_BADDATA );
 
 	/* Check the the trailing 5 (4 for SSH) dashes */
-	if( strCompare( bufPtr, "-----", length ) )
+	if( !strSame( bufPtr, "-----", length ) )
 		return( CRYPT_ERROR_BADDATA );
 
 	/* If it's not SSH or PGP data, we're done */
 	if( !isSSH && !isPGP )
 		{
-		*headerLength = stell( stream );
-		ENSURES( isIntegerRangeNZ( *headerLength ) );
-
+		position = stell( stream );
+		ENSURES( isIntegerRangeNZ( position ) );
+		*headerLength = position;
+		
 		return( CRYPT_OK );
 		}
 
@@ -322,7 +323,7 @@ static int checkPEMHeader( INOUT_PTR STREAM *stream,
 		position = stell( stream );
 		ENSURES( isIntegerRangeNZ( position ) );
 		status = readTextLine( stream, buffer, LINEBUFFER_SIZE, &length, 
-							   NULL, NULL, READTEXT_NONE );
+							   NULL, READTEXT_NONE, FALSE );
 		if( cryptStatusError( status ) )
 			return( status );
 		if( isSSH && length > 0 )
@@ -346,9 +347,10 @@ static int checkPEMHeader( INOUT_PTR STREAM *stream,
 		/* Return to the point before the line without the ':' */
 		( void ) sseek( stream, position );
 		}
-	*headerLength = stell( stream );
-	ENSURES( isIntegerRangeNZ( *headerLength ) );
-
+	position = stell( stream );
+	ENSURES( isIntegerRangeNZ( position ) );
+	*headerLength = position;
+	
 	return( CRYPT_OK );
 	}
 
@@ -434,9 +436,9 @@ static int checkEOL( IN_BUFFER( srcLen ) const BYTE *src,
 		srcIndex + 9 <= srcLen && \
 		src[ srcIndex ] == '-' )
 		{
-		if( !strCompare( src + srcIndex, "-----END ", 9 ) )
+		if( strSame( src + srcIndex, "-----END ", 9 ) )
 			return( OK_SPECIAL );	/* PEM EOF */
-		if( !strCompare( src + srcIndex, "---- END ", 9 ) )
+		if( strSame( src + srcIndex, "---- END ", 9 ) )
 			return( OK_SPECIAL );	/* SSH EOF */
 		}
 
@@ -519,7 +521,9 @@ int base64checkHeader( IN_BUFFER( dataLength ) const BYTE *data,
 		}
 
 	/* Sometimes the object can be preceded by a few blank lines, which we
-	   ignore */
+	   ignore.  Since we can get base64 blobs that are just one single long
+	   line we specify READTEXT_TRUNCATE to avoid rejecting the input if
+	   we get to the base64'd data */
 	LOOP_MED( ( length = 0, lineCount = 0 ), 
 			  length <= 0 && lineCount < MAX_HEADER_LINES, lineCount++ )
 		{
@@ -530,7 +534,7 @@ int base64checkHeader( IN_BUFFER( dataLength ) const BYTE *data,
 		position = stell( &stream );
 		ENSURES( isIntegerRange( position ) );
 		status = readTextLine( &stream, buffer, LINEBUFFER_SIZE, &length, 
-							   NULL, NULL, READTEXT_NONE );
+							   NULL, READTEXT_TRUNCATE, FALSE );
 		if( cryptStatusError( status ) )
 			{
 			sMemDisconnect( &stream );
@@ -580,7 +584,9 @@ int base64checkHeader( IN_BUFFER( dataLength ) const BYTE *data,
 		}
 	( void ) sseek( &stream, position );
 
-	/* It doesn't look like base64 encoded data, check for an S/MIME header */
+	/* It doesn't look like base64 encoded data, check for an S/MIME header.  
+	   We can go back to non-truncating reads now since we've already checked
+	   for the big-blob-of-base64 case above */
 	LOOP_MED( ( length = 1, lineCount = 0 ),
 			  length > 0 && lineCount < MAX_HEADER_LINES, lineCount++ )
 		{
@@ -589,14 +595,14 @@ int base64checkHeader( IN_BUFFER( dataLength ) const BYTE *data,
 		ENSURES( LOOP_INVARIANT_MED( lineCount, 0, MAX_HEADER_LINES - 1 ) );
 
 		status = readTextLine( &stream, buffer, LINEBUFFER_SIZE, &length, 
-							   NULL, NULL, READTEXT_MULTILINE );
+							   NULL, READTEXT_MULTILINE, FALSE );
 		if( cryptStatusError( status ) )
 			{
 			sMemDisconnect( &stream );
 			return( status );
 			}
 		if( !seenTransferEncoding && length >= ( 26 + 1 + 6 ) && \
-			!strCompare( buffer, "Content-Transfer-Encoding:", 26 ) )
+			strSame( buffer, "Content-Transfer-Encoding:", 26 ) )
 			{
 			int bufPos = strSkipWhitespace( buffer + 26, length - 26 );
 
@@ -620,11 +626,11 @@ int base64checkHeader( IN_BUFFER( dataLength ) const BYTE *data,
 			if( bufPos < 1 || 26 + bufPos + 6 > length )
 				continue;
 			bufPos += 26;	/* Skip "Content-Transfer-Encoding:" */
-			if( !strCompare( buffer + bufPos, "base64", 6 ) )
+			if( strSame( buffer + bufPos, "base64", 6 ) )
 				seenTransferEncoding = TRUE;
 			else
 				{
-				if( !strCompare( buffer + bufPos, "binary", 6 ) )
+				if( strSame( buffer + bufPos, "binary", 6 ) )
 					seenTransferEncoding = isBinaryEncoding = TRUE;
 				}
 			}
@@ -719,7 +725,7 @@ int base64decode( OUT_BUFFER( destMaxLen, *destLen ) void *dest,
 	STREAM stream;
 	unsigned long accumulator = 0;
 	LOOP_INDEX srcIndex;
-	int byteCount = 0, status;
+	int byteCount = 0, position, status;
 
 	assert( destMaxLen >= 10 && isWritePtrDynamic( dest, destMaxLen ) );
 	assert( isWritePtr( destLen, sizeof( int ) ) );
@@ -844,10 +850,13 @@ int base64decode( OUT_BUFFER( destMaxLen, *destLen ) void *dest,
 			}
 		}
 
-	*destLen = stell( &stream );
+	status = position = stell( &stream );
 	sMemDisconnect( &stream );
-	if( *destLen <= 0 )
+	if( cryptStatusError( status ) )
+		return( status );
+	if( position <= 0 )
 		return( CRYPT_ERROR_UNDERFLOW );
+	*destLen = position;
 
 	ENSURES( isIntegerRangeNZ( *destLen ) );
 
@@ -968,6 +977,9 @@ int base64encodeLen( IN_DATALENGTH_MIN( 10 ) const int dataLength,
 	REQUIRES( isBufsizeRangeMin( dataLength, 10 ) );
 	REQUIRES( isEnumRangeOpt( certType, CRYPT_CERTTYPE ) );
 	
+	/* Clear return value */
+	*encodedLength = 0;
+
 	if( dataLength >= MAX_INTLENGTH / 4 )
 		{
 		/* Catch overflows in the length calculation, this is a can-never-
@@ -979,9 +991,6 @@ int base64encodeLen( IN_DATALENGTH_MIN( 10 ) const int dataLength,
 	REQUIRES( !checkOverflowRoundup( ( dataLength * 4 ) / 3, 4 ) );
 	length = roundUp( ( dataLength * 4 ) / 3, 4 );
 	ENSURES( isBufsizeRangeMin( length, 10 ) );
-
-	/* Clear return value */
-	*encodedLength = 0;
 
 	/* If we're encoding the data as a raw base64 string then we're done */
 	if( certType == CRYPT_CERTTYPE_NONE )
@@ -1028,7 +1037,7 @@ int base64encode( OUT_BUFFER( destMaxLen, *destLen ) char *dest,
 	const HEADER_INFO *headerInfoPtr DUMMY_INIT_PTR;
 	STREAM stream;
 	const BYTE *srcPtr = src;
-	int srcIndex, lineByteCount, remainder = srcLen % 3;
+	int srcIndex, lineByteCount, remainder = srcLen % 3, position;
 	int status DUMMY_INIT, LOOP_ITERATOR;
 
 	assert( destMaxLen >= 10 && isWritePtrDynamic( dest, destMaxLen ) );
@@ -1109,9 +1118,10 @@ int base64encode( OUT_BUFFER( destMaxLen, *destLen ) char *dest,
 		sputc( &stream, encode( ( ( srcPtr[ srcIndex ] << 2 ) & 0x3C ) | \
 								( ( srcPtr[ srcIndex + 1 ] >> 6 ) & 0x03 ) ) );
 		srcIndex++;
-		status = sputc( &stream, encode( srcPtr[ srcIndex++ ] & 0x3F ) );
+		status = sputc( &stream, encode( srcPtr[ srcIndex ] & 0x3F ) );
 		if( cryptStatusError( status ) )
 			break;
+		srcIndex++;
 		}
 	ENSURES( LOOP_BOUND_OK );
 	if( cryptStatusError( status ) )
@@ -1151,9 +1161,12 @@ int base64encode( OUT_BUFFER( destMaxLen, *destLen ) char *dest,
 			return( status );
 			}
 		}
-	*destLen = stell( &stream );
+	status = position = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( isIntegerRangeNZ( *destLen ) );
+	if( cryptStatusError( status ) )
+		return( status );
+	ENSURES( isIntegerRangeNZ( position ) );
+	*destLen = position;
 
 	return( CRYPT_OK );
 	}

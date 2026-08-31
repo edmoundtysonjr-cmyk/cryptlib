@@ -89,12 +89,16 @@ static int readKeyIdentifiers( INOUT_PTR STREAM *stream,
 
 	LOOP_MED( ( identifierCount = 0, status = CRYPT_OK ),
 			  identifierCount < 32 && cryptStatusOK( status ) && \
-				stell( stream ) < endPos,
+				( status = stell( stream ) ) < endPos,
 			  identifierCount++ )
 		{
 		long value;
 
 		ENSURES( LOOP_INVARIANT_MED( identifierCount, 0, 31 ) );
+
+		/* Catch the residual error code from stell() */
+		if( cryptStatusError( status ) )
+			return( status );
 
 		/* Read each identifier type and copy the useful ones into the PKCS
 		   #15 information */
@@ -313,9 +317,12 @@ static int readCertAttributes( INOUT_PTR STREAM *stream,
 		status = readConstructed( stream, &length, CTAG_CA_IDENTIFIERS );
 		if( cryptStatusOK( status ) && length > 0 )
 			{
-			REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
+			const int position = stell( stream );
+
+			REQUIRES( isIntegerRangeNZ( position ) );
+			REQUIRES( !checkOverflowAdd( position, length ) );
 			status = readKeyIdentifiers( stream, pkcs15infoPtr, 
-										 stell( stream ) + length );
+										 position + length );
 			}
 		}
 	if( checkStatusLimitsPeekTag( stream, status, tag, endPos ) && \
@@ -364,7 +371,7 @@ static int readClassAttributes( INOUT_PTR STREAM *stream,
 									const PKCS15_OBJECT_TYPE type )
 	{
 	BOOLEAN isCryptlibObject = FALSE;
-	int tag, length, endPos, status;
+	int tag, length, position, endPos, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( pkcs15infoPtr, sizeof( PKCS15_INFO ) ) );
@@ -386,8 +393,10 @@ static int readClassAttributes( INOUT_PTR STREAM *stream,
 		/* For anything else, a zero length is an error */
 		return( CRYPT_ERROR_BADDATA );
 		}
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 
 	/* Process per-object-type attributes */
@@ -402,8 +411,13 @@ static int readClassAttributes( INOUT_PTR STREAM *stream,
 			status = readOctetString( stream, pkcs15infoPtr->iD,
 									  &pkcs15infoPtr->iDlength, 
 									  MIN_NAME_LENGTH, CRYPT_MAX_HASHSIZE );
-			if( cryptStatusOK( status ) && stell( stream ) < endPos )
+			if( cryptStatusOK( status ) && \
+				( status = stell( stream ) ) < endPos )
 				{
+				/* Catch the residual error code from stell() */
+				if( cryptStatusError( status ) )
+					return( status );
+
 				status = readPubkeyAttributes( stream, pkcs15infoPtr, 
 											endPos,
 											( type == PKCS15_OBJECT_PUBKEY ) ? \
@@ -418,8 +432,13 @@ static int readClassAttributes( INOUT_PTR STREAM *stream,
 			status = readOctetString( stream, pkcs15infoPtr->iD,
 									  &pkcs15infoPtr->iDlength, 
 									  MIN_NAME_LENGTH, CRYPT_MAX_HASHSIZE );
-			if( cryptStatusOK( status ) && stell( stream ) < endPos )
+			if( cryptStatusOK( status ) && \
+				( status = stell( stream ) ) < endPos )
 				{
+				/* Catch the residual error code from stell() */
+				if( cryptStatusError( status ) )
+					return( status );
+
 				status = readCertAttributes( stream, pkcs15infoPtr, 
 											 endPos );
 				}
@@ -464,7 +483,9 @@ static int readClassAttributes( INOUT_PTR STREAM *stream,
 		return( status );
 
 	/* Skip any additional attribute information that may be present */
-	if( stell( stream ) < endPos )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( position < endPos )
 		{
 		status = sseek( stream, endPos );
 		if( cryptStatusError( status ) )
@@ -480,7 +501,7 @@ static int readSubclassAttributes( INOUT_PTR STREAM *stream,
 								   IN_ENUM( PKCS15_OBJECT ) \
 										const PKCS15_OBJECT_TYPE type )
 	{
-	int tag, length, endPos, status;
+	int tag, length, position, endPos, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( pkcs15infoPtr, sizeof( PKCS15_INFO ) ) );
@@ -492,8 +513,10 @@ static int readSubclassAttributes( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	switch( type )
 		{
@@ -510,9 +533,11 @@ static int readSubclassAttributes( INOUT_PTR STREAM *stream,
 										  CTAG_IA_IDENTIFIERS );
 				if( cryptStatusOK( status ) && length > 0 )
 					{
-					REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
+					position = stell( stream );
+					REQUIRES( isIntegerRangeNZ( position ) );
+					REQUIRES( !checkOverflowAdd( position, length ) );
 					status = readKeyIdentifiers( stream, pkcs15infoPtr, 
-												 stell( stream ) + length );
+												 position + length );
 					}
 				}
 			break;
@@ -537,7 +562,9 @@ static int readSubclassAttributes( INOUT_PTR STREAM *stream,
 		return( status );
 
 	/* Skip any additional attribute information that may be present */
-	if( stell( stream ) < endPos )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( position < endPos )
 		{
 		status = sseek( stream, endPos );
 		if( cryptStatusError( status ) )
@@ -555,7 +582,7 @@ static int readTypeAttributes( INOUT_PTR STREAM *stream,
 							   IN_BOOL const BOOLEAN unrecognisedAttribute,
 							   IN_BOOL const BOOLEAN isCryptlibData )
 	{
-	int tag, length, endPos, status;
+	int tag, length, position, endPos, status;
 
 	assert( isWritePtr( stream, sizeof( STREAM ) ) );
 	assert( isWritePtr( pkcs15infoPtr, sizeof( PKCS15_INFO ) ) );
@@ -569,13 +596,17 @@ static int readTypeAttributes( INOUT_PTR STREAM *stream,
 	status = readSequence( stream, &length );
 	if( cryptStatusError( status ) )
 		return( status );
-	REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-	endPos = stell( stream ) + length;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, length ) );
+	endPos += length;
 	ENSURES( isIntegerRangeMin( endPos, length ) );
 	if( unrecognisedAttribute )
 		{
 		/* It's a non-recognised object subtype, skip it */
-		return( ( stell( stream ) < endPos ) ? \
+		position = stell( stream );
+		REQUIRES( isIntegerRangeNZ( position ) );
+		return( ( position < endPos ) ? \
 				sseek( stream, endPos ) : CRYPT_OK );
 		}
 
@@ -609,23 +640,28 @@ static int readTypeAttributes( INOUT_PTR STREAM *stream,
 	switch( type )
 		{
 		case PKCS15_OBJECT_PUBKEY:
-			pkcs15infoPtr->pubKeyOffset = stell( stream );
-			ENSURES( isIntegerRangeNZ( pkcs15infoPtr->pubKeyOffset ) );
+			
+			position = stell( stream );
+			ENSURES( isIntegerRangeNZ( position ) );
+			pkcs15infoPtr->pubKeyOffset = position;
 			break;
 
 		case PKCS15_OBJECT_PRIVKEY:
-			pkcs15infoPtr->privKeyOffset = stell( stream );
-			ENSURES( isIntegerRangeNZ( pkcs15infoPtr->privKeyOffset ) );
+			position = stell( stream );
+			ENSURES( isIntegerRangeNZ( position ) );
+			pkcs15infoPtr->privKeyOffset = position;
 			break;
 
 		case PKCS15_OBJECT_CERT:
-			pkcs15infoPtr->certOffset = stell( stream );
-			ENSURES( isIntegerRangeNZ( pkcs15infoPtr->certOffset ) );
+			position = stell( stream );
+			ENSURES( isIntegerRangeNZ( position ) );
+			pkcs15infoPtr->certOffset = position;
 			break;
 
 		case PKCS15_OBJECT_SECRETKEY:
-			pkcs15infoPtr->secretKeyOffset = stell( stream );
-			ENSURES( isIntegerRangeNZ( pkcs15infoPtr->secretKeyOffset ) );
+			position = stell( stream );
+			ENSURES( isIntegerRangeNZ( position ) );
+			pkcs15infoPtr->secretKeyOffset = position;
 			break;
 
 		case PKCS15_OBJECT_DATA:
@@ -657,8 +693,9 @@ static int readTypeAttributes( INOUT_PTR STREAM *stream,
 				/* It's a non-recognised cryptlib data subtype, skip it */
 				break;
 				}
-			pkcs15infoPtr->dataOffset = stell( stream );
-			ENSURES( isIntegerRangeNZ( pkcs15infoPtr->dataOffset ) );
+			position = stell( stream );
+			ENSURES( isIntegerRangeNZ( position ) );
+			pkcs15infoPtr->dataOffset = position;
 			pkcs15infoPtr->dataType = value;
 			break;
 			}
@@ -670,7 +707,9 @@ static int readTypeAttributes( INOUT_PTR STREAM *stream,
 		return( status );
 
 	/* Skip the data payload */
-	if( stell( stream ) < endPos )
+	position = stell( stream );
+	REQUIRES( isIntegerRangeNZ( position ) );
+	if( position < endPos )
 		{
 		status = sseek( stream, endPos );
 		if( cryptStatusError( status ) )
@@ -770,9 +809,12 @@ int readObjectAttributes( INOUT_PTR STREAM *stream,
 	status = readSequenceZ( stream, &length );
 	if( cryptStatusOK( status ) && length > 0 )
 		{
-		const int endPos = stell( stream ) + length;
+		int endPos;
 
-		REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
+		endPos = stell( stream );
+		REQUIRES( isIntegerRangeNZ( endPos ) );
+		REQUIRES( !checkOverflowAdd( endPos, length ) );
+		endPos += length;
 		ENSURES( isIntegerRangeMin( endPos, length ) );
 
 		/* Read the label if it's present and skip anything else */
@@ -783,8 +825,15 @@ int readObjectAttributes( INOUT_PTR STREAM *stream,
 						pkcs15infoPtr->label, CRYPT_MAX_TEXTSIZE, 
 						&pkcs15infoPtr->labelLength, BER_STRING_UTF8 );
 			}
-		if( !cryptStatusError( status ) && stell( stream ) < endPos )
+		if( !cryptStatusError( status ) && \
+			( status = stell( stream ) ) < endPos )
+			{
+			/* Catch the residual error code from stell() */
+			if( cryptStatusError( status ) )
+				return( status );
+
 			status = sseek( stream, endPos );
+			}
 		}
 	if( cryptStatusError( status ) )
 		{
@@ -807,7 +856,10 @@ int readObjectAttributes( INOUT_PTR STREAM *stream,
 												   "class" ) );
 		}
 	if( status == OK_SPECIAL )
+		{
 		isCryptlibData = TRUE;
+		status = CRYPT_OK;
+		}
 
 	/* We have to have at least an ID present for any standard object 
 	   types */

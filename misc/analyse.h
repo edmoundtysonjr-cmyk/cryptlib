@@ -786,7 +786,22 @@
 	IN_STRING		Argument is a null-terminated string.
 	TYPECAST		Type cast, used to deal with forward declarations of 
 					structs where it's not clear whether PREfast knows how
-					to check an incomplete type */
+					to check an incomplete type.
+
+   The IN_STRING_LEN has two possible annotations:
+
+	_In_reads_z_(s): A pointer to an array that is null-terminated and has 
+			a known size. The elements up to the null terminator - or s if 
+			there isn't a null terminator - must be valid in pre-state.
+
+	_In_reads_or_z_(s): A pointer to an array that is null-terminated or has 
+			a known size, or both.  The elements up to the null terminator -
+			or s if there isn't a null terminator—must be valid in pre-state. 
+			(Used for the strn family.)
+
+   which are confusingly similar (the difference is just the and/or 
+   conjunction), but the latter is marked as being for strnxxx() which is 
+   what we're using it for */
 
 #define ANALYSER_HINT( expr )	__analysis_assume( expr )
 #define ANALYSER_HINT_V( expr )	__analysis_assume( expr )
@@ -796,6 +811,7 @@
 #define FORMAT_STRING			_Printf_format_string_
 #define IN_STRING				_In_z_
 #define IN_STRING_OPT			_In_opt_z_
+#define IN_STRING_LEN( count )	_In_reads_z_( count )
 #define INOUT_STRING			_Inout_z_
 #define OUT_STRING( max )		_Out_z_cap_( max )
 #define TYPECAST( type )		/* No equivalent in attribute SAL */
@@ -1645,6 +1661,7 @@ STDC_NONNULL_ARG( ( 1 ) ) \
 #define FORMAT_STRING
 #define IN_STRING
 #define IN_STRING_OPT
+#define IN_STRING_LEN( count )
 #define INOUT_STRING
 #define OUT_STRING( max )
 #define TYPECAST( ctype )

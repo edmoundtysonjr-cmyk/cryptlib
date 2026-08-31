@@ -23,6 +23,8 @@
    allowed when reading a standard packet */
 
 #define MAX_NOOP_PACKETS	3
+#define isNoopPacket( packet ) \
+		( ( packet ) == SSH_MSG_IGNORE || ( packet ) == SSH_MSG_DEBUG )
 
 /****************************************************************************
 *																			*
@@ -36,7 +38,7 @@
 #ifdef USE_ERRMSGS
 
 CHECK_RETVAL_PTR_NONNULL \
-const char *getSSHPacketName( IN_RANGE( 0, SSH_MSG_SPECIAL_LAST ) \
+const char *getSSHPacketName( IN_RANGE( 0, SSH_MSG_SPECIAL_LAST - 1 ) \
 									const int packetType )
 	{
 	static const OBJECT_NAME_INFO packetNameInfo[] = {
@@ -99,6 +101,9 @@ const char *getSSHPacketName( IN_RANGE( 0, SSH_MSG_SPECIAL_LAST ) \
 			{ SSH_MSG_NONE, "<Unknown type>" }
 		};
 
+	static_assert( SSH_MSG_SPECIAL_LAST > 0xFF,
+				   "getSSHPacketName() range doesn't permit 0x00-0xFF" );
+
 	REQUIRES_EXT( ( packetType >= SSH_MSG_NONE && \
 					packetType < SSH_MSG_SPECIAL_LAST ),
 				  "Internal error" );
@@ -128,7 +133,7 @@ static int checkHandshakePacketStatus( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									   IN_LENGTH_SHORT_MIN( SSH_MIN_PACKET_SIZE ) \
 											const int headerLength,
 									   IN_RANGE( SSH_MSG_DISCONNECT, 
-												 SSH_MSG_SPECIAL_REQUEST ) \
+												 SSH_MSG_SPECIAL_LAST - 1 ) \
 											const int expectedType )
 	{
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
@@ -184,14 +189,21 @@ static int checkHandshakePacketStatus( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   packets such as error packets) onto the connection if something
 	   unexpected occurs.  Normally this would result in a bad data or MAC
 	   error since they decrypt to garbage so we try and catch them here */
+#if 0	/* 9/8/26 This code dates from the very first SSHv2 implementation
+				  for cryptlib 3.1 in 2003, it's unlikely anything that 
+				  exhibits this bug still exists */
 	if( TEST_FLAG( sessionInfoPtr->protocolFlags, 
 					SSH_PFLAG_TEXTDIAGS ) && \
-		headerLength >= 12 && header[ 0 ] == 'F' && \
+		headerLength >= SSH_MIN_PACKET_SIZE && header[ 0 ] == 'F' && \
 		( !memcmp( header, "FATAL: ", 7 ) || \
 		  !memcmp( header, "FATAL ERROR:", 12 ) ) )
 		{
 		BOOLEAN isTextDataError;
 		int length, status;
+
+		static_assert( SSH_MIN_PACKET_SIZE >= 12,
+					   "SSH_MIN_PACKET_SIZE too short for text error "
+					   "message" );
 
 		/* Copy across what we've got so far.  Since this is a fatal error,
 		   we use the receive buffer to contain the data since we don't need
@@ -199,14 +211,14 @@ static int checkHandshakePacketStatus( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		memcpy( sessionInfoPtr->receiveBuffer, header, 
 				SSH_MIN_PACKET_SIZE );
 
-		/* Read the rest of the error message */
+		/* Read the rest of the error message, truncating any excess */
 		REQUIRES( !checkOverflowSub( sessionInfoPtr->receiveBufSize, 128 ) );
 		status = readTextLine( &sessionInfoPtr->stream, 
 							   sessionInfoPtr->receiveBuffer + SSH_MIN_PACKET_SIZE, 
 							   min( MAX_ERRMSG_SIZE - 128, \
 									sessionInfoPtr->receiveBufSize - 128 ), 
-							   &length, &isTextDataError, NULL, 
-							   READTEXT_NONE );
+							   &length, &isTextDataError, READTEXT_TRUNCATE, 
+							   TRUE );
 		if( cryptStatusError( status ) )
 			{
 			/* If we encounter an error reading the rest of the data we just 
@@ -227,6 +239,7 @@ static int checkHandshakePacketStatus( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					 sessionInfoPtr->receiveBuffer, 
 					 SSH_MIN_PACKET_SIZE + length, NULL, 0, NULL, 0 ) );
 		}
+#endif /* 0 */
 
 	/* No (obviously) buggy behaviour detected */
 	return( CRYPT_OK );
@@ -255,7 +268,10 @@ static int checkPacketValid( IN_BYTE const int packetType,
 		/* General messages */
 		SSH_MSG_DISCONNECT, SSH_MSG_IGNORE, SSH_MSG_DEBUG,
 		/* Post-handshake-only messages */
-		SSH_MSG_SERVICE_REQUEST, SSH_MSG_SERVICE_ACCEPT, SSH_MSG_EXT_INFO, 
+		SSH_MSG_SERVICE_REQUEST, SSH_MSG_SERVICE_ACCEPT, 
+#ifdef USE_SSH_EXTENDED
+		SSH_MSG_EXT_INFO, 
+#endif /* USE_SSH_EXTENDED */
 		/* Dual-use messages */
 		SSH_MSG_CHANNEL_OPEN, SSH_MSG_CHANNEL_OPEN_CONFIRMATION, 
 		SSH_MSG_CHANNEL_OPEN_FAILURE,
@@ -536,6 +552,8 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			memcpy( sshInfo->encryptedHeaderBuffer, payloadPtr, 
 					SSH_MIN_PACKET_SIZE );
 			}
+#else
+		ENSURES( !useETM );
 #endif /* USE_SSH_OPENSSH */
 #ifdef USE_SSH_CTR
 		if( TEST_FLAG( sessionInfoPtr->protocolFlags, SSH_PFLAG_CTR ) )
@@ -568,23 +586,25 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			larger than the (remaining) data that we've already read.  For
 			this case we need to check that the data payload is at least as
 			long as the minimum-length packet */
-	sMemConnect( &stream, sshInfo->headerBuffer, headerByteCount );
-	status = length = readUint32( &stream );
 	static_assert( SSH_HEADER_REMAINDER_SIZE == SSH_MIN_PACKET_SIZE - \
 												LENGTH_SIZE, \
 				   "Header length calculation" );
+	sMemConnect( &stream, sshInfo->headerBuffer, headerByteCount );
+	status = length = readUint32( &stream );
 	if( cryptStatusError( status ) || \
 		!isBufsizeRangeMin( length, ID_SIZE + PADLENGTH_SIZE + \
 									SSH2_MIN_PADLENGTH_SIZE ) || \
 		checkOverflowAdd( length, extraLength ) || \
-		length < SSH_HEADER_REMAINDER_SIZE || \
+		length < ( useETM ? SSH_MIN_PACKET_SIZE : \
+							SSH_HEADER_REMAINDER_SIZE ) || \
 		length + extraLength >= sessionInfoPtr->receiveBufSize )
 		{
 		sMemDisconnect( &stream );
 		REQUIRES( !checkOverflowSub( sessionInfoPtr->receiveBufSize, 
 									 extraLength ) );
 		if( isSecureRead && \
-			length + extraLength >= sessionInfoPtr->receiveBufSize )
+			( checkOverflowAdd( length, extraLength ) || \
+			  length + extraLength >= sessionInfoPtr->receiveBufSize ) )
 			{
 			/* Some implementations, for example Chilkat before 9.5.0.94, 
 			   ignore the max_packet_size value set in the 
@@ -604,7 +624,8 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
 				  "Invalid packet length %d, should be %d...%d", 
 				  cryptStatusError( length ) ? 0 : length,
-				  SSH_HEADER_REMAINDER_SIZE,
+				  useETM ? SSH_MIN_PACKET_SIZE : \
+						   SSH_HEADER_REMAINDER_SIZE,
 				  sessionInfoPtr->receiveBufSize - extraLength ) );
 		}
 	if( isSecureRead )
@@ -613,13 +634,15 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 		REQUIRES( !checkOverflowAdd( LENGTH_SIZE, length ) );
 		encryptedLength = useETM ? length : LENGTH_SIZE + length;
+		REQUIRES( !checkOverflowDiv( encryptedLength,
+									 sessionInfoPtr->cryptBlocksize ) );
 		if( encryptedLength % sessionInfoPtr->cryptBlocksize != 0 )
 			{
 			sMemDisconnect( &stream );
 			retExt( CRYPT_ERROR_BADDATA,
 					( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
-					  "Invalid packet payload length %d, isn't a multiple of "
-					  "cipher block size %d", encryptedLength, 
+					  "Invalid packet payload length %d, isn't a multiple "
+					  "of cipher block size %d", encryptedLength, 
 					  sessionInfoPtr->cryptBlocksize ) );
 			}
 		}
@@ -673,7 +696,11 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* If we're at the handshake phase, keep track of the packets that we've 
-	   seen */
+	   seen.  Note that we can in theory hit MAX_PACKET_TRACE_LENGTH 
+	   legitimately if the peer pads out their handshake with a large number
+	   of no-op packets but if strict keyex is in effect it'll get rejected
+	   with just one no-op and even if it isn't we shouldn't be seeing this
+	   many no-ops in the handshake */
 	if( protocolState == SSH_PROTOSTATE_HANDSHAKE )
 		{
 		if( sshInfo->packetTraceLength >= MAX_PACKET_TRACE_LENGTH )
@@ -727,7 +754,7 @@ int readPacketHeaderSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 CHECK_RETVAL_LENGTH_SHORT STDC_NONNULL_ARG( ( 1 ) ) \
 static int readHSPacket( INOUT_PTR SESSION_INFO *sessionInfoPtr, 
 						 IN_RANGE( SSH_MSG_DISCONNECT, \
-								   SSH_MSG_SPECIAL_REQUEST ) int expectedType,
+								   SSH_MSG_SPECIAL_LAST - 1 ) int expectedType,
 						 IN_RANGE( 1, 1024 ) const int minPacketSize,
 						 OUT_PTR READSTATE_INFO *readInfo,
 						 IN_ENUM( SSH_PROTOSTATE ) \
@@ -763,11 +790,12 @@ static int readHSPacket( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	   SSH_MSG_USERAUTH_BANNER).  Because we can receive any quantity of 
 	   these at any time we have to run the receive code in a (bounds-
 	   checked) loop to strip them out (Quo usque tandem abutere, Catilina, 
-	   patientia nostra?) */
+	   patientia nostra?).  Note that the MAX_NOOP_PACKETS is a bit of a
+	   misnomer, it's the longest run of packets including no-ops that we
+	   allow, but that would make for a very long name */
 	LOOP_SMALL( ( noPackets = 0, sshInfo->packetType = SSH_MSG_IGNORE ),
-				( sshInfo->packetType == SSH_MSG_IGNORE || \
-				  sshInfo->packetType == SSH_MSG_DEBUG ) && \
-				noPackets < MAX_NOOP_PACKETS, 
+				isNoopPacket( sshInfo->packetType ) && \
+					noPackets < MAX_NOOP_PACKETS, 
 				noPackets++ )
 		{
 		int payloadLengthRead, extraLength, status;
@@ -878,6 +906,8 @@ static int readHSPacket( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				   an error forces an exit via the non-EtM MAC check further 
 				   down */
 				}
+#else
+			ENSURES( !useETM );
 #endif /* USE_SSH_OPENSSH */
 
 			/* Decrypt the remainder of the packet except for the MAC.
@@ -1018,13 +1048,19 @@ static int readHSPacket( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			}
 		}
 	ENSURES( LOOP_BOUND_OK );
-	if( noPackets >= MAX_NOOP_PACKETS )
+	if( isNoopPacket( sshInfo->packetType ) || \
+		noPackets > MAX_NOOP_PACKETS )
 		{
 		/* We have to be a bit careful here in case this is a strange
 		   implementation that sends large numbers of no-op packets as cover
 		   traffic.  Complaining after MAX_NOOP_PACKETS consecutive no-ops 
 		   seems to be a safe tradeoff between catching DoSes and handling 
-		   cover traffic */
+		   cover traffic.
+		   
+		   There are two conditions that we check for here, we're still on
+		   a no-op packet after exiting the loop (so we didn't trigger an 
+		   exit via a non-no-op packet) and a more general count-overflow 
+		   check */
 		retExt( CRYPT_ERROR_OVERFLOW,
 				( CRYPT_ERROR_OVERFLOW, SESSION_ERRINFO, 
 				  "%s sent an excessive number of consecutive no-op "
@@ -1205,7 +1241,7 @@ int readHSPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							int expectedType,
 					  IN_RANGE( 1, 1024 ) const int minPacketSize )
 	{
-	READSTATE_INFO readInfo;
+	READSTATE_INFO readInfo = READINFO_NONE;
 	int status;
 
 	status = readHSPacket( sessionInfoPtr, expectedType, minPacketSize,
@@ -1227,7 +1263,7 @@ int readPostHSPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							int expectedType,
 						  IN_RANGE( 1, 1024 ) const int minPacketSize )
 	{
-	READSTATE_INFO readInfo;
+	READSTATE_INFO readInfo = READINFO_NONE;
 	int status;
 
 	status = readHSPacket( sessionInfoPtr, expectedType, minPacketSize,
@@ -1249,7 +1285,7 @@ int readAuthPacketSSH2( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 							int expectedType,
 						IN_RANGE( 1, 1024 ) const int minPacketSize )
 	{
-	READSTATE_INFO readInfo;
+	READSTATE_INFO readInfo = READINFO_NONE;
 	int status;
 
 	status = readHSPacket( sessionInfoPtr, expectedType, minPacketSize,

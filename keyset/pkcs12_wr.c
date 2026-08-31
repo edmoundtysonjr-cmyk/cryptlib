@@ -176,7 +176,8 @@ static int writePrivateKey( INOUT_PTR PKCS12_OBJECT_INFO *keyObjectInfo,
 		sMemClose( &stream );
 		return( status );
 		}
-	headerSize = stell( &stream );
+	status = headerSize = stell( &stream );
+	ENSURES_SC( !cryptStatusError( status ) );
 	ENSURES_SC( boundsCheck( headerSize, privKeyDataSize, 
 							 keyObjectInfo->dataSize ) );
 
@@ -337,7 +338,7 @@ static int writeMacItem( INOUT_PTR STREAM *stream,
 			}
 		}
 	if( cryptStatusOK( status ) )
-		objectHeaderSize = stell( &memStream );
+		status = objectHeaderSize = stell( &memStream );
 	sMemDisconnect( &memStream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -397,7 +398,7 @@ static int writeMacItem( INOUT_PTR STREAM *stream,
 		}
 	ENSURES( LOOP_BOUND_OK );
 	if( cryptStatusOK( status ) )
-		idSize = stell( &memStream );
+		status = idSize = stell( &memStream );
 	sMemDisconnect( &memStream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -462,7 +463,7 @@ int pkcs12Flush( INOUT_PTR STREAM *stream,
 		}
 	ENSURES( LOOP_BOUND_OK );
 	if( cryptStatusOK( status ) )
-		safeDataSize = stell( &memStream );
+		status = safeDataSize = stell( &memStream );
 	sMemClose( &memStream );
 	if( cryptStatusError( status ) )
 		return( status );
@@ -508,7 +509,7 @@ int pkcs12Flush( INOUT_PTR STREAM *stream,
 	if( cryptStatusOK( status ) )
 		status = writeSequence( &memStream, safeDataSize );
 	if( cryptStatusOK( status ) )
-		objectHeaderSize = stell( &memStream );
+		status = objectHeaderSize = stell( &memStream );
 	sMemDisconnect( &memStream );
 	if( cryptStatusError( status ) )
 		return( status );

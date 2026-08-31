@@ -5,7 +5,6 @@
 *																			*
 ****************************************************************************/
 
-#include <ctype.h>
 #if defined( INC_ALL )
   #include "crypt.h"
   #include "bn.h"
@@ -347,7 +346,7 @@ static int readConstrainedData( INOUT_PTR STREAM *stream,
 								IN_LENGTH_SHORT const int bufferMaxLength,
 								OUT_LENGTH_BOUNDED_Z( bufferMaxLength ) \
 									int *bufferLength, 
-								IN_LENGTH const int length )
+								IN_LENGTH_SHORT const int length )
 	{
 	int status;
 
@@ -1491,7 +1490,7 @@ static int readTimeData( INOUT_PTR STREAM *stream,
 		{
 		ENSURES_S( LOOP_INVARIANT_MED( i, 0, length - 2 ) );
 
-		if( !isDigit( buffer[ i ] ) )
+		if( !isDigit( byteToInt( buffer[ i ] ) ) )
 			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 		}
 	ENSURES_S( LOOP_BOUND_OK );
@@ -1553,12 +1552,22 @@ static int readTimeData( INOUT_PTR STREAM *stream,
 	   but hopefully these will be fixed by 2050 when it would become an
 	   issue.
 
-	   In theory we could also check for an at least vaguely sane input 
-	   value range on the grounds that (a) some systems' mktime()s may be 
-	   broken and (b) some mktime()s may allow (and return) outrageous date 
-	   values that others don't, however it's probably better to simply be 
-	   consistent with what the system does rather than to try and 
-	   second-guess the intent of the mktime() authors.
+	   In theory we could also check for consistent relationships between 
+	   input values (we already check the individual values, e.g. a date
+	   has to be in the range 1...31 but that can include the 31st February)
+	   on the grounds that (a) some systems' mktime()s may be broken and (b) 
+	   even if they're not obviously broken, mktime() is documented as 
+	   "normalising" out-of-range input values without specifying what that 
+	   means, typically converting a date like the 40th of a month to the 
+	   8th or 9th of the following month but sometimes just clamping the 
+	   value to bring it within range.
+	   
+	   In theory we could perform our own (inevitably error-prone) date-
+	   handling here, but it's probably better to simply be consistent with 
+	   what the system time functions do rather than to try and second-guess 
+	   the intent of the mktime() authors.  Outside of all that, a CA that's 
+	   signing certificates dated for the 75th of Octember probably can't be 
+	   trusted with anything else that we find in the certificate either.
 	   
 	   We also have to be careful with how we check the results from 
 	   mktime() because, while in most cases time_t is signed and so an
@@ -2255,7 +2264,8 @@ int readRawObjectAlloc( INOUT_PTR STREAM *stream,
 							int *objectLengthPtr,
 						IN_LENGTH_SHORT_MIN( OBJECT_HEADER_DATA_SIZE ) \
 							const int minLength, 
-						IN_LENGTH_SHORT const int maxLength )
+						IN_LENGTH_SHORT_MIN( OBJECT_HEADER_DATA_SIZE + 1 ) \
+							const int maxLength )
 	{
 	STREAM headerStream;
 	BYTE buffer[ OBJECT_HEADER_DATA_SIZE + 8 ];
@@ -2269,6 +2279,8 @@ int readRawObjectAlloc( INOUT_PTR STREAM *stream,
 	REQUIRES_S( isShortIntegerRangeMin( minLength, \
 										OBJECT_HEADER_DATA_SIZE ) && \
 				minLength < maxLength );
+	REQUIRES_S( isShortIntegerRangeMin( maxLength, \
+										OBJECT_HEADER_DATA_SIZE + 1 ) );
 
 	/* Clear return values */
 	*objectPtrPtr = NULL;
@@ -2289,7 +2301,7 @@ int readRawObjectAlloc( INOUT_PTR STREAM *stream,
 	status = readGenericHole( &headerStream, &objectLength, 
 							  OBJECT_HEADER_DATA_SIZE, DEFAULT_TAG );
 	if( cryptStatusOK( status ) )
-		headerSize = stell( &headerStream );
+		status = headerSize = stell( &headerStream );
 	sMemDisconnect( &headerStream );
 	if( cryptStatusError( status ) )
 		{
@@ -2344,8 +2356,7 @@ int readRawObjectAlloc( INOUT_PTR STREAM *stream,
 		REQUIRES_S_PTR( isShortIntegerRangeNZ( objectLength ), objectData );
 		zeroise( objectData, objectLength );
 		clFree( "readRawObjectAlloc", objectData );
-		sSetError( stream, CRYPT_ERROR_BADDATA );
-		return( status );
+		return( sSetError( stream, status ) );
 		}
 
 	*objectPtrPtr = objectData;

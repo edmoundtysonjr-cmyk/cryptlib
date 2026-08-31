@@ -77,26 +77,25 @@
 #define SSH_PFLAG_NONE			0x000000/* No protocol-specific flags */
 #define SSH_PFLAG_HMACKEYSIZE	0x000001/* Peer uses short HMAC keys */
 #define SSH_PFLAG_SIGFORMAT		0x000002/* Peer omits signature algo name */
-#define SSH_PFLAG_NOHASHSECRET	0x000004/* Peer omits secret in key derive */
-#define SSH_PFLAG_NOHASHLENGTH	0x000008/* Peer omits length in exchange hash */
-#define SSH_PFLAG_RSASIGPAD		0x000010/* Peer requires zero-padded RSA sig.*/
-#define SSH_PFLAG_WINDOWSIZE	0x000020/* Peer mishandles large window sizes */
-#define SSH_PFLAG_TEXTDIAGS		0x000040/* Peer dumps text diagnostics on error */
-#define SSH_PFLAG_PAMPW			0x000080/* Peer chokes on "password" as PAM submethod */
-#define SSH_PFLAG_DUMMYUSERAUTH	0x000100/* Peer requires dummy userAuth message */
-#define SSH_PFLAG_EMPTYUSERAUTH	0x000200/* Peer sends empty userauth-failure response */
-#define SSH_PFLAG_ZEROLENIGNORE	0x000400/* Peer sends zero-length SSH_IGNORE */
-#define SSH_PFLAG_ASYMMCOPR		0x000800/* Peer sends asymmetric compression algos */
-#define SSH_PFLAG_EMPTYSVCACCEPT 0x001000/* Peer sends empty SSH_SERVICE_ACCEPT */
-#define SSH_PFLAG_CHECKSPKOK	0x002000/* Peer checks SSH_MSG_USERAUTH_PK_OK */
-#define SSH_PFLAG_NOMTI			0x004000/* Peer doesn't support any MTI algorithms */
-#define SSH_PFLAG_OLDGEX		0x008000/* Peer requires old-style KEX_DH_GEX_REQ */
-#define SSH_PFLAG_NOEXTINFO		0x010000/* Peer drops connection on SSH_MSG_EXT_INFO */
-#define SSH_PFLAG_CUTEFTP		0x020000/* CuteFTP, drops conn.during handshake */
-#define SSH_PFLAG_CTR			0x040000/* Use CTR mode synthesised from ECB */
-#define SSH_PFLAG_ETM			0x080000/* Use encrypt-them-MAC rather than MtE */
-#define SSH_PFLAG_STRICT_KEX	0x100000/* Use strict keyex */
-#define SSH_PFLAG_MAX			0x1FFFFF/* Maximum possible flag value */
+#define SSH_PFLAG_NOHASHLENGTH	0x000004/* Peer omits length in exchange hash */
+#define SSH_PFLAG_RSASIGPAD		0x000008/* Peer requires zero-padded RSA sig.*/
+#define SSH_PFLAG_WINDOWSIZE	0x000010/* Peer mishandles large window sizes */
+#define SSH_PFLAG_TEXTDIAGS		0x000020/* Peer dumps text diagnostics on error */
+#define SSH_PFLAG_PAMPW			0x000040/* Peer chokes on "password" as PAM submethod */
+#define SSH_PFLAG_DUMMYUSERAUTH	0x000080/* Peer requires dummy userAuth message */
+#define SSH_PFLAG_EMPTYUSERAUTH	0x000100/* Peer sends empty userauth-failure response */
+#define SSH_PFLAG_ZEROLENIGNORE	0x000200/* Peer sends zero-length SSH_IGNORE */
+#define SSH_PFLAG_ASYMMCOPR		0x000400/* Peer sends asymmetric compression algos */
+#define SSH_PFLAG_EMPTYSVCACCEPT 0x000800/* Peer sends empty SSH_SERVICE_ACCEPT */
+#define SSH_PFLAG_CHECKSPKOK	0x001000/* Peer checks SSH_MSG_USERAUTH_PK_OK */
+#define SSH_PFLAG_NOMTI			0x002000/* Peer doesn't support any MTI algorithms */
+#define SSH_PFLAG_OLDGEX		0x004000/* Peer requires old-style KEX_DH_GEX_REQ */
+#define SSH_PFLAG_NOEXTINFO		0x008000/* Peer drops connection on SSH_MSG_EXT_INFO */
+#define SSH_PFLAG_CUTEFTP		0x010000/* CuteFTP, drops conn.during handshake */
+#define SSH_PFLAG_CTR			0x020000/* Use CTR mode synthesised from ECB */
+#define SSH_PFLAG_ETM			0x040000/* Use encrypt-them-MAC rather than MtE */
+#define SSH_PFLAG_STRICT_KEX	0x080000/* Use strict keyex */
+#define SSH_PFLAG_MAX			0x0FFFFF/* Maximum possible flag value */
 
 /* Symbolic defines for static analysis checking */
 
@@ -570,6 +569,9 @@ BOOLEAN sanityCheckSessionSSH( IN_PTR const SESSION_INFO *sessionInfoPtr );
 CHECK_RETVAL_BOOL STDC_NONNULL_ARG( ( 1 ) ) \
 BOOLEAN sanityCheckSSHHandshakeInfo( IN_PTR \
 										const SSH_HANDSHAKE_INFO *handshakeInfo );
+#else
+  #define sanityCheckSessionSSH( x )		TRUE
+  #define sanityCheckSSHHandshakeInfo( x )	TRUE
 #endif /* !CONFIG_CONSERVE_MEMORY_EXTRA */
 
 /* Prototypes for functions in ssh2.c */
@@ -688,21 +690,21 @@ int selectChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				   const long channelNo,
 				   IN_ENUM_OPT( CHANNEL ) const CHANNEL_TYPE channelType );
 CHECK_RETVAL_RANGE_NOERROR( UNUSED_CHANNEL_NO, CHANNEL_MAX ) STDC_NONNULL_ARG( ( 1 ) ) \
-long getCurrentChannelNo( const SESSION_INFO *sessionInfoPtr,
+long getCurrentChannelNo( IN_PTR const SESSION_INFO *sessionInfoPtr,
 						  IN_ENUM( CHANNEL ) const CHANNEL_TYPE channelType );
 CHECK_RETVAL_ENUM( CHANNEL ) STDC_NONNULL_ARG( ( 1 ) ) \
-CHANNEL_TYPE getChannelStatusByChannelNo( const SESSION_INFO *sessionInfoPtr,
+CHANNEL_TYPE getChannelStatusByChannelNo( IN_PTR const SESSION_INFO *sessionInfoPtr,
 										  const long channelNo );
 CHECK_RETVAL_ENUM( CHANNEL ) STDC_NONNULL_ARG( ( 1 ) ) \
-CHANNEL_TYPE getChannelStatusByAddr( const SESSION_INFO *sessionInfoPtr,
+CHANNEL_TYPE getChannelStatusByAddr( IN_PTR const SESSION_INFO *sessionInfoPtr,
 									 IN_BUFFER( addrInfoLen ) const char *addrInfo,
 									 IN_LENGTH_SHORT const int addrInfoLen );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-int getChannelAttribute( const SESSION_INFO *sessionInfoPtr,
+int getChannelAttribute( IN_PTR const SESSION_INFO *sessionInfoPtr,
 						 IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE attribute,
 						 OUT_INT_Z int *value );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-int getChannelAttributeS( const SESSION_INFO *sessionInfoPtr,
+int getChannelAttributeS( IN_PTR const SESSION_INFO *sessionInfoPtr,
 						  IN_ATTRIBUTE const CRYPT_ATTRIBUTE_TYPE attribute,
 						  OUT_BUFFER_OPT( dataMaxLength, *dataLength ) \
 								void *data, 
@@ -710,7 +712,7 @@ int getChannelAttributeS( const SESSION_INFO *sessionInfoPtr,
 						  OUT_LENGTH_BOUNDED_Z( dataMaxLength ) \
 								int *dataLength );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-int getChannelExtAttribute( const SESSION_INFO *sessionInfoPtr,
+int getChannelExtAttribute( IN_PTR const SESSION_INFO *sessionInfoPtr,
 							IN_ENUM( SSH_ATTRIBUTE ) \
 								const SSH_ATTRIBUTE_TYPE attribute,
 							OUT_INT_Z int *value );
@@ -724,7 +726,7 @@ int setChannelAttributeS( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 						  IN_BUFFER( dataLength ) const void *data, 
 						  IN_LENGTH_TEXT const int dataLength );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
-int setChannelExtAttribute( const SESSION_INFO *sessionInfoPtr,
+int setChannelExtAttribute( IN_PTR const SESSION_INFO *sessionInfoPtr,
 							IN_ATTRIBUTE const SSH_ATTRIBUTE_TYPE attribute,
 							IN_INT_Z const int value );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
@@ -762,12 +764,12 @@ int initDHcontextSSH( OUT_HANDLE_OPT CRYPT_CONTEXT *iCryptContext,
 					  IN_BUFFER_OPT( keyDataLength ) const void *keyData, 
 					  IN_LENGTH_SHORT_Z const int keyDataLength,
 					  IN_LENGTH_SHORT_OPT const int requestedKeySize );
-#ifdef USE_ECDH
+#if defined( USE_ECDH ) || defined( USE_X25519 )
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int initECDHcontextSSH( OUT_HANDLE_OPT CRYPT_CONTEXT *iCryptContext, 
 						OUT_LENGTH_SHORT_Z int *keySize,
 						IN_ALGO const CRYPT_ALGO_TYPE cryptAlgo );
-#endif /* USE_ECDH */
+#endif /* USE_ECDH || USE_X25519 */
 #ifdef USE_SSH_CTR
 CHECK_RETVAL STDC_NONNULL_ARG( ( 2, 4 ) ) \
 int ctrModeCrypt( IN_HANDLE const CRYPT_CONTEXT iCryptContext,
@@ -845,12 +847,14 @@ int writeSSHID( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 CHECK_RETVAL_RANGE_NOERROR( 10000, MAX_WINDOW_SIZE ) STDC_NONNULL_ARG( ( 1 ) ) \
 int getWindowSize( const SESSION_INFO *sessionInfoPtr );
+STDC_NONNULL_ARG( ( 1 ) ) \
+void clearChannelAttributes( INOUT_PTR SESSION_INFO *sessionInfoPtr );
+CHECK_RETVAL_SPECIAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+int processChannelControlMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
+								  INOUT_PTR STREAM *stream );
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
 int closeChannel( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 				  IN_BOOL const BOOLEAN closeAllChannels );
-CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
-int processChannelControlMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
-								  INOUT_PTR STREAM *stream );
 
 /* Prototypes for functions in ssh2_msgcli.c */
 
@@ -871,7 +875,7 @@ int processChannelRequest( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 
 #ifdef USE_ERRMSGS
 CHECK_RETVAL_PTR_NONNULL \
-const char *getSSHPacketName( IN_RANGE( 0, SSH_MSG_SPECIAL_LAST ) \
+const char *getSSHPacketName( IN_RANGE( 0, SSH_MSG_SPECIAL_LAST - 1 ) \
 									const int packetType );
 #else
 #define getSSHPacketName( packetType )	"unknown"

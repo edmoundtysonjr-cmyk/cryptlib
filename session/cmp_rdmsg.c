@@ -832,14 +832,21 @@ static int readGenMsgBody( INOUT_PTR STREAM *stream,
 		status = readSequence( stream, &length );
 		if( cryptStatusError( status ) )
 			return( status );
-		REQUIRES( !checkOverflowAdd( stell( stream ), length ) );
-		endPos = stell( stream ) + length;
+		endPos = stell( stream );
+		REQUIRES( isIntegerRangeNZ( endPos ) );
+		REQUIRES( !checkOverflowAdd( endPos, length ) );
+		endPos += length;
 		REQUIRES( isIntegerRangeMin( endPos, length ) );
 		status = readOID( stream, genMessageOIDinfo, 
 						  FAILSAFE_ARRAYSIZE( genMessageOIDinfo, OID_INFO ),
 						  &value );
-		if( cryptStatusOK( status ) && stell( stream ) < endPos )
+		if( cryptStatusOK( status ) && \
+			( status = stell( stream ) ) < endPos )
 			{
+			/* Catch the residual error code from stell() */
+			if( cryptStatusError( status ) )
+				return( status );
+
 			/* There's infoValue data attached, skip it */
 			status = readUniversal( stream );
 			}
@@ -959,8 +966,10 @@ static int readErrorBody( INOUT_PTR STREAM *stream,
 	REQUIRES( isShortIntegerRangeNZ( messageLength ) );
 
 	/* Calculate the end position for the stream payload */
-	REQUIRES( !checkOverflowAdd( stell( stream ), messageLength ) );
-	endPos = stell( stream ) + messageLength;
+	endPos = stell( stream );
+	REQUIRES( isIntegerRangeNZ( endPos ) );
+	REQUIRES( !checkOverflowAdd( endPos, messageLength ) );
+	endPos += messageLength;
 	ENSURES( isIntegerRangeMin( endPos, messageLength ) );
 
 	/* Read the outer wrapper and PKI status information.  In another one of

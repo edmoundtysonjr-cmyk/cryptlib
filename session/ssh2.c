@@ -32,7 +32,9 @@ void initHandshakeCrypt( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo )
 	{
 	assert( isWritePtr( handshakeInfo, sizeof( SSH_HANDSHAKE_INFO ) ) );
 
-	/* Set the initial hash algorithm used to authenticate the handshake */
+	/* Set the initial hash algorithm used to authenticate the handshake.  
+	   This will usually be overridden later by SHA-2 if the peer indicates
+	   support for it */
 	handshakeInfo->exchangeHashAlgo = CRYPT_ALGO_SHA1;
 
 	initHandshakeAlgos( handshakeInfo );
@@ -276,7 +278,7 @@ BOOLEAN checkStrictKEX( IN_BUFFER( packetTraceLen ) const BYTE *packetTrace,
 	LOOP_SMALL( i = 0, i < keyexTraceTblSize && \
 					   keyexTraceTbl[ i ].traceLength != 0, i++ )
 		{
-		ENSURES( LOOP_INVARIANT_SMALL( i, 0, keyexTraceTblSize - 1 ) );
+		ENSURES_B( LOOP_INVARIANT_SMALL( i, 0, keyexTraceTblSize - 1 ) );
 		
 		if( keyexTraceTbl[ i ].traceLength != packetTraceLen )
 			continue;
@@ -287,7 +289,7 @@ BOOLEAN checkStrictKEX( IN_BUFFER( packetTraceLen ) const BYTE *packetTrace,
 			return( TRUE );
 			}
 		}
-	ENSURES( LOOP_BOUND_OK );
+	ENSURES_B( LOOP_BOUND_OK );
 
 	DEBUG_PRINT(( "Strict KEX violation detected.\n" ));
 	return( FALSE );
@@ -340,7 +342,7 @@ int readExtensionsSSH( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	LOOP_MED( i = 0, i < noExtensions, i++ )
 		{
 		BYTE nameBuffer[ CRYPT_MAX_TEXTSIZE + 8 ];
-		void *dataPtr DUMMY_INIT_PTR;
+		void *dataPtr = NULL;
 		int nameLength, dataLength;
 
 		ENSURES( LOOP_INVARIANT_MED( i, 0, noExtensions - 1 ) );
@@ -360,20 +362,17 @@ int readExtensionsSSH( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   extensions consist of a redundant 'y' or 'n' to back up the 
 		   presence of the extension itself */
 		status = dataLength = readUint32( stream );
+		if( !cryptStatusError( status ) && \
+			!isShortIntegerRange( dataLength ) )
+			status = CRYPT_ERROR_BADDATA;
 		if( !cryptStatusError( status ) && dataLength > 0 )
 			{
-			/* If there's data present then it must have a valid length */
-			if( !isShortIntegerRangeNZ( dataLength ) )
-				status = CRYPT_ERROR_BADDATA;
-			else
+			/* Get a pointer to the data payload */
+			status = sMemGetDataBlock( stream, &dataPtr, dataLength );
+			if( cryptStatusOK( status ) )
 				{
-				/* Get a pointer to the data payload */
-				status = sMemGetDataBlock( stream, &dataPtr, dataLength );
-				if( cryptStatusOK( status ) )
-					{
-					status = sSkip( stream, dataLength, 
-									MAX_INTLENGTH_SHORT );
-					}
+				status = sSkip( stream, dataLength, 
+								MAX_INTLENGTH_SHORT );
 				}
 			}
 		if( cryptStatusError( status ) )
@@ -384,13 +383,11 @@ int readExtensionsSSH( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					  sanitiseString( nameBuffer, CRYPT_MAX_TEXTSIZE, 
 									  nameLength ) ) );
 			}
-		ENSURES( isShortIntegerRange( dataLength ) );
-		ANALYSER_HINT( dataPtr != NULL );
 		DEBUG_PRINT(( "Read extension %d, '%s', length %d.\n", i,
 					  sanitiseString( nameBuffer, CRYPT_MAX_TEXTSIZE, 
 									  nameLength ), 
 					  dataLength ));
-		DEBUG_DUMP_DATA( dataPtr, dataLength );
+		DEBUG_DUMP_DATA_COND( dataPtr != NULL, ( dataPtr, dataLength ) );
 
 		/* Process the extension data.  For now there's nothing much to do 
 		   here, the only extension that really affects us is 
@@ -520,6 +517,7 @@ int createPreauthResponse( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
 					   sizeof( SESSION_ATTRIBUTE_LIST ) ) );
 
 	REQUIRES( sanityCheckSSHHandshakeInfo( handshakeInfo ) );
+	REQUIRES( isShortIntegerRangeNZ( handshakeInfo->challengeLength ) );
 
 	/* Format the information that we need to hash to get the HMAC key:
 	
@@ -531,9 +529,9 @@ int createPreauthResponse( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
 	status = writeString32( &stream, attributeListPtr->value, 
 							attributeListPtr->valueLength );
 	if( cryptStatusOK( status ) )
-		keyDataLength = stell( &stream );
+		status = keyDataLength = stell( &stream );
 	sMemDisconnect( &stream );
-	ENSURES( cryptStatusOK( status ) );
+	ENSURES( !cryptStatusError( status ) );
 	ENSURES( isShortIntegerRangeNZ( keyDataLength ) );
 
 	/* Hash the information into an HMAC key */
@@ -555,6 +553,7 @@ int createPreauthResponse( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
 						   &handshakeInfo->responseLength, rawResponse, 
 						   SSH_PREAUTH_NONCE_SIZE, CRYPT_CERTTYPE_NONE );
 	zeroise( rawResponse, CRYPT_MAX_HASHSIZE );
+	ENSURES( handshakeInfo->responseLength == SSH_PREAUTH_NONCE_ENCODEDSIZE );
 
 	return( status );
 	}
@@ -569,8 +568,12 @@ int checkPreauthResponse( INOUT_PTR SSH_HANDSHAKE_INFO *handshakeInfo,
 	assert( isWritePtr( errorInfo, sizeof( ERROR_INFO ) ) );
 
 	REQUIRES( sanityCheckSSHHandshakeInfo( handshakeInfo ) );
-	REQUIRES( handshakeInfo->receivedResponseLength > 0 );
-			  /* Checked in readSSHID() */
+	REQUIRES( handshakeInfo->responseLength == \
+										SSH_PREAUTH_NONCE_ENCODEDSIZE && \
+			  handshakeInfo->receivedResponseLength == \
+										SSH_PREAUTH_NONCE_ENCODEDSIZE );
+			  /* Guaranteed from createPreauthResponse() / checked in 
+			     readSSHID() */
 
 	/* Make sure that the response from the client matches the one that we
 	   calculated.  The error message reports the expected and actual 
@@ -648,7 +651,7 @@ static int processControlMessage( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		retExt( CRYPT_ERROR_BADDATA,
 				( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
 				  "Invalid session control message payload length %d for "
-				  "%s (%d), should be 0...%d", localPayloadLength, 
+				  "%s (%d), should be 1...%d", localPayloadLength, 
 				  getSSHPacketName( sshInfo->packetType ), 
 				  sshInfo->packetType, sessionInfoPtr->receiveBufEnd - \
 									   sessionInfoPtr->receiveBufPos ) );
@@ -688,6 +691,10 @@ static int readHeaderFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 	assert( isWritePtr( sessionInfoPtr, sizeof( SESSION_INFO ) ) );
 	assert( isWritePtr( readInfo, sizeof( READSTATE_INFO ) ) );
 
+	static_assert( SSH_HEADER_REMAINDER_SIZE >= ID_SIZE + \
+						PADLENGTH_SIZE + SSH2_MIN_PADLENGTH_SIZE,
+				   "SSH header size read" );
+
 	REQUIRES( sanityCheckSessionSSH( sessionInfoPtr ) );
 
 	/* Clear return value */
@@ -723,13 +730,19 @@ static int readHeaderFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 									SSH2_MIN_PADLENGTH_SIZE ) && \
 			 length <= sessionInfoPtr->receiveBufSize - \
 					   sessionInfoPtr->receiveBufPos );
+#ifdef USE_SSH_OPENSSH
+	REQUIRES( !useETM || payloadBytesRead <= CRYPT_MAX_IVSIZE );
 	status = checkMacSSHIncremental( sessionInfoPtr->iAuthInContext, 
 							sshInfo->readSeqNo, 
-#ifdef USE_SSH_OPENSSH
 							useETM ? sshInfo->encryptedHeaderBuffer : 
-#endif /* USE_SSH_OPENSSH */
 							bufPtr, payloadBytesRead, payloadBytesRead, 
 							length, MAC_START, extraLength );
+#else
+	status = checkMacSSHIncremental( sessionInfoPtr->iAuthInContext, 
+							sshInfo->readSeqNo, 
+							bufPtr, payloadBytesRead, payloadBytesRead, 
+							length, MAC_START, extraLength );
+#endif /* USE_SSH_OPENSSH */
 	if( cryptStatusError( status ) )
 		{
 		/* We don't return an extended status at this point because we
@@ -755,10 +768,6 @@ static int readHeaderFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		STREAM stream;
 		int payloadLength DUMMY_INIT;
 
-		static_assert( SSH_HEADER_REMAINDER_SIZE >= ID_SIZE + \
-							PADLENGTH_SIZE + SSH2_MIN_PADLENGTH_SIZE,
-					   "SSH header size read" );
-
 		ENSURES( boundsCheckZ( sessionInfoPtr->receiveBufPos, 
 							   payloadBytesRead, 
 							   sessionInfoPtr->receiveBufSize ) );
@@ -772,9 +781,18 @@ static int readHeaderFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		if( cryptStatusOK( status ) )
 			status = payloadLength = readUint32( &stream );
 		if( !cryptStatusError( status ) )
-			removedDataLength = stell( &stream );
-		if( cryptStatusError( status ) || \
-			checkOverflowAdd( removedDataLength, sshInfo->padLength ) || \
+			status = removedDataLength = stell( &stream );
+		if( cryptStatusError( status ) )
+			{
+			/* If we don't know how valid the length information is we can't
+			   report much more than a general formatting error */
+			sMemDisconnect( &stream );
+			retExt( CRYPT_ERROR_BADDATA,
+					( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
+					  "Invalid data packet length information for "
+					  "SSH_MSG_CHANNEL_DATA (94)" ) );
+			}
+		if(	checkOverflowAdd( removedDataLength, sshInfo->padLength ) || \
 			checkOverflowSub( length, 
 							  removedDataLength + sshInfo->padLength ) || \
 			payloadLength != length - ( removedDataLength + \
@@ -785,7 +803,7 @@ static int readHeaderFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 					( CRYPT_ERROR_BADDATA, SESSION_ERRINFO, 
 					  "Invalid data packet payload length %d for "
 					  "SSH_MSG_CHANNEL_DATA (94), should be %d", 
-					  cryptStatusError( status ) ? 0 : payloadLength,
+					  payloadLength,
 					  length - ( removedDataLength + sshInfo->padLength ) ) );
 			}
 
@@ -798,18 +816,26 @@ static int readHeaderFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		   present at the start of the payload which is encoded as an SSH
 		   string (uint32 length + data).  This value has already been
 		   checked above, and is only accepted if it matches the outer
-		   length value.  This is important because the data hasn't been
-		   verified by the MAC yet, since we need to process the header in
-		   order to find out where the MAC is.  This means that the channel
-		   number is processed unverified, but this shouldn't be a major
-		   issue since at most an attacker can corrupt the value, and it 
-		   will end up being mapped to an invalid channel with a high
-		   probability (unless we're using the disabled-by-default extremely
-		   brittle CTR mode that allows arbitrary attacker manipulation of
-		   the data */
+		   length value.
+		   
+		   This is important because the data hasn't been verified by the 
+		   MAC yet, since we need to process the header in order to find out 
+		   where the MAC is.  This means that the channel number is 
+		   processed unverified, but this shouldn't be a major issue since 
+		   at most an attacker can corrupt the value, and it will end up 
+		   being mapped to an invalid channel with a high probability 
+		   (unless we're using the disabled-by-default extremely brittle CTR 
+		   mode that allows arbitrary attacker manipulation of the data).
+		   
+		   processChannelControlMessage() can return OK_SPECIAL in some
+		   cases (SSH_MSG_GLOBAL_REQUEST where the message is handled
+		   internally, SSH_MSG_CHANNEL_EXTENDED_DATA) but we're working with
+		   SSH_MSG_CHANNEL_DATA for which an OK_SPECIAL return shouldn't
+		   happen */
 		sseek( &stream, PADLENGTH_SIZE + ID_SIZE );
 		status = processChannelControlMessage( sessionInfoPtr, &stream );
-		sMemDisconnect( &stream );
+		sMemDisconnect( &stream );	/* Read SSH_MSG_CHANNEL_DATA header */
+		ENSURES( status != OK_SPECIAL );
 		if( cryptStatusError( status ) )
 			return( status );
 		}
@@ -1019,7 +1045,10 @@ static int processBodyFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 			   the user has to respond to it's also not a fatal error
 			   condition and they can continue afterwards */
 			if( status == OK_SPECIAL || status == CRYPT_ENVELOPE_RESOURCE )
+				{
+				sshInfo->partialPacketDataLength = 0;
 				*readInfo = READINFO_NOOP;
+				}
 			return( status );
 			}
 		}
@@ -1081,7 +1110,7 @@ static int preparePacketFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr )
 	if( cryptStatusOK( status ) )
 		status = wrapPacketSSH2( sessionInfoPtr, &stream, 0, FALSE );
 	if( cryptStatusOK( status ) )
-		length = stell( &stream );
+		status = length = stell( &stream );
 	sMemDisconnect( &stream );
 	if( cryptStatusError( status ) )
 		return( status );

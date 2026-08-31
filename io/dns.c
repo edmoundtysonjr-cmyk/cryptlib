@@ -296,7 +296,8 @@ static int SOCKET_API my_getaddrinfo( IN_STRING_OPT const char *nodename,
 		{
 		ENSURES_EXT( LOOP_INVARIANT_LARGE( i, 0, nodenameLen - 1 ), -1 );
 
-		if( !isDigit( nodename[ i ] ) && nodename[ i ] != DOTTED_DELIMITER )
+		if( !isDigit( byteToInt( nodename[ i ] ) ) && \
+			nodename[ i ] != DOTTED_DELIMITER )
 			break;
 		}
 	ENSURES_EXT( LOOP_BOUND_OK, -1 );

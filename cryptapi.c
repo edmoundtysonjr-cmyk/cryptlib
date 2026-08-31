@@ -4643,8 +4643,8 @@ C_RET cryptFuzzInit( C_IN CRYPT_SESSION cryptSession,
 	/* Perform any necessary final session initialisation */
 	if( sessionInfoPtr->sendBuffer == NULL )
 		{
-		REQUIRES( rangeCheck( sessionInfoPtr->receiveBufSize, 
-							  1, MAX_BUFFER_SIZE ) );
+		REQUIRES( isBufsizeRangeMin( sessionInfoPtr->receiveBufSize, 
+									 MIN_BUFFER_SIZE ) );
 		sessionInfoPtr->receiveBuffer = \
 							safeBufferAlloc( sessionInfoPtr->receiveBufSize );
 		if( sessionInfoPtr->receiveBuffer == NULL )
@@ -4657,7 +4657,8 @@ C_RET cryptFuzzInit( C_IN CRYPT_SESSION cryptSession,
 							safeBufferAlloc( sessionInfoPtr->receiveBufSize );
 			if( sessionInfoPtr->sendBuffer == NULL )
 				{
-				safeBufferFree( sessionInfoPtr->receiveBuffer );
+				safeBufferFree( sessionInfoPtr->receiveBuffer,
+								sessionInfoPtr->receiveBufSize );
 				sessionInfoPtr->receiveBuffer = NULL;
 				return( CRYPT_ERROR_MEMORY );
 				}

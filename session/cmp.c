@@ -719,6 +719,10 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		return( CRYPT_OK );
 		}
 
+	/* Make sure that there aren't any conflicts with existing attributes */
+	if( !checkAttributesConsistent( sessionInfoPtr, type ) )
+		return( CRYPT_ERROR_INITED );
+
 	/* Make sure that the request/certificate type is consistent with the 
 	   operation being performed.  The requirements for this are somewhat 
 	   more complex than the basic ACL-based check can manage, so we handle 
@@ -856,11 +860,26 @@ static int setAttributeFunction( INOUT_PTR SESSION_INFO *sessionInfoPtr,
 		}
 
 	/* Add the request and increment its usage count */
-	krnlSendNotifier( cryptCert, IMESSAGE_INCREFCOUNT );
 	if( type == CRYPT_SESSINFO_CACERTIFICATE )
+		{
+		/* There may be a server certificate fingerprint set, in which case 
+		   it has to match the certificate that we're adding */
+		status = checkCertFingerprint( sessionInfoPtr, cryptCert );
+		if( cryptStatusError( status ) && status != OK_SPECIAL )
+			{
+			retExt( CRYPT_ERROR_WRONGKEY,
+					( CRYPT_ERROR_WRONGKEY, SESSION_ERRINFO, 
+					  "CA certificate doesn't match key fingerprint" ) );
+			}
+
+		krnlSendNotifier( cryptCert, IMESSAGE_INCREFCOUNT );
 		sessionInfoPtr->iAuthInContext = cryptCert;
+		}
 	else
+		{
+		krnlSendNotifier( cryptCert, IMESSAGE_INCREFCOUNT );
 		sessionInfoPtr->iCertRequest = cryptCert;
+		}
 
 	return( CRYPT_OK );
 	}

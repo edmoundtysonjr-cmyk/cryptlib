@@ -55,7 +55,8 @@ static int readInteger( INOUT_PTR STREAM *stream,
 				  maxLength <= CRYPT_MAX_PKCSIZE ) || \
 				( minLength > 0 && minLength < maxLength && \
 				  maxLength <= CRYPT_MAX_PKCSIZE ) );
-	REQUIRES_S( isEnumRange( lengthType, LENGTH ) );
+	REQUIRES_S( isEnumRange( lengthType, LENGTH ) && \
+				lengthType != LENGTH_8 );
 	REQUIRES_S( isEnumRangeOpt( checkType, BIGNUM_CHECK ) );
 
 	/* Clear return values */
@@ -76,7 +77,8 @@ static int readInteger( INOUT_PTR STREAM *stream,
 	if( lengthType == LENGTH_16U_BITS )
 		length = bitsToBytes( length );
 
-	/* If it's a fixed-length encoding then we can just read it as is */
+	/* If it's a fixed-length byte-string encoding then we can just read it 
+	   as is */
 	if( checkType == BIGNUM_CHECK_VALUE_FIXEDLEN )
 		{
 		/* This is a fixed-length value, e.g. X9.62, for which 
@@ -156,12 +158,12 @@ static int readInteger( INOUT_PTR STREAM *stream,
 			return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 		}
 
-	/* Skip up to 4 bytes of possible leading-zero padding and repeat the 
+	/* Skip up to 2 bytes of possible leading-zero padding and repeat the 
 	   length check once the zero-padding has been adjusted */
-	LOOP_SMALL( i = 0, length > 0 && sPeek( stream ) == 0 && i < 4, 
+	LOOP_SMALL( i = 0, length > 0 && sPeek( stream ) == 0 && i < 3, 
 				( i++, length-- ) )
 		{
-		ENSURES_S( LOOP_INVARIANT_SMALL( i, 0, 3 ) );
+		ENSURES_S( LOOP_INVARIANT_SMALL( i, 0, 2 ) );
 		ENSURES_S( LOOP_INVARIANT_SECONDARY( length, 1, 
 											 CRYPT_MAX_PKCSIZE + 2 ) );
 				   /* maxLength <= CRYPT_MAX_PKCSIZE, length is checked 
@@ -172,7 +174,7 @@ static int readInteger( INOUT_PTR STREAM *stream,
 			return( status );
 		}
 	ENSURES_S( LOOP_BOUND_OK );
-	if( i >= 4 )
+	if( i >= 3 )
 		return( sSetError( stream, CRYPT_ERROR_BADDATA ) );
 
 	/* Repeat the earlier check on the adjusted value */
@@ -278,7 +280,7 @@ int readUint32( INOUT_PTR STREAM *stream )
 
 /* Read 32-bit time values */
 
-RETVAL_RANGE( 0, INT_MAX ) STDC_NONNULL_ARG( ( 1, 2 ) ) \
+RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int readUint32Time( INOUT_PTR STREAM *stream, 
 					OUT_PTR time_t *timeVal )
 	{
@@ -436,7 +438,7 @@ static int readData32( INOUT_PTR STREAM *stream,
 	return( sread( stream, dataPtr + headerSize, length ) );
 	}
 
-RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
 int readString32( INOUT_PTR STREAM *stream, 
 				  OUT_BUFFER( stringMaxLength, \
 							  *stringLength ) void *string, 
@@ -454,7 +456,7 @@ int readString32( INOUT_PTR STREAM *stream,
 						FALSE, FALSE ) );
 	}
 
-RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2, 4 ) ) \
 int readString32Opt( INOUT_PTR STREAM *stream, 
 					 OUT_BUFFER( stringMaxLength, \
 								 *stringLength ) void *string, 
@@ -563,7 +565,7 @@ int readUniversal32( INOUT_PTR STREAM *stream )
 
 /* Read (large) integers in various formats */
 
-RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int readInteger16U( INOUT_PTR STREAM *stream, 
 					OUT_BUFFER_OPT( maxLength, \
 									*integerLength ) void *integer, 
@@ -578,7 +580,7 @@ int readInteger16U( INOUT_PTR STREAM *stream,
 						 maxLength, LENGTH_16U, checkType ) );
 	}
 
-RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 3 ) ) \
 int readInteger16Ubits( INOUT_PTR STREAM *stream, 
 						OUT_BUFFER_OPT( maxLength, \
 										*integerLength ) void *integer, 
@@ -656,7 +658,7 @@ static int readBignumInteger( INOUT_PTR STREAM *stream,
 	return( status );
 	}
 
-RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int readBignumInteger16U( INOUT_PTR STREAM *stream, 
 						  INOUT_PTR TYPECAST( BIGNUM * ) struct BN *bignum, 
 						  IN_LENGTH_PKC const int minLength, 
@@ -670,7 +672,7 @@ int readBignumInteger16U( INOUT_PTR STREAM *stream,
 							   maxRange, LENGTH_16U, checkType ) );
 	}
 
-RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int readBignumInteger16Ubits( INOUT_PTR STREAM *stream, 
 							  INOUT_PTR TYPECAST( BIGNUM * ) struct BN *bignum, 
 							  IN_LENGTH_PKC_BITS const int minBits,
@@ -685,7 +687,7 @@ int readBignumInteger16Ubits( INOUT_PTR STREAM *stream,
 							   LENGTH_16U_BITS, checkType ) );
 	}
 
-RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
+CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int readBignumInteger32( INOUT_PTR STREAM *stream, 
 						 INOUT_PTR TYPECAST( BIGNUM * ) struct BN *bignum, 
 						 IN_LENGTH_PKC const int minLength, 
@@ -926,10 +928,11 @@ int writeInteger32( INOUT_PTR STREAM *stream,
 
 /* Write integers from bignums in various formats */
 
-CHECK_RETVAL_RANGE( UINT32_SIZE, MAX_INTLENGTH_SHORT ) STDC_NONNULL_ARG( ( 1 ) ) \
-int sizeofBignumInteger32( const void *bignum )
+CHECK_RETVAL_RANGE_NOERROR( 0, MAX_INTLENGTH_SHORT ) STDC_NONNULL_ARG( ( 1 ) ) \
+int sizeofBignumInteger32( IN_PTR TYPECAST( BIGNUM * ) const struct BN *bignum )
 	{
 	const int length = BN_num_bytes( bignum );
+	const int highBit = BN_high_bit( bignum );
 
 	assert( isReadPtr( bignum, sizeof( BIGNUM ) ) );
 
@@ -938,16 +941,19 @@ int sizeofBignumInteger32( const void *bignum )
 	   individually check the return value of each function call for a
 	   condition that can only be caused by an internal error, so we throw
 	   an exception in debug mode but otherwise convert the condition to
-	   a no-op length value */
-	if( cryptStatusError( length ) )
+	   a no-op length value.
+	   
+	   For the same reason we don't check for a length of zero, which will
+	   be caught later by writeBignumInteger() via exportBignum() */
+	if( cryptStatusError( length ) || cryptStatusError( highBit ) )
 		retIntError_Ext( 0 );
 
-	return( UINT32_SIZE + BN_high_bit( ( BIGNUM * ) bignum ) + length );
+	return( UINT32_SIZE + highBit + length );
 	}
 
 CHECK_RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 static int writeBignumInteger( INOUT_PTR STREAM *stream, 
-							   TYPECAST( BIGNUM * ) const struct BN *bignum,
+							   IN_PTR TYPECAST( BIGNUM * ) const struct BN *bignum,
 							   IN_ENUM( LENGTH ) const LENGTH_TYPE lengthType )
 	{
 	BYTE buffer[ CRYPT_MAX_PKCSIZE + 8 ];
@@ -968,21 +974,21 @@ static int writeBignumInteger( INOUT_PTR STREAM *stream,
 
 RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int writeBignumInteger16U( INOUT_PTR STREAM *stream, 
-						   TYPECAST( BIGNUM * ) const struct BN *bignum )
+						   IN_PTR TYPECAST( BIGNUM * ) const struct BN *bignum )
 	{
 	return( writeBignumInteger( stream, bignum, LENGTH_16U ) );
 	}
 
 RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int writeBignumInteger16Ubits( INOUT_PTR STREAM *stream, 
-							   TYPECAST( BIGNUM * ) const struct BN *bignum )
+							   IN_PTR TYPECAST( BIGNUM * ) const struct BN *bignum )
 	{
 	return( writeBignumInteger( stream, bignum, LENGTH_16U_BITS ) );
 	}
 
-RETVAL STDC_NONNULL_ARG( ( 1 ) ) \
+RETVAL STDC_NONNULL_ARG( ( 1, 2 ) ) \
 int writeBignumInteger32( INOUT_PTR STREAM *stream, 
-						  TYPECAST( BIGNUM * ) const struct BN *bignum )
+						  IN_PTR TYPECAST( BIGNUM * ) const struct BN *bignum )
 	{
 	return( writeBignumInteger( stream, bignum, LENGTH_32 ) );
 	}

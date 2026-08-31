@@ -237,7 +237,6 @@ static int createStrongAlgorithmContext( OUT_HANDLE_OPT \
 										 IN_BOOL const BOOLEAN isCryptContext )
 	{
 	CRYPT_CONTEXT iLocalContext;
-	ALGOID_PARAMS algoIDparams;
 	MESSAGE_CREATEOBJECT_INFO createInfo;
 	MECHANISM_KDF_INFO mechanismInfo;
 	int algorithm, hashParam DUMMY_INIT, status;
@@ -268,9 +267,7 @@ static int createStrongAlgorithmContext( OUT_HANDLE_OPT \
 			algorithm = DEFAULT_CRYPT_ALGO;
 		else
 			{
-			initAlgoIDparamsCrypt( &algoIDparams, CRYPT_MODE_CBC, 0 );
-			if( cryptStatusError( sizeofAlgoIDex( algorithm, \
-												  &algoIDparams ) ) )
+			if( !checkAlgoID( algorithm, CRYPT_MODE_CBC ) )
 				algorithm = DEFAULT_CRYPT_ALGO;
 			}
 		}
@@ -288,9 +285,7 @@ static int createStrongAlgorithmContext( OUT_HANDLE_OPT \
 			algorithm = DEFAULT_MAC_ALGO;
 		else
 			{
-			initAlgoIDparamsHash( &algoIDparams, algorithm, hashParam );
-			if( cryptStatusError( sizeofAlgoIDex( algorithm, \
-												  &algoIDparams ) ) )
+			if( !checkAlgoID( algorithm, hashParam ) )
 				algorithm = DEFAULT_MAC_ALGO;
 			}
 		}
@@ -830,7 +825,7 @@ static int writePrivateKey( IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,
 	int privKeySize DUMMY_INIT, extraDataSize = 0, macSize;
 	int envelopeHeaderSize, envelopeContentSize;
 	int macDataOffset DUMMY_INIT, macDataLength DUMMY_INIT;
-	int encryptedKeyDataLength, status;
+	int encryptedKeyDataLength, position, status;
 
 	assert( isReadPtrDynamic( password, passwordLength ) );
 	assert( isReadPtr( privKeyParams, sizeof( PRIVKEY_WRITE_PARAMS ) ) );
@@ -1005,8 +1000,9 @@ static int writePrivateKey( IN_HANDLE const CRYPT_HANDLE iPrivKeyContext,
 	status = writeSequence( &stream, privKeySize + extraDataSize );
 	if( cryptStatusOK( status ) )
 		{
-		*newPrivKeyOffset = stell( &stream );
-		ENSURES_SC( isIntegerRangeNZ( *newPrivKeyOffset ) );
+		position = stell( &stream );
+		ENSURES_SC( isIntegerRangeNZ( position ) );
+		*newPrivKeyOffset = position;
 		}
 	if( cryptStatusError( status ) )
 		{

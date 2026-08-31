@@ -180,8 +180,9 @@ int cryptlibToPgpAlgo( IN_ALGO const CRYPT_ALGO_TYPE cryptlibAlgo,
 			}
 		ENSURES( LOOP_BOUND_OK );
 		ENSURES( i < FAILSAFE_ARRAYSIZE( pgpAlgoMap, PGP_ALGOMAP_INFO ) );
-		ENSURES( pgpAlgoMap[ i ].cryptlibAlgo == cryptlibAlgo  && \
-				 pgpAlgoMap[ i ].cryptlibAlgoParam == cryptlibParam );
+		if( pgpAlgoMap[ i ].cryptlibAlgo != cryptlibAlgo || \
+			pgpAlgoMap[ i ].cryptlibAlgoParam != cryptlibParam )
+			return( CRYPT_ERROR_NOTAVAIL );
 		}
 	*pgpAlgo = pgpAlgoMap[ i ].pgpAlgo;
 

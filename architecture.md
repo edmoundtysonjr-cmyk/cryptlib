@@ -1,3 +1,4 @@
+Tyson Jr 508
 # cryptlib Security Toolkit
 
 The information age has seen the development of electronic pathways that carry
@@ -26,7 +27,7 @@ other security operations such as secure timestamping (TSP).  Since cryptlib
 uses industry-standard X.509, S/MIME, PGP/OpenPGP, and SSH/SSL/TLS data
 formats, the resulting encrypted or signed data can be easily transported to
 other systems and processed there, and cryptlib itself runs on virtually any
-operating system ó cryptlib doesnít tie you to a single platform.  This allows
+operating system ‚Äî cryptlib doesn‚Äôt tie you to a single platform.  This allows
 email, files, and EDI transactions to be authenticated with digital signatures
 and encrypted in an industry-standard format.
 
@@ -43,7 +44,7 @@ online certificate enrolment/issue/revocation and certificate status checking.
 Alongside the certificate handling, cryptlib provides a sophisticated key
 storage interface that allows the use of a wide range of key database types
 ranging from PKCS #11 devices, PKCS #15 key files, and PGP/OpenPGP key rings
-through to commercial-grade RDBMSí and LDAP directories with optional SSL
+through to commercial-grade RDBMS‚Äô and LDAP directories with optional SSL
 protection.
 
 In addition to its built-in capabilities, cryptlib can make use of the crypto
@@ -60,13 +61,13 @@ available in some ARM, MIPS, and PPC cores used in embedded systems and
 devices.
 
 cryptlib is supplied as source code for AMX, Arinc653, BeOS, ChorusOS, CMSIS-
-RTOS, CMS, DOS, DOS32, eCOS, embOS, µC/OS, embedded Linux, FreeRTOS/OpenRTOS,
-IBM MVS, µITRON, Mongoose OS, MQX, Nucleus, OS/2, OS X, OSEK, Quadros, RiotOS,
+RTOS, CMS, DOS, DOS32, eCOS, embOS, ¬µC/OS, embedded Linux, FreeRTOS/OpenRTOS,
+IBM MVS, ¬µITRON, Mongoose OS, MQX, Nucleus, OS/2, OS X, OSEK, Quadros, RiotOS,
 RTEMS, SMX, Tandem, Telit, ThreadX, T-Kernel, a variety of Unix versions
 (including AIX, Digital Unix, DGUX, FreeBSD/NetBSD/OpenBSD, HP-UX, IRIX,
 Linux, MP-RAS, OSF/1, QNX, SCO/UnixWare, Solaris, SunOS, Ultrix, and UTS4),
 uClinux, VM/CMS, VxWorks, Windows (32- and 64-bit versions), Windows CE/
-PocketPC/SmartPhone/Embedded, VDK, Xilinx XMK, and Zephyr.  cryptlibís highly
+PocketPC/SmartPhone/Embedded, VDK, Xilinx XMK, and Zephyr.  cryptlib‚Äôs highly
 portable nature means that it is also being used in a variety of custom
 embedded system environments.  cryptlib comes with language bindings for C /
 C++, C# / .NET, Delphi, Java, Perl, Python, and Visual Basic (VB).
@@ -97,21 +98,21 @@ used in cryptlib, the software is usually faster than dedicated hardware).  At
 the next level are components that wrap up the specialised and often quite
 complex core components in a layer that provides abstract functionality and
 ensures complete cross-platform portability of data.  These functions
-typically cover areas such as ìcreate a digital signatureî or ìexchange an
-encryption keyî.  At the highest level are extremely powerful and easy-to-use
-functions such as ìencrypt a messageî, ìsign a messageî, ìopen a secure linkî,
-and ìcreate a digital certificateî that require no knowledge of encryption
+typically cover areas such as ‚Äúcreate a digital signature‚Äù or ‚Äúexchange an
+encryption key‚Äù.  At the highest level are extremely powerful and easy-to-use
+functions such as ‚Äúencrypt a message‚Äù, ‚Äúsign a message‚Äù, ‚Äúopen a secure link‚Äù,
+and ‚Äúcreate a digital certificate‚Äù that require no knowledge of encryption
 techniques, and that take care of complex issues such as key management, data
 encoding, en/decryption, and digital signature processing.
 
 ![cryptlib architecture](images/architecture_overview.png)
 
-cryptlibís powerful object management interface provides the ability to add
+cryptlib‚Äôs powerful object management interface provides the ability to add
 encryption and authentication capabilities to an application without needing
 to know all the low-level details that make the encryption or authentication
 work.  The automatic object-management routines take care of encoding issues
 and cross-platform portability problems, so that a handful of function calls
-is all thatís needed to wrap up data in signed or encrypted form with all of
+is all that‚Äôs needed to wrap up data in signed or encrypted form with all of
 the associated information and parameters needed to recreate it on the other
 side of a communications channel.  This provides a considerable advantage over
 other encryption toolkits that often require hundreds of lines of code and the
@@ -126,18 +127,18 @@ of other standards covering secure EDI and related systems like HL7 medical
 messaging and the Session Initiation Protocol (SIP) for services like Internet
 telephony and instant messaging.
 
-The S/MIME implementation uses cryptlibís enveloping interface which allows
+The S/MIME implementation uses cryptlib‚Äôs enveloping interface which allows
 simple, rapid integration of strong encryption and authentication capabilities
 into existing email agents and messaging software. The resulting signed
 enveloped data format provides message integrity and origin authentication
 services, the encrypted enveloped data format provides confidentiality, and
 the authenticated encrypted data format provides all of these services at
-once.  In addition cryptlibís S/MIME implementation allows external services
+once.  In addition cryptlib‚Äôs S/MIME implementation allows external services
 such as trusted timestamping authorities (TSAs) to be used when a signed
 message is created, providing externally-certified proof of the time of
 message creation.  The complexity of the S/MIME format means that the few
 other toolkits that are available require a high level of programmer knowledge
-of S/MIME processing issues. In contrast cryptlibís enveloping interface makes
+of S/MIME processing issues. In contrast cryptlib‚Äôs enveloping interface makes
 the process as simple as pushing raw data into an envelope and popping the
 processed data back out, a total of three function calls, plus one more call
 to add the appropriate encryption or signature key.
@@ -147,7 +148,7 @@ to add the appropriate encryption or signature key.
 Alongside the PKCS #7/CMS/SMIME formats, cryptlib supports the PGP/OpenPGP
 message format, allowing it to be used to send and receive PGP-encrypted email
 and data.  As with the S/MIME implementation, the PGP implementation uses
-cryptlibís enveloping interface to allow simple, rapid integration of strong
+cryptlib‚Äôs enveloping interface to allow simple, rapid integration of strong
 encryption and authentication capabilities into existing email agents and
 messaging software.  Since the enveloping interface is universal, the process
 involved in creating PGP and S/MIME messages is identical except for the
@@ -295,7 +296,7 @@ Available CA operations include:
 - Revocation request processing
 - CRL issue
 
-All CA operations are recorded to an event log using cryptlibís built-in CA
+All CA operations are recorded to an event log using cryptlib‚Äôs built-in CA
 logging/auditing facility, which provides a comprehensive audit facility via a
 full account of certificate requests, certificates issued or renewed,
 revocations requested and issued, certificates expired, and general CA
@@ -356,7 +357,7 @@ and message en- and decryption.  Typical applications include:
 - Message encryption/decryption in secure hardware
 
 cryptlib manages any device-specific interfacing requirements so that the
-programming interface for any crypto device is identical to cryptlibís native
+programming interface for any crypto device is identical to cryptlib‚Äôs native
 interface, allowing existing applications that use cryptlib to be easily and
 transparently migrated to using crypto devices.  The ability to mix and match
 crypto devices and the software-only implementation allows appropriate
@@ -364,7 +365,7 @@ tradeoffs to be chosen between flexibility, cost, and security.
 
 ### Certificate Store Interface
 
-cryptlib utilizes commercial-strength RDBMSí to store keys in the
+cryptlib utilizes commercial-strength RDBMS‚Äô to store keys in the
 internationally standardised X.509 format. The certificate store integrates
 seamlessly into existing databases and can be managed using existing tools.
 For example a key database stored on an MS SQL Server might be managed using
@@ -391,9 +392,9 @@ permissions under Unix to the private key file to further restrict access.
 
 cryptlib is built around a security kernel with Orange Book B3-level security
 features to implement its security mechanisms.  This kernel provides the
-interface between the outside world and the architectureís objects (intra-
+interface between the outside world and the architecture‚Äôs objects (intra-
 object security) and between the objects themselves (inter-object security).
-The security kernel is the basis of the entire cryptlib architecture ó all
+The security kernel is the basis of the entire cryptlib architecture ‚Äî all
 objects are accessed and controlled through it, and all object attributes are
 manipulated through it.  The kernel is implemented as an interface layer that
 sits on top of the objects, monitoring all accesses and handling all
@@ -403,9 +404,9 @@ Each cryptlib object is contained entirely within the security perimeter, so
 that data and control information can only flow in and out in a very tightly-
 controlled manner, and objects are isolated from each other within the
 perimeter by the security kernel.  For example once keying information has
-been sent to an object, it canít be retrieved by the user except under
-tightly-controlled conditions.  In general keying information isnít even
-visible to the user, since itís generated inside the object itself and never
+been sent to an object, it can‚Äôt be retrieved by the user except under
+tightly-controlled conditions.  In general keying information isn‚Äôt even
+visible to the user, since it‚Äôs generated inside the object itself and never
 leaves the security perimeter.  This design is ideally matched to hardware
 implementations that perform strict red/black separation, since sensitive
 information can never leave the hardware.
@@ -413,7 +414,7 @@ information can never leave the hardware.
 Associated with each object is a set of mandatory ACLs that determine who can
 access a particular object and under which conditions the access is allowed.
 If the operating system supports it, all sensitive information used will be
-page-locked to ensure that itís never swapped to disk from where it could be
+page-locked to ensure that it‚Äôs never swapped to disk from where it could be
 recovered using a disk editor.  All memory corresponding to security-related
 data is managed by cryptlib and will be automatically sanitised and freed when
 cryptlib shuts down even if the calling program forgets to release the memory
@@ -427,14 +428,14 @@ Unix the file permissions will be set to achieve the same result.
 
 ### Embedded Systems
 
-cryptlibís high level of portability and configurability makes it ideal for
+cryptlib‚Äôs high level of portability and configurability makes it ideal for
 use in embedded systems with limited resources or specialised requirements,
 including ones based on Altera NIOS, ARM7, ARM9, ARM TDMI, Coldfire, Fujitsu
 FR-V, Hitachi SuperH, MIPS IV, MIPS V, Motorola ColdFire, NEC V8xx series, NEC
 VRxxxx series, Panasonic/Matsushita AM33/AM34, PowerPC, PowerQUICC, Risc-V,
 Samsung CalmRISC, SH3, SH4, SPARC, SPARClite, StrongArm, TI OMAP, and Xilinx
 MicroBlaze processors, as well as a large range of licensed derivatives of
-these cores, too many and varied to enumerate here.  cryptlib doesnít perform
+these cores, too many and varied to enumerate here.  cryptlib doesn‚Äôt perform
 any floating-point operations and runs directly on processors without an FPU,
 and through its crypto HAL (hardware abstraction layer) capabilities can take
 advantage of on-chip or in-system cryptographic hardware capabilities and
@@ -453,7 +454,7 @@ also run independent of any form of operating system, and has been run on the
 bare metal in environments with minimal available resources, in effect
 functioning as a complete crypto operating system for the underlying hardware.
 
-Because cryptlib functions identically across all supported environments, itís
+Because cryptlib functions identically across all supported environments, it‚Äôs
 possible to perform application development in a full-featured development
 environment such as Windows or Unix and only when the application is complete
 and tested move it to the embedded system.  This flexibility saves countless
@@ -486,7 +487,7 @@ to expensive, specialised encryption hardware.
 
 ### Programming Interface
 
-cryptlibís easy-to-use high-level routines allow for the exchange of encrypted
+cryptlib‚Äôs easy-to-use high-level routines allow for the exchange of encrypted
 or signed messages or the establishment of secure communications channels with
 a minimum of programming overhead.  Language bindings are available for C / C+
 +, C# / .NET, Delphi, Java, Perl, Python and Visual Basic (VB).
@@ -505,13 +506,13 @@ cryptlib comes with extensive documentation in the form of a 350-page
 [user manual](https://github.com/cryptlib/cryptlib/blob/main/manual.pdf).
 and a 320-page technical reference manual.  The user manual is intended for
 everyday cryptlib use and contains detailed documentation on every aspect of
-cryptlibís functionality.  In most cases the code needed to secure an
+cryptlib‚Äôs functionality.  In most cases the code needed to secure an
 application can be cut and pasted directly from the appropriate section of the
 manual, avoiding the need to learn yet another programming API.
 
 The technical reference manual covers the design and internals of cryptlib
 itself, including the cryptlib security model and security mechanisms that
-protect every part of cryptlibís operation.  In addition the technical manual
+protect every part of cryptlib‚Äôs operation.  In addition the technical manual
 provides a wealth of background information to help users understand the
 security foundations on which cryptlib is built.
 
@@ -549,9 +550,9 @@ are summarised below:
 | RSA | 4096 | - |
 
 Note that some of these algorithms are present only for backwards-
-compatibility purposes or have security issues and shouldnít be used unless
-you know what youíre doing.  In particular DES and SHA-1 are no longer
-regarded as secure, RC4 has serious security problems and shouldnít be used,
+compatibility purposes or have security issues and shouldn‚Äôt be used unless
+you know what you‚Äôre doing.  In particular DES and SHA-1 are no longer
+regarded as secure, RC4 has serious security problems and shouldn‚Äôt be used,
 and IDEA is only present for PGP 2.x compatibility which is slated for removal
 in the next release.  In addition ECDSA and ECDH are extremely brittle
 algorithms with the distressing habit of leaking the private key if anything
@@ -653,23 +654,23 @@ following code encrypts a message using public-key encryption.
 This performs the same task as a program like PGP using just 6 function calls
 (to create a PGP/OpenPGP message, just change the CRYPT_FORMAT_SMIME to
 CRYPT_FORMAT_PGP).  All data management is handled automatically by cryptlib,
-so thereís no need to worry about encryption modes and algorithms and key
+so there‚Äôs no need to worry about encryption modes and algorithms and key
 lengths and key types and initialisation vectors and other details (although
 cryptlib provides the ability to specify all this if you feel the need).  This
-is all thatís required ó just copy the above code into your application to S/
+is all that‚Äôs required ‚Äî just copy the above code into your application to S/
 MIME-enable it.
 
 The code shown above results in cryptlib performing the following actions:
 
 - Generate a random session key for the default encryption algorithm (usually AES).
-- Look up the recipientís public key in a key database.
-- Encrypt the session key using the recipientís public key.
+- Look up the recipient‚Äôs public key in a key database.
+- Encrypt the session key using the recipient‚Äôs public key.
 - Encrypt the signed data with the session key.
 - Pass the result back to the user.
 
 However unless you want to call cryptlib using the low-level interface, you
 never need to know about any of this.  cryptlib will automatically know what
-to do with the data based on the resources you add to the envelope ó if you
+to do with the data based on the resources you add to the envelope ‚Äî if you
 add a signature key it will sign the data, if you add an encryption key it
 will encrypt the data, and so on.
 
@@ -691,7 +692,7 @@ Establishing a secure session using SSL/TLS is similarly easy:
 If you prefer SSH to SSL, just change the CRYPT_SESSION_TLS to CRYPT_-
 SESSION_SSH and add a user name and password to log on.  As with the
 encryption code example above, cryptlib provides a single unified interface to
-its secure session mechanisms, so you donít have to invest a lot of effort in
+its secure session mechanisms, so you don‚Äôt have to invest a lot of effort in
 adding special-case handling for different security protocols and mechanisms.
 
 The corresponding SSL/TLS (or SSH if you prefer) server is:
@@ -708,12 +709,12 @@ The corresponding SSL/TLS (or SSH if you prefer) server is:
   ```
 
 As with the secure enveloping example, cryptlib is performing a large amount
-of work in the background, but again thereís no need to know about this since
-itís all taken care of automatically.
+of work in the background, but again there‚Äôs no need to know about this since
+it‚Äôs all taken care of automatically.
 
 ### Certificate Management Code Example
 
-The following code illustrates cryptlibís plug-and-play PKI interface:
+The following code illustrates cryptlib‚Äôs plug-and-play PKI interface:
 
   ```
   CRYPT_SESSION cryptSession;
@@ -739,6 +740,6 @@ SSL server operation), and stores everything in the smart card.  Compare this
 to the hundreds or even thousands of lines of code required to do the same
 thing using other toolkits.
 
-Oh yes, and cryptlib provides the CA-side functionality as well ó thereís no
+Oh yes, and cryptlib provides the CA-side functionality as well ‚Äî there‚Äôs no
 need to pay an expensive commercial CA for your certificates, since cryptlib
 can perform the same function.
